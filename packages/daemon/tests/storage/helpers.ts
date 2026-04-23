@@ -5,16 +5,19 @@ import { afterEach } from 'vitest';
 import { openDatabase } from '../../src/storage/db.js';
 import type { Database as DB } from 'better-sqlite3';
 
-const cleanup: string[] = [];
+const cleanup: { dir: string; db: DB }[] = [];
 
 afterEach(() => {
-  for (const d of cleanup) rmSync(d, { recursive: true, force: true });
+  for (const { db, dir } of cleanup) {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
   cleanup.length = 0;
 });
 
 export function makeTmpDb(): { db: DB; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'cairn-'));
-  cleanup.push(dir);
   const db = openDatabase(join(dir, 'cairn.db'));
+  cleanup.push({ db, dir });
   return { db, dir };
 }
