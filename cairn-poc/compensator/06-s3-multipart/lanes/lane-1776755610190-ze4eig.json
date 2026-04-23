@@ -1,0 +1,25 @@
+{
+  "laneId": "lane-1776755610190-ze4eig",
+  "endpoint": "s3.multipart",
+  "createdAt": "2026-04-21T07:13:30.199Z",
+  "recordLatencyMs": 9,
+  "bucket": "bk",
+  "key": "orphan-a.txt",
+  "nParts": 3,
+  "existedBefore": false,
+  "beforeImage": null,
+  "state": "UPLOADING_PARTS",
+  "uploadId": "2a561983bd44dcf2",
+  "partsUploaded": [
+    {
+      "partNumber": 1,
+      "etag": "c542533cf3eaebe10c5d2ebc56717b00",
+      "size": 716
+    },
+    {
+      "partNumber": 2,
+      "etag": "398367b36309f2904633745a3890c567",
+      "size": 716
+    }
+  ]
+}

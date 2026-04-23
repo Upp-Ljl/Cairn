@@ -1,0 +1,23 @@
+{
+  "laneId": "lane-manual-orphan-b",
+  "endpoint": "s3.multipart",
+  "bucket": "bk",
+  "key": "orphan-b.txt",
+  "existedBefore": false,
+  "state": "UPLOADING_PARTS",
+  "uploadId": "8f0967cb0c7f8ec9",
+  "partsUploaded": [
+    {
+      "partNumber": 1,
+      "etag": "fbf5cd0f67027a99cc291e079f93d3bf"
+    },
+    {
+      "partNumber": 2,
+      "etag": "00cb864d292b49431a67b0ec40b62fc0"
+    },
+    {
+      "partNumber": 3,
+      "etag": "f83ad37d1f9de0ecba33bc33fd411c26"
+    }
+  ]
+}

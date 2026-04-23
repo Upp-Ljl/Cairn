@@ -1,0 +1,105 @@
+{
+  "laneId": "lane-1776755950752-oxv32d",
+  "endpoint": "notion.page.patch",
+  "target": "http://127.0.0.1:4102/v1/pages/p-123",
+  "createdAt": "2026-04-21T07:19:10.796Z",
+  "recordLatencyMs": 42,
+  "compensator": {
+    "method": "PATCH",
+    "url": "http://127.0.0.1:4102/v1/pages/p-123",
+    "body": {
+      "properties": {}
+    }
+  },
+  "forwardRequest": {
+    "method": "PATCH",
+    "body": {
+      "properties": {
+        "ComputedCount": {
+          "number": 99
+        }
+      }
+    }
+  },
+  "forwardResponse": {
+    "status": 400,
+    "body": {
+      "message": "property ComputedCount type rollup is read-only"
+    }
+  },
+  "beforeImage": {
+    "object": "page",
+    "id": "p-123",
+    "archived": false,
+    "icon": {
+      "type": "emoji",
+      "emoji": "original"
+    },
+    "cover": null,
+    "properties": {
+      "Name": {
+        "id": "title",
+        "type": "title",
+        "title": [
+          {
+            "type": "text",
+            "text": {
+              "content": "Original Title"
+            },
+            "plain_text": "Original Title"
+          }
+        ]
+      },
+      "Status": {
+        "id": "st",
+        "type": "select",
+        "select": {
+          "id": "s1",
+          "name": "Draft",
+          "color": "gray"
+        }
+      },
+      "Tags": {
+        "id": "tg",
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "name": "foo"
+          },
+          {
+            "name": "bar"
+          },
+          {
+            "name": "baz"
+          }
+        ]
+      },
+      "Priority": {
+        "id": "pr",
+        "type": "number",
+        "number": 1
+      },
+      "ComputedCount": {
+        "id": "cc",
+        "type": "rollup",
+        "rollup": {
+          "type": "number",
+          "number": 42,
+          "function": "count"
+        }
+      },
+      "CreatedAt": {
+        "id": "ca",
+        "type": "created_time",
+        "created_time": "2026-04-01T00:00:00.000Z"
+      }
+    },
+    "last_edited_time": "2026-04-21T07:19:10.637Z"
+  },
+  "coverageGaps": [
+    {
+      "prop": "ComputedCount",
+      "reason": "read-only type rollup"
+    }
+  ]
+}

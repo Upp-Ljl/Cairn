@@ -1,0 +1,144 @@
+Cairn Compensator State Machine (proposed, based on fault-injection findings)
+=============================================================================
+
+Lane-level states (the overall revert operation)
+------------------------------------------------
+
+                    +--------------------+
+   lane created --->|      RECORDED      |  proxy wrote lane with before-image + compensator plan.
+                    +---------+----------+  forward request may or may not have succeeded; see forwardResponse.status.
+                              |
+                              | user / scheduler invokes revert
+                              v
+                    +--------------------+
+                    |     REVERTING      |  runner is executing compensator.steps[]
+                    +----+---------+-----+
+                         |         |
+              all steps  |         |  any step surfaces a retryable error
+              succeed    |         |  (429, 5xx, timeout, transient network)
+                         |         v
+                         |   +--------------------+
+                         |   |  RETRY_SCHEDULED   |  exp-backoff scheduled. step attempts<maxAttempts.
+                         |   +---------+----------+
+                         |             |
+                         |             | retry fires
+                         |             v
+                         |        (back to REVERTING on same step)
+                         |
+                         |    step fails with non-retryable 4xx (not 409)   step returns 409/conflict
+                         |       or attempts exhausted                       (optimistic-lock predicate matched 0 rows,
+                         |       or verify-postcondition fails                or If-Match rejected)
+                         |             |                                      |
+                         v             v                                      v
+                  +------------+  +---------------+                    +-------------+
+                  |  SUCCESS   |  |  PARTIAL_UNDO |                    |  CONFLICT   |
+                  +------------+  +-------+-------+                    +-----+-------+
+                  terminal;      some compensator.steps[i].status=success;   lane needs human or
+                  verify passed  others=failed. user must decide: retry      newer-value resolution;
+                  on all steps.  remaining / accept / manual override.       revert has DECLINED to
+                  exit 0.         exit 2.                                    stomp. exit 5 (manual_gate).
+                                     |                                         |
+                                     | user issues "resume" or "accept-as-final"
+                                     v
+                                +--------------+
+                                |  FINALIZED   | terminal; operator accepted partial outcome.
+                                +--------------+
+
+Crash / infra error at any point -> lane stays in its prior state on disk
+(proxy & runner persist state on every transition, fsync-style).
+A sweeper finds these and either auto-resumes (if resume is safe) or flags manual_gate.
+
+
+Step-level states (per compensator.steps[i])
+--------------------------------------------
+
+           created by proxy
+                 |
+                 v
+          +-------------+
+          |   PENDING   |  never attempted
+          +------+------+
+                 |
+                 | runner picks up
+                 v
+          +-------------+
+          | IN_FLIGHT   |  request in-flight; attempt K of maxAttempts
+          +---+------+--+
+              |      |
+     2xx +    |      | 408/429/5xx or timeout
+     verify OK|      v
+              |  +--------------+
+              |  |  RETRYING    |  attempts++, wait backoff
+              |  +------+-------+
+              |         |
+              |         | attempts <= maxAttempts -> IN_FLIGHT
+              |         | attempts > maxAttempts -> FAILED
+              v         v
+          +--------+ +---------+
+          | DONE   | | FAILED  |
+          +--------+ +---------+
+           terminal   terminal
+
+  Non-retryable 4xx from IN_FLIGHT:
+     400 / 403 / 404 / 410 -> FAILED (non-recoverable, needs operator)
+     409 -> CONFLICT (separate terminal: another writer intervened)
+     Other 4xx -> FAILED
+
+Sample lane after a partial_undo (minimal schema)
+-------------------------------------------------
+
+  {
+    laneId: "lane-...",
+    state: "PARTIAL_UNDO",
+    compensator: {
+      steps: [
+        { idx:0, op:"refund",             status:"FAILED", attempts:3, lastError:"charge_already_refunded", idempotencyKey:"lane-abc/0/3" },
+        { idx:1, op:"cancelSubscription", status:"DONE",   attempts:1, idempotencyKey:"lane-abc/1/1" },
+      ],
+    },
+    cascadeSideEffects: {
+      reversible: [ ... ],
+      irreversible: [
+        { type:"webhook.delivered", subscriber:"slack", eventType:"invoice.paid", deliveryId:"dlv-...", at:"2026-04-21T07:18:00Z" },
+        { type:"ci.run.minutes_consumed", runId:"cs-38a1", minutes:2.4, logUrl:"https://..." },
+      ],
+    },
+    verify: {
+      lastRunAt: "...",
+      perStep: [
+        { idx:0, expected:"charges[ch-x].refunded==true", actual:"refunded==true but by external actor", match:true, note:"match-by-coincidence" },
+        { idx:1, expected:"subscription.status=='canceled'", actual:"canceled", match:true },
+      ],
+      overallMatch: true,  // NB: true-match-by-coincidence is still flagged in perStep.note
+    },
+  }
+
+
+Why each state matters — mapped to the faults we found
+------------------------------------------------------
+
+  F1a (before-image missing labels)   -> would NOT reach PENDING;
+                                         proxy invariant check fails at RECORDED;
+                                         state=INVARIANT_VIOLATION (lane unusable until fixed)
+
+  F1c (SQL lost-update)               -> step returns 0 changes with If-Match -> step CONFLICT -> lane CONFLICT
+
+  F2a (Jira bulk group 500)           -> first group step DONE, second group step IN_FLIGHT -> RETRYING (3x) -> FAILED
+                                         -> lane PARTIAL_UNDO. Operator sees which group failed, can resume.
+
+  F3a (Stripe refund 400 perma)       -> step FAILED (non-retryable 4xx); next step still DONE;
+                                         lane PARTIAL_UNDO (not SUCCESS). Exit 2, NOT 0.
+
+  F3b (GitHub transient 500)          -> step RETRYING; after 1s backoff, attempt 2 succeeds; step DONE;
+                                         lane SUCCESS; no operator action.
+
+  F4  (merge cascade)                 -> step DONE (revert PR created); lane SUCCESS;
+                                         cascadeSideEffects.irreversible populated with concrete IDs.
+
+Exit code convention
+--------------------
+  0  SUCCESS
+  2  PARTIAL_UNDO
+  3  verify mismatch (state does not match expected)
+  4  infra error (bad lane file, network total outage, etc.)
+  5  CONFLICT / manual_gate (operator required)

@@ -1,0 +1,49 @@
+{
+  "laneId": "lane-1776754610920-417jxr",
+  "endpoint": "stripe.subscriptions.create",
+  "createdAt": "2026-04-21T06:56:51.055Z",
+  "recordLatencyMs": 9,
+  "forwardRequest": {
+    "customer": "cus_A",
+    "price": "price_basic"
+  },
+  "forwardResponse": {
+    "id": "sub_hogtyma7",
+    "customer": "cus_A",
+    "items": [
+      {
+        "price": "price_basic"
+      }
+    ],
+    "status": "incomplete",
+    "latest_invoice": null,
+    "created": 1776754610
+  },
+  "asyncArtifacts": {
+    "subscriptionId": "sub_hogtyma7",
+    "invoiceId": "in_75dg6p1k",
+    "chargeId": "ch_yxsoi083"
+  },
+  "customerBalanceBefore": 0,
+  "compensator": {
+    "upstream": "http://127.0.0.1:4105",
+    "steps": [
+      {
+        "op": "refund",
+        "url": "http://127.0.0.1:4105/v1/refunds",
+        "body": {
+          "charge": "ch_yxsoi083"
+        }
+      },
+      {
+        "op": "cancelSubscription",
+        "url": "http://127.0.0.1:4105/v1/subscriptions/sub_hogtyma7"
+      }
+    ],
+    "warnings": [
+      "invoice.paid webhook was ALREADY delivered to downstream consumers — cannot be un-sent",
+      "customer.subscription.created webhook ALREADY delivered",
+      "charge.refunded + customer.subscription.deleted will be delivered on revert — downstream must be idempotent"
+    ]
+  }
+}

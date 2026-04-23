@@ -1,0 +1,34 @@
+# Claude Code local settings
+.claude/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime logs
+proxy.stdout.log
+*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key

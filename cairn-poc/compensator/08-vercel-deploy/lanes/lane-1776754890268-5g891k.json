@@ -1,0 +1,39 @@
+{
+  "laneId": "lane-1776754890268-5g891k",
+  "endpoint": "vercel.deployments.create.production",
+  "createdAt": "2026-04-21T07:01:30.351Z",
+  "recordLatencyMs": 8,
+  "previousProductionAlias": {
+    "deploymentId": "dpl_1e353e74",
+    "url": "myapp-353e74.vercel.app",
+    "sha": "sha-v1"
+  },
+  "forwardRequest": {
+    "project": "myapp",
+    "sha": "sha-v2"
+  },
+  "forwardResponse": {
+    "deploymentId": "dpl_b7151d89",
+    "currentProductionAlias": {
+      "deploymentId": "dpl_b7151d89",
+      "url": "myapp-151d89.vercel.app",
+      "sha": "sha-v2"
+    }
+  },
+  "cascadeSideEffects": {
+    "reversible": [
+      "alias flip (swing back by promoting previous deploymentId)"
+    ],
+    "irreversible": [
+      "production traffic served by new deployment during the window",
+      "edge cache populated with new artifact (TTL-bounded, not instantly invalidated)",
+      "deployment.ready and alias.changed webhooks delivered",
+      "any runtime side-effects from requests (DB writes, emails, analytics)"
+    ]
+  },
+  "compensator": {
+    "method": "POST",
+    "url": "http://127.0.0.1:4108/v13/deployments/dpl_1e353e74/promote",
+    "note": "promote previous production deployment — swings alias back"
+  }
+}

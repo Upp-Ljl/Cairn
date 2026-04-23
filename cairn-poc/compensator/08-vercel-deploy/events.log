@@ -1,0 +1,9 @@
+{"type":"deployment.queued","id":"dpl_1e353e74","target":"production"}
+{"type":"deployment.building","id":"dpl_1e353e74"}
+{"type":"deployment.ready","id":"dpl_1e353e74"}
+{"type":"alias.changed","project":"myapp","newDeployment":"dpl_1e353e74"}
+{"type":"deployment.queued","id":"dpl_b7151d89","target":"production"}
+{"type":"deployment.building","id":"dpl_b7151d89"}
+{"type":"deployment.ready","id":"dpl_b7151d89"}
+{"type":"alias.changed","project":"myapp","newDeployment":"dpl_b7151d89"}
+{"type":"alias.promoted","project":"myapp","newDeployment":"dpl_1e353e74"}

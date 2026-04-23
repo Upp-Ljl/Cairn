@@ -1,0 +1,65 @@
+{
+  "laneId": "lane-1776754921225-ijtcpy",
+  "endpoint": "github.issue.patch",
+  "target": "http://127.0.0.1:4101/repos/octo/demo/issues/1",
+  "createdAt": "2026-04-21T07:02:01.261Z",
+  "recordLatencyMs": 34,
+  "compensator": {
+    "method": "PATCH",
+    "url": "http://127.0.0.1:4101/repos/octo/demo/issues/1",
+    "body": {
+      "title": "X"
+    }
+  },
+  "forwardRequest": {
+    "method": "PATCH",
+    "body": {
+      "title": "X"
+    }
+  },
+  "forwardResponse": {
+    "status": 200,
+    "body": {
+      "number": 1,
+      "title": "X",
+      "state": "open",
+      "state_reason": null,
+      "labels": [
+        {
+          "name": "bug"
+        },
+        {
+          "name": "p1"
+        }
+      ],
+      "body": "Original body text",
+      "assignees": [
+        {
+          "login": "alice"
+        }
+      ],
+      "updated_at": "2026-04-21T07:02:01.261Z"
+    }
+  },
+  "beforeImage": {
+    "number": 1,
+    "title": "X",
+    "state": "open",
+    "state_reason": null,
+    "labels": [
+      {
+        "name": "bug"
+      },
+      {
+        "name": "p1"
+      }
+    ],
+    "body": "Original body text",
+    "assignees": [
+      {
+        "login": "alice"
+      }
+    ],
+    "updated_at": "2026-04-21T07:02:01.090Z"
+  }
+}

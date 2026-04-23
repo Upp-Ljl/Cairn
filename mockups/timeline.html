@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Cairn — launch-team-tier-2026-04-21</title>
+<meta name="viewport" content="width=1440" />
+<style>
+  :root {
+    --bg:        #0b0d10;
+    --bg-elev:   #11161c;
+    --bg-card:   #141b23;
+    --bg-card-2: #0f141a;
+    --border:    #1f2a36;
+    --border-2:  #2a3a4d;
+    --text:      #e6edf3;
+    --text-dim:  #8b98a5;
+    --text-mute: #5b6672;
+    --green:     #4ade80;
+    --green-dim: #14532d;
+    --red:       #ef4444;
+    --red-dim:   #450a0a;
+    --yellow:    #fbbf24;
+    --yellow-dim:#422006;
+    --blue:      #60a5fa;
+    --purple:    #a78bfa;
+    --cyan:      #22d3ee;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 13px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .mono { font-family: var(--mono); }
+
+  /* ───── top nav ───── */
+  .nav {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 14px 28px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0e141b 0%, #0b0d10 100%);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .brand { display:flex; align-items:center; gap:14px; }
+  .logo {
+    width: 28px; height: 28px; border-radius: 7px;
+    background: radial-gradient(circle at 30% 30%, #4ade80 0%, #166534 55%, #052e16 100%);
+    box-shadow: 0 0 0 1px #1f3a2a, 0 4px 14px rgba(74,222,128,.25);
+    position:relative;
+  }
+  .logo::after{
+    content:""; position:absolute; inset:6px; border-radius:3px;
+    background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.35) 3px 4px);
+  }
+  .brand h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
+  .brand .tag { color: var(--text-dim); font-size: 11.5px; }
+  .pipeline-chip {
+    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    padding: 6px 12px; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--bg-card);
+  }
+  .pipeline-chip b { color: var(--text); }
+  .nav-right { display:flex; align-items:center; gap: 12px; }
+  .live-dot {
+    display:inline-block; width:8px; height:8px; border-radius:50%;
+    background: var(--green); box-shadow:0 0 8px var(--green);
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* ───── layout ───── */
+  .shell { display:grid; grid-template-columns: 1fr 360px; gap: 0; }
+  .main  { padding: 24px 28px 160px 28px; min-width:0; }
+  .sidebar {
+    border-left: 1px solid var(--border);
+    background: var(--bg-elev);
+    padding: 20px;
+    min-height: calc(100vh - 60px);
+  }
+
+  .hdr {
+    display:flex; justify-content:space-between; align-items:flex-end;
+    margin-bottom: 18px;
+  }
+  .hdr h2 { margin:0 0 4px 0; font-size:18px; letter-spacing:-.01em; }
+  .hdr .sub { color: var(--text-dim); font-size:12.5px; }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; }
+  .legend .k {
+    font-family: var(--mono); font-size: 11px; padding: 3px 8px;
+    border-radius: 4px; border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .k.c1{color:#7dd3fc;border-color:#0c4a6e;background:rgba(56,189,248,.06)}
+  .k.c2{color:#a78bfa;border-color:#4c1d95;background:rgba(167,139,250,.06)}
+  .k.c3{color:#4ade80;border-color:#14532d;background:rgba(74,222,128,.06)}
+  .k.c4{color:#ef4444;border-color:#7f1d1d;background:rgba(239,68,68,.06)}
+
+  /* ───── lanes ───── */
+  .lanes { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .lane {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display:flex; flex-direction:column; min-width:0;
+  }
+  .lane-hd {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display:flex; justify-content:space-between; align-items:center; gap:8px;
+    background: linear-gradient(180deg, #182029 0%, #141b23 100%);
+    border-radius: 10px 10px 0 0;
+  }
+  .lane-title { display:flex; align-items:center; gap:10px; min-width:0; }
+  .lane-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .lane-A .lane-dot{ background:#60a5fa; box-shadow:0 0 6px #60a5fa }
+  .lane-B .lane-dot{ background:#fbbf24; box-shadow:0 0 6px #fbbf24 }
+  .lane-C .lane-dot{ background:#a78bfa; box-shadow:0 0 6px #a78bfa }
+  .lane-title .n { font-weight:600; font-size: 13.5px; }
+  .lane-title .sub { color: var(--text-dim); font-size:11.5px; margin-left:4px; }
+  .lane-meta { display:flex; gap:6px; align-items:center; }
+  .badge {
+    font-family: var(--mono); font-size: 10.5px; padding: 2.5px 7px;
+    border-radius: 3px; text-transform: uppercase; letter-spacing:.04em;
+  }
+  .b-ok   { background: rgba(74,222,128,.12); color: var(--green);  border:1px solid #14532d; }
+  .b-warn { background: rgba(251,191,36,.12); color: var(--yellow); border:1px solid #422006; }
+  .b-hold { background: rgba(239,68,68,.12);  color: var(--red);    border:1px solid #7f1d1d; }
+  .ops-count { color: var(--text-mute); font-size: 11px; font-family:var(--mono); }
+
+  .lane-body { padding: 10px 12px; display:flex; flex-direction:column; gap:8px; }
+
+  .op {
+    position:relative;
+    padding: 9px 10px 9px 40px;
+    border: 1px solid var(--border);
+    background: var(--bg-card-2);
+    border-radius: 7px;
+    font-family: var(--mono); font-size: 11.5px;
+  }
+  .op .t {
+    position:absolute; left:8px; top:9px;
+    color: var(--text-mute); font-size: 10.5px;
+  }
+  .op .id {
+    position:absolute; left:8px; bottom:9px;
+    color: var(--text-mute); font-size: 10px;
+  }
+  .op .call {
+    display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+    color: var(--text); margin-bottom: 3px;
+  }
+  .op .method {
+    padding: 1px 6px; border-radius: 3px; font-size: 10px;
+    background:#1b2532; color: var(--blue); border:1px solid #1e3a52;
+  }
+  .op .method.POST  { color:#4ade80; border-color:#14532d; background:rgba(74,222,128,.06);}
+  .op .method.PUT   { color:#fbbf24; border-color:#422006; background:rgba(251,191,36,.06);}
+  .op .method.PATCH { color:#fbbf24; border-color:#422006; background:rgba(251,191,36,.06);}
+  .op .method.DELETE{ color:#ef4444; border-color:#7f1d1d; background:rgba(239,68,68,.06);}
+  .op .method.SELECT,.op .method.ALTER,.op .method.INSERT,.op .method.COMMIT{
+    color:#a78bfa; border-color:#4c1d95; background:rgba(167,139,250,.06);
+  }
+  .op .url { color: var(--text-dim); word-break: break-all; }
+  .op .url b { color: var(--text); font-weight: 500; }
+  .op .meta {
+    display:flex; gap:8px; align-items:center; margin-top:4px; flex-wrap:wrap;
+  }
+  .op .comp { color: var(--text-mute); font-size: 10.5px; }
+  .op .comp .arr { color: var(--green); }
+  .op.warn { border-color: #5c3b0a; background: linear-gradient(180deg, rgba(251,191,36,.06), var(--bg-card-2)); }
+  .op.warn .warn-ico { color: var(--yellow); }
+  .op.irr  { border-color: #7f1d1d; background: linear-gradient(180deg, rgba(239,68,68,.08), var(--bg-card-2)); }
+  .warn-ico { font-size: 11px; }
+  .tooltip {
+    display:inline-block; border-bottom: 1px dotted var(--yellow);
+    color: var(--yellow); cursor:help;
+  }
+  .tooltip:hover::after {
+    content: attr(data-tip);
+    position:absolute; left: 40px; top: 100%; margin-top:4px;
+    background: #000; color: var(--yellow);
+    padding: 6px 9px; border-radius:5px; font-size:11px;
+    border: 1px solid #5c3b0a; white-space: normal; width: 240px;
+    z-index: 20; font-family: var(--sans);
+  }
+
+  /* orchestrator row */
+  .orch {
+    margin-top: 18px; border:1px solid #7f1d1d;
+    background: linear-gradient(180deg, rgba(239,68,68,.10), var(--bg-card));
+    border-radius: 10px; padding: 14px 16px;
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+  }
+  .orch .left { display:flex; align-items:center; gap:14px; min-width:0; }
+  .orch .pulse {
+    width:10px; height:10px; border-radius:50%; background: var(--red);
+    box-shadow:0 0 10px var(--red); animation: pulse 1.2s infinite;
+  }
+  .orch .ttl { font-weight: 600; font-size:13.5px; }
+  .orch .body { color: var(--text-dim); font-size: 12px; margin-top: 2px;}
+  .orch .body .mono { color: var(--text); }
+  .btns { display:flex; gap:8px; flex-shrink:0; }
+  .btn {
+    font-family: var(--sans); font-size: 12px; padding: 8px 14px;
+    border-radius: 6px; border: 1px solid var(--border-2);
+    background: var(--bg-card-2); color: var(--text); cursor: pointer;
+    font-weight: 500;
+  }
+  .btn.primary  { background:#166534; border-color:#14532d; color:#d1fae5; }
+  .btn.danger   { background:#7f1d1d; border-color:#991b1b; color:#fecaca; }
+  .btn.ghost    { background: transparent; }
+  .btn:hover { filter: brightness(1.15); }
+
+  /* ───── sidebar cascade ───── */
+  .side-hd {
+    display:flex; align-items:center; gap:8px;
+    color: var(--yellow); font-weight: 600; font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .side-hd .ico { font-size: 15px; }
+  .side-sub { color: var(--text-dim); font-size: 12px; line-height:1.55; margin-bottom: 14px; }
+  .side-sub code {
+    font-family:var(--mono); font-size:11px; padding:1px 5px;
+    background: var(--bg-card-2); border:1px solid var(--border); border-radius:3px;
+    color: var(--yellow);
+  }
+  .opt {
+    display:flex; align-items:flex-start; gap:10px;
+    padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 7px; margin-bottom: 8px; cursor: pointer;
+    background: var(--bg-card-2);
+  }
+  .opt .num {
+    font-family:var(--mono); font-size:10.5px; padding:2px 7px;
+    border:1px solid var(--border-2); border-radius:3px; color: var(--text-dim);
+    flex-shrink:0;
+  }
+  .opt .label { font-size: 12.5px; }
+  .opt .desc  { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+  .opt.selected {
+    border-color: #14532d; background: rgba(74,222,128,.08);
+  }
+  .opt.selected .num { color: var(--green); border-color:#14532d; background: rgba(74,222,128,.1); }
+  .opt.selected .label b { color: var(--green); }
+  .side-foot {
+    display:flex; gap:8px; margin-top: 14px;
+  }
+  .side-foot .btn { flex:1; justify-content:center; text-align:center; }
+
+  .impact-box {
+    margin: 14px 0; padding: 10px 12px;
+    border:1px solid #2a3a4d; background: var(--bg-card-2);
+    border-radius: 7px; font-size: 11.5px; color: var(--text-dim);
+    font-family: var(--mono);
+  }
+  .impact-box .row { display:flex; justify-content:space-between; padding: 3px 0; }
+  .impact-box .row b { color: var(--text); }
+  .impact-box .row.red b { color: var(--red); }
+  .impact-box .row.green b { color: var(--green); }
+
+  hr.div { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+  .foot-hint {
+    color: var(--text-mute); font-size: 11px; text-align:center;
+    margin-top: 18px; font-family: var(--mono);
+  }
+</style>
+</head>
+<body>
+
+<!-- ───── top nav ───── -->
+<div class="nav">
+  <div class="brand">
+    <div class="logo"></div>
+    <div>
+      <h1>Cairn</h1>
+      <div class="tag">Undo for agents · atomic reversibility layer</div>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="pipeline-chip"><span class="live-dot"></span> &nbsp; pipeline <b>launch-team-tier-2026-04-21</b> · T+180s</div>
+  </div>
+</div>
+
+<div class="shell">
+
+  <!-- ───── main ───── -->
+  <div class="main">
+
+    <div class="hdr">
+      <div>
+        <h2>Timeline</h2>
+        <div class="sub">3 lanes · 16 ops recorded · 1 approval gate open</div>
+      </div>
+      <div class="legend">
+        <span class="k c1">① pure-read</span>
+        <span class="k c2">② idempotent</span>
+        <span class="k c3">③ reversible</span>
+        <span class="k c4">④ irreversible</span>
+      </div>
+    </div>
+
+    <div class="lanes">
+
+      <!-- ─── LANE A ─── -->
+      <div class="lane lane-A">
+        <div class="lane-hd">
+          <div class="lane-title">
+            <span class="lane-dot"></span>
+            <span class="n">Lane A</span>
+            <span class="sub">code-agent</span>
+          </div>
+          <div class="lane-meta">
+            <span class="ops-count">5 ops</span>
+            <span class="badge b-ok">running</span>
+          </div>
+        </div>
+        <div class="lane-body">
+
+          <div class="op">
+            <div class="t">+5s</div>
+            <div class="call">
+              <span class="method">GET</span>
+              <span class="url">/repos/x/branches</span>
+            </div>
+            <div class="meta"><span class="k c1">① pure-read</span><span class="comp">no compensation</span></div>
+            <div class="id">A.1</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+6s</div>
+            <div class="call">
+              <span class="method POST">POST</span>
+              <span class="url">/git/refs <b>feat/team-tier</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DELETE ref</span>
+            </div>
+            <div class="id">A.2</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+12s</div>
+            <div class="call">
+              <span class="method PUT">PUT</span>
+              <span class="url">/contents/<b>pricing.ts</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> PUT prior SHA</span>
+            </div>
+            <div class="id">A.3</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+30s</div>
+            <div class="call">
+              <span class="method POST">POST</span>
+              <span class="url">/pulls · <b>PR #842</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> close PR + del branch</span>
+            </div>
+            <div class="id">A.4</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+35s</div>
+            <div class="call">
+              <span class="method POST">POST</span>
+              <span class="url">/issues/842/comments</span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DELETE comment</span>
+            </div>
+            <div class="id">A.5</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ─── LANE B ─── -->
+      <div class="lane lane-B">
+        <div class="lane-hd">
+          <div class="lane-title">
+            <span class="lane-dot"></span>
+            <span class="n">Lane B</span>
+            <span class="sub">db-agent</span>
+          </div>
+          <div class="lane-meta">
+            <span class="ops-count">5 ops</span>
+            <span class="badge b-warn">warning</span>
+          </div>
+        </div>
+        <div class="lane-body">
+
+          <div class="op">
+            <div class="t">+8s</div>
+            <div class="call">
+              <span class="method SELECT">SELECT</span>
+              <span class="url">FROM <b>pricing_tiers</b></span>
+            </div>
+            <div class="meta"><span class="k c1">① pure-read</span><span class="comp">no compensation</span></div>
+            <div class="id">B.1</div>
+          </div>
+
+          <div class="op warn">
+            <div class="t">+15s</div>
+            <div class="call">
+              <span class="warn-ico">⚠</span>
+              <span class="method ALTER">ALTER</span>
+              <span class="url">TABLE ADD COLUMN <b>new_tier INT</b></span>
+            </div>
+            <div class="meta">
+              <span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DROP COLUMN</span>
+              <span class="tooltip" data-tip="DROP COLUMN destroys any data written to this column. Safe only if no downstream writes have landed. Verify B.3/B.4 targets before reverting.">data-loss risk</span>
+            </div>
+            <div class="id">B.2</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+20s</div>
+            <div class="call">
+              <span class="method INSERT">INSERT</span>
+              <span class="url">pricing_tiers <b>('team', 99)</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DELETE WHERE id=7</span>
+            </div>
+            <div class="id">B.3</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+22s</div>
+            <div class="call">
+              <span class="method INSERT">INSERT</span>
+              <span class="url">3 seed rows <b>team_seats</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DELETE WHERE id IN (…)</span>
+            </div>
+            <div class="id">B.4</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+25s</div>
+            <div class="call">
+              <span class="method COMMIT">COMMIT</span>
+              <span class="url">txn · 3 writes sealed</span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp">compensations composed</span>
+            </div>
+            <div class="id">B.5</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ─── LANE C ─── -->
+      <div class="lane lane-C">
+        <div class="lane-hd">
+          <div class="lane-title">
+            <span class="lane-dot"></span>
+            <span class="n">Lane C</span>
+            <span class="sub">notify-agent</span>
+          </div>
+          <div class="lane-meta">
+            <span class="ops-count">6 ops</span>
+            <span class="badge b-warn">warning</span>
+          </div>
+        </div>
+        <div class="lane-body">
+
+          <div class="op">
+            <div class="t">+10s</div>
+            <div class="call">
+              <span class="method">GET</span>
+              <span class="url">slack.channels.list</span>
+            </div>
+            <div class="meta"><span class="k c1">① pure-read</span><span class="comp">no compensation</span></div>
+            <div class="id">C.1</div>
+          </div>
+
+          <div class="op warn">
+            <div class="t">+18s</div>
+            <div class="call">
+              <span class="warn-ico">⚠</span>
+              <span class="method POST">POST</span>
+              <span class="url">chat.postMessage <b>#engineering</b></span>
+            </div>
+            <div class="meta">
+              <span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> chat.delete</span>
+              <span class="tooltip" data-tip="Message has been delivered to subscribers; push notifications already fanned out to phones. chat.delete removes from channel but cannot unsend pushes.">push already delivered</span>
+            </div>
+            <div class="id">C.2</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+40s</div>
+            <div class="call">
+              <span class="method POST">POST</span>
+              <span class="url">linear / <b>issues</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DELETE issue</span>
+            </div>
+            <div class="id">C.3</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+60s</div>
+            <div class="call">
+              <span class="method PATCH">PATCH</span>
+              <span class="url">notion page · <b>pricing-docs</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> restore prior version</span>
+            </div>
+            <div class="id">C.4</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+120s</div>
+            <div class="call">
+              <span class="method POST">POST</span>
+              <span class="url">stripe / <b>products</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> DELETE product</span>
+            </div>
+            <div class="id">C.5</div>
+          </div>
+
+          <div class="op">
+            <div class="t">+125s</div>
+            <div class="call">
+              <span class="method POST">POST</span>
+              <span class="url">stripe / <b>prices</b></span>
+            </div>
+            <div class="meta"><span class="k c3">③ reversible</span>
+              <span class="comp"><span class="arr">↩</span> deactivate price</span>
+            </div>
+            <div class="id">C.6</div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /lanes -->
+
+    <!-- ─── approval gate (orchestrator) ─── -->
+    <div class="orch">
+      <div class="left">
+        <div class="pulse"></div>
+        <div>
+          <div class="ttl">⏸  Approval required: <span class="mono">O.1   PUT /pulls/842/merge</span></div>
+          <div class="body">
+            Classified as <span class="mono">④ <b style="color:#ef4444">IRREVERSIBLE</b></span> —
+            merge triggers deploy pipeline, webhook fan-out, and Stripe publish. No compensation can unwind this.
+          </div>
+        </div>
+      </div>
+      <div class="btns">
+        <button class="btn primary">Approve &amp; continue</button>
+        <button class="btn ghost">Deny &amp; stop pipeline</button>
+        <button class="btn danger">Revert selected lanes</button>
+      </div>
+    </div>
+
+    <div class="foot-hint">All external calls proxied through Cairn · per-lane isolation · compensation handles registered at record-time</div>
+
+  </div><!-- /main -->
+
+
+  <!-- ───── sidebar: cascade warning ───── -->
+  <aside class="sidebar">
+    <div class="side-hd"><span class="ico">⚠</span> Cascading impact detected</div>
+    <div class="side-sub">
+      You selected <b>Revert Lane B</b>. Cairn's dependency scan found that
+      <br/>Lane A's write <code>A.3 pricing.ts</code> references column
+      <code>new_tier</code> introduced by <code>B.2</code>.
+      <br/><br/>
+      Reverting B alone will leave A's code pointing at a column that no longer exists — the open PR <b>#842</b> will fail CI.
+    </div>
+
+    <div class="impact-box">
+      <div class="row"><span>lanes touched</span><b>B</b></div>
+      <div class="row red"><span>cross-lane refs</span><b>1 (A.3 → B.2)</b></div>
+      <div class="row"><span>compensations to run</span><b>4</b></div>
+      <div class="row green"><span>external calls inbound</span><b>0 (paused)</b></div>
+    </div>
+
+    <div class="opt selected">
+      <div class="num">1</div>
+      <div>
+        <div class="label"><b>Revert B only</b> &nbsp;·&nbsp; selected</div>
+        <div class="desc">Runs B.5→B.1 compensations in reverse order. Lane A stays as-is (PR #842 will be left in failing state for manual fix).</div>
+      </div>
+    </div>
+
+    <div class="opt">
+      <div class="num">2</div>
+      <div>
+        <div class="label">Revert B + A</div>
+        <div class="desc">Clean cascade: unwinds A.5→A.1 and B.5→B.1. Lane C untouched. Recommended if the column-type bug blocks the whole feature.</div>
+      </div>
+    </div>
+
+    <div class="opt">
+      <div class="num">3</div>
+      <div>
+        <div class="label">Cancel</div>
+        <div class="desc">Keep pipeline paused at approval gate. No compensations run.</div>
+      </div>
+    </div>
+
+    <hr class="div" />
+
+    <div class="side-hd" style="color:var(--text);"><span class="ico" style="color:var(--green)">◉</span> Revert preview — Lane B</div>
+    <div class="mono" style="font-size:11px; color:var(--text-dim); line-height:1.8;">
+      <div>→ <span style="color:var(--green)">B.5</span>  rollback txn marker</div>
+      <div>→ <span style="color:var(--green)">B.4</span>  DELETE FROM team_seats WHERE id IN (…)</div>
+      <div>→ <span style="color:var(--green)">B.3</span>  DELETE FROM pricing_tiers WHERE id=7</div>
+      <div>→ <span style="color:var(--yellow)">B.2</span>  ALTER TABLE DROP COLUMN new_tier</div>
+      <div style="color:var(--text-mute)">   (B.1 is read-only, no compensation)</div>
+    </div>
+
+    <div class="side-foot">
+      <button class="btn ghost">Cancel</button>
+      <button class="btn danger">Execute revert →</button>
+    </div>
+  </aside>
+
+</div><!-- /shell -->
+
+</body>
+</html>

@@ -1,0 +1,38 @@
+{
+  "laneId": "lane-1776755245093-ct3u7s",
+  "endpoint": "sql.update",
+  "createdAt": "2026-04-21T07:07:25.192Z",
+  "recordLatencyMs": 14,
+  "forwardRequest": {
+    "sql": "UPDATE users SET email=? WHERE id=?",
+    "params": [
+      "new2@x.com",
+      1
+    ]
+  },
+  "forwardResponse": {
+    "rows": [],
+    "changes": 1,
+    "lastInsertRowid": 3
+  },
+  "beforeImage": [
+    {
+      "id": 1,
+      "email": "alice@example.com",
+      "name": "Alice",
+      "updated_at": "2026-04-20T10:00:00Z"
+    }
+  ],
+  "compensator": {
+    "ops": [
+      {
+        "sql": "UPDATE users SET email=? WHERE id=?",
+        "params": [
+          "alice@example.com",
+          1
+        ]
+      }
+    ],
+    "upstream": "http://127.0.0.1:4103/query"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "cairn-compensator-poc",
+  "version": "0.0.1",
+  "private": true,
+  "type": "commonjs",
+  "description": "Compensator POC for 8 real endpoints - Cairn reversibility layer",
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  }
+}

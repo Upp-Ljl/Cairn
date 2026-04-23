@@ -1,0 +1,154 @@
+{
+  "laneId": "lane-1776754924434-580c5z",
+  "endpoint": "notion.page.patch",
+  "target": "http://127.0.0.1:4102/v1/pages/p-123",
+  "createdAt": "2026-04-21T07:02:04.484Z",
+  "recordLatencyMs": 46,
+  "compensator": {
+    "method": "PATCH",
+    "url": "http://127.0.0.1:4102/v1/pages/p-123",
+    "body": {
+      "archived": true
+    }
+  },
+  "forwardRequest": {
+    "method": "PATCH",
+    "body": {
+      "archived": true
+    }
+  },
+  "forwardResponse": {
+    "status": 200,
+    "body": {
+      "object": "page",
+      "id": "p-123",
+      "archived": true,
+      "icon": {
+        "type": "emoji",
+        "emoji": "original"
+      },
+      "cover": null,
+      "properties": {
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": {
+                "content": "Original Title"
+              },
+              "plain_text": "Original Title"
+            }
+          ]
+        },
+        "Status": {
+          "id": "st",
+          "type": "select",
+          "select": {
+            "id": "s1",
+            "name": "Draft",
+            "color": "gray"
+          }
+        },
+        "Tags": {
+          "id": "tg",
+          "type": "multi_select",
+          "multi_select": [
+            {
+              "id": "t1",
+              "name": "foo",
+              "color": "blue"
+            }
+          ]
+        },
+        "Priority": {
+          "id": "pr",
+          "type": "number",
+          "number": 1
+        },
+        "ComputedCount": {
+          "id": "cc",
+          "type": "rollup",
+          "rollup": {
+            "type": "number",
+            "number": 42,
+            "function": "count"
+          }
+        },
+        "CreatedAt": {
+          "id": "ca",
+          "type": "created_time",
+          "created_time": "2026-04-01T00:00:00.000Z"
+        }
+      },
+      "last_edited_time": "2026-04-21T07:02:04.483Z"
+    }
+  },
+  "beforeImage": {
+    "object": "page",
+    "id": "p-123",
+    "archived": true,
+    "icon": {
+      "type": "emoji",
+      "emoji": "original"
+    },
+    "cover": null,
+    "properties": {
+      "Name": {
+        "id": "title",
+        "type": "title",
+        "title": [
+          {
+            "type": "text",
+            "text": {
+              "content": "Original Title"
+            },
+            "plain_text": "Original Title"
+          }
+        ]
+      },
+      "Status": {
+        "id": "st",
+        "type": "select",
+        "select": {
+          "id": "s1",
+          "name": "Draft",
+          "color": "gray"
+        }
+      },
+      "Tags": {
+        "id": "tg",
+        "type": "multi_select",
+        "multi_select": [
+          {
+            "id": "t1",
+            "name": "foo",
+            "color": "blue"
+          }
+        ]
+      },
+      "Priority": {
+        "id": "pr",
+        "type": "number",
+        "number": 1
+      },
+      "ComputedCount": {
+        "id": "cc",
+        "type": "rollup",
+        "rollup": {
+          "type": "number",
+          "number": 42,
+          "function": "count"
+        }
+      },
+      "CreatedAt": {
+        "id": "ca",
+        "type": "created_time",
+        "created_time": "2026-04-01T00:00:00.000Z"
+      }
+    },
+    "last_edited_time": "2026-04-21T07:02:04.301Z"
+  },
+  "coverageGaps": []
+}

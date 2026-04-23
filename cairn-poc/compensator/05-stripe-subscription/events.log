@@ -1,0 +1,4 @@
+{"type":"invoice.paid","id":"in_0l1djvkw","charge":"ch_f26jdtax","amount":2000}
+{"type":"customer.subscription.created","id":"sub_4q2sru1q"}
+{"type":"charge.refunded","id":"re_rjlvso6k","charge":"ch_f26jdtax"}
+{"type":"customer.subscription.deleted","id":"sub_4q2sru1q"}

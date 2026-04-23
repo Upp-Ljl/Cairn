@@ -1,0 +1,1423 @@
+{
+  "laneId": "lane-1776755522945-55s5p7",
+  "endpoint": "jira.bulk.fields",
+  "createdAt": "2026-04-21T07:12:03.389Z",
+  "recordLatencyMs": 67,
+  "forwardRequest": {
+    "keys": [
+      "PROJ-1",
+      "PROJ-2",
+      "PROJ-3",
+      "PROJ-4",
+      "PROJ-5",
+      "PROJ-6",
+      "PROJ-7",
+      "PROJ-8",
+      "PROJ-9",
+      "PROJ-10",
+      "PROJ-11",
+      "PROJ-12",
+      "PROJ-13",
+      "PROJ-14",
+      "PROJ-15",
+      "PROJ-16",
+      "PROJ-17",
+      "PROJ-18",
+      "PROJ-19",
+      "PROJ-20",
+      "PROJ-21",
+      "PROJ-22",
+      "PROJ-23",
+      "PROJ-24",
+      "PROJ-25",
+      "PROJ-26",
+      "PROJ-27",
+      "PROJ-28",
+      "PROJ-29",
+      "PROJ-30",
+      "PROJ-31",
+      "PROJ-32",
+      "PROJ-33",
+      "PROJ-34",
+      "PROJ-35",
+      "PROJ-36",
+      "PROJ-37",
+      "PROJ-38",
+      "PROJ-39",
+      "PROJ-40",
+      "PROJ-41",
+      "PROJ-42",
+      "PROJ-43",
+      "PROJ-44",
+      "PROJ-45",
+      "PROJ-46",
+      "PROJ-47",
+      "PROJ-48",
+      "PROJ-49",
+      "PROJ-50",
+      "PROJ-51",
+      "PROJ-52",
+      "PROJ-53",
+      "PROJ-54",
+      "PROJ-55",
+      "PROJ-56",
+      "PROJ-57",
+      "PROJ-58",
+      "PROJ-59",
+      "PROJ-60",
+      "PROJ-61",
+      "PROJ-62",
+      "PROJ-63",
+      "PROJ-64",
+      "PROJ-65",
+      "PROJ-66",
+      "PROJ-67",
+      "PROJ-68",
+      "PROJ-69",
+      "PROJ-70",
+      "PROJ-71",
+      "PROJ-72",
+      "PROJ-73",
+      "PROJ-74",
+      "PROJ-75",
+      "PROJ-76",
+      "PROJ-77",
+      "PROJ-78",
+      "PROJ-79",
+      "PROJ-80",
+      "PROJ-81",
+      "PROJ-82",
+      "PROJ-83",
+      "PROJ-84",
+      "PROJ-85",
+      "PROJ-86",
+      "PROJ-87",
+      "PROJ-88",
+      "PROJ-89",
+      "PROJ-90",
+      "PROJ-91",
+      "PROJ-92",
+      "PROJ-93",
+      "PROJ-94",
+      "PROJ-95",
+      "PROJ-96",
+      "PROJ-97",
+      "PROJ-98",
+      "PROJ-99",
+      "PROJ-100",
+      "PROJ-101",
+      "PROJ-102",
+      "PROJ-103",
+      "PROJ-104",
+      "PROJ-105",
+      "PROJ-106",
+      "PROJ-107",
+      "PROJ-108",
+      "PROJ-109",
+      "PROJ-110",
+      "PROJ-111",
+      "PROJ-112",
+      "PROJ-113",
+      "PROJ-114",
+      "PROJ-115",
+      "PROJ-116",
+      "PROJ-117",
+      "PROJ-118",
+      "PROJ-119",
+      "PROJ-120",
+      "PROJ-121",
+      "PROJ-122",
+      "PROJ-123",
+      "PROJ-124",
+      "PROJ-125",
+      "PROJ-126",
+      "PROJ-127",
+      "PROJ-128",
+      "PROJ-129",
+      "PROJ-130",
+      "PROJ-131",
+      "PROJ-132",
+      "PROJ-133",
+      "PROJ-134",
+      "PROJ-135",
+      "PROJ-136",
+      "PROJ-137",
+      "PROJ-138",
+      "PROJ-139",
+      "PROJ-140",
+      "PROJ-141",
+      "PROJ-142",
+      "PROJ-143",
+      "PROJ-144",
+      "PROJ-145",
+      "PROJ-146",
+      "PROJ-147",
+      "PROJ-148",
+      "PROJ-149",
+      "PROJ-150",
+      "PROJ-151",
+      "PROJ-152",
+      "PROJ-153",
+      "PROJ-154",
+      "PROJ-155",
+      "PROJ-156",
+      "PROJ-157",
+      "PROJ-158",
+      "PROJ-159",
+      "PROJ-160",
+      "PROJ-161",
+      "PROJ-162",
+      "PROJ-163",
+      "PROJ-164",
+      "PROJ-165",
+      "PROJ-166",
+      "PROJ-167",
+      "PROJ-168",
+      "PROJ-169",
+      "PROJ-170",
+      "PROJ-171",
+      "PROJ-172",
+      "PROJ-173",
+      "PROJ-174",
+      "PROJ-175",
+      "PROJ-176",
+      "PROJ-177",
+      "PROJ-178",
+      "PROJ-179",
+      "PROJ-180",
+      "PROJ-181",
+      "PROJ-182",
+      "PROJ-183",
+      "PROJ-184",
+      "PROJ-185",
+      "PROJ-186",
+      "PROJ-187",
+      "PROJ-188",
+      "PROJ-189",
+      "PROJ-190",
+      "PROJ-191",
+      "PROJ-192",
+      "PROJ-193",
+      "PROJ-194",
+      "PROJ-195",
+      "PROJ-196",
+      "PROJ-197",
+      "PROJ-198",
+      "PROJ-199",
+      "PROJ-200",
+      "PROJ-201",
+      "PROJ-202",
+      "PROJ-203",
+      "PROJ-204",
+      "PROJ-205",
+      "PROJ-206",
+      "PROJ-207",
+      "PROJ-208",
+      "PROJ-209",
+      "PROJ-210",
+      "PROJ-211",
+      "PROJ-212",
+      "PROJ-213",
+      "PROJ-214",
+      "PROJ-215",
+      "PROJ-216",
+      "PROJ-217",
+      "PROJ-218",
+      "PROJ-219",
+      "PROJ-220",
+      "PROJ-221",
+      "PROJ-222",
+      "PROJ-223",
+      "PROJ-224",
+      "PROJ-225",
+      "PROJ-226",
+      "PROJ-227",
+      "PROJ-228",
+      "PROJ-229",
+      "PROJ-230",
+      "PROJ-231",
+      "PROJ-232",
+      "PROJ-233",
+      "PROJ-234",
+      "PROJ-235",
+      "PROJ-236",
+      "PROJ-237",
+      "PROJ-238",
+      "PROJ-239",
+      "PROJ-240",
+      "PROJ-241",
+      "PROJ-242",
+      "PROJ-243",
+      "PROJ-244",
+      "PROJ-245",
+      "PROJ-246",
+      "PROJ-247",
+      "PROJ-248",
+      "PROJ-249",
+      "PROJ-250",
+      "PROJ-251",
+      "PROJ-252",
+      "PROJ-253",
+      "PROJ-254",
+      "PROJ-255",
+      "PROJ-256",
+      "PROJ-257",
+      "PROJ-258",
+      "PROJ-259",
+      "PROJ-260",
+      "PROJ-261",
+      "PROJ-262",
+      "PROJ-263",
+      "PROJ-264",
+      "PROJ-265",
+      "PROJ-266",
+      "PROJ-267",
+      "PROJ-268",
+      "PROJ-269",
+      "PROJ-270",
+      "PROJ-271",
+      "PROJ-272",
+      "PROJ-273",
+      "PROJ-274",
+      "PROJ-275",
+      "PROJ-276",
+      "PROJ-277",
+      "PROJ-278",
+      "PROJ-279",
+      "PROJ-280",
+      "PROJ-281",
+      "PROJ-282",
+      "PROJ-283",
+      "PROJ-284",
+      "PROJ-285",
+      "PROJ-286",
+      "PROJ-287",
+      "PROJ-288",
+      "PROJ-289",
+      "PROJ-290",
+      "PROJ-291",
+      "PROJ-292",
+      "PROJ-293",
+      "PROJ-294",
+      "PROJ-295",
+      "PROJ-296",
+      "PROJ-297",
+      "PROJ-298",
+      "PROJ-299",
+      "PROJ-300"
+    ],
+    "newPriority": "High"
+  },
+  "taskId": "task-1776755523013-wtoq",
+  "taskFinalStatus": "COMPLETE",
+  "successfulCount": 200,
+  "failedCount": 100,
+  "compensator": {
+    "upstream": "http://127.0.0.1:4204",
+    "perKey": [
+      {
+        "key": "PROJ-1",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-2",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-3",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-4",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-5",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-6",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-7",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-8",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-9",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-10",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-11",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-12",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-13",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-14",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-15",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-16",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-17",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-18",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-19",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-20",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-21",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-22",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-23",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-24",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-25",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-26",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-27",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-28",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-29",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-30",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-31",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-32",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-33",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-34",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-35",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-36",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-37",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-38",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-39",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-40",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-41",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-42",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-43",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-44",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-45",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-46",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-47",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-48",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-49",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-50",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-51",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-52",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-53",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-54",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-55",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-56",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-57",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-58",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-59",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-60",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-61",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-62",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-63",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-64",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-65",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-66",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-67",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-68",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-69",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-70",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-71",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-72",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-73",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-74",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-75",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-76",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-77",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-78",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-79",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-80",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-81",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-82",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-83",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-84",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-85",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-86",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-87",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-88",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-89",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-90",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-91",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-92",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-93",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-94",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-95",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-96",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-97",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-98",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-99",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-100",
+        "revertTo": "Low"
+      },
+      {
+        "key": "PROJ-101",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-102",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-103",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-104",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-105",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-106",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-107",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-108",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-109",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-110",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-111",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-112",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-113",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-114",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-115",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-116",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-117",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-118",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-119",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-120",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-121",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-122",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-123",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-124",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-125",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-126",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-127",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-128",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-129",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-130",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-131",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-132",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-133",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-134",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-135",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-136",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-137",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-138",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-139",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-140",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-141",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-142",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-143",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-144",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-145",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-146",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-147",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-148",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-149",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-150",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-151",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-152",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-153",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-154",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-155",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-156",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-157",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-158",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-159",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-160",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-161",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-162",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-163",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-164",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-165",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-166",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-167",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-168",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-169",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-170",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-171",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-172",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-173",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-174",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-175",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-176",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-177",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-178",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-179",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-180",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-181",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-182",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-183",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-184",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-185",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-186",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-187",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-188",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-189",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-190",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-191",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-192",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-193",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-194",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-195",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-196",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-197",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-198",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-199",
+        "revertTo": "Medium"
+      },
+      {
+        "key": "PROJ-200",
+        "revertTo": "Medium"
+      }
+    ],
+    "strategy": "group successes by revert-target priority then bulk-revert each group"
+  },
+  "beforeImage": {
+    "PROJ-1": "Low",
+    "PROJ-2": "Low",
+    "PROJ-3": "Low",
+    "PROJ-4": "Low",
+    "PROJ-5": "Low",
+    "PROJ-6": "Low",
+    "PROJ-7": "Low",
+    "PROJ-8": "Low",
+    "PROJ-9": "Low",
+    "PROJ-10": "Low",
+    "PROJ-11": "Low",
+    "PROJ-12": "Low",
+    "PROJ-13": "Low",
+    "PROJ-14": "Low",
+    "PROJ-15": "Low",
+    "PROJ-16": "Low",
+    "PROJ-17": "Low",
+    "PROJ-18": "Low",
+    "PROJ-19": "Low",
+    "PROJ-20": "Low",
+    "PROJ-21": "Low",
+    "PROJ-22": "Low",
+    "PROJ-23": "Low",
+    "PROJ-24": "Low",
+    "PROJ-25": "Low",
+    "PROJ-26": "Low",
+    "PROJ-27": "Low",
+    "PROJ-28": "Low",
+    "PROJ-29": "Low",
+    "PROJ-30": "Low",
+    "PROJ-31": "Low",
+    "PROJ-32": "Low",
+    "PROJ-33": "Low",
+    "PROJ-34": "Low",
+    "PROJ-35": "Low",
+    "PROJ-36": "Low",
+    "PROJ-37": "Low",
+    "PROJ-38": "Low",
+    "PROJ-39": "Low",
+    "PROJ-40": "Low",
+    "PROJ-41": "Low",
+    "PROJ-42": "Low",
+    "PROJ-43": "Low",
+    "PROJ-44": "Low",
+    "PROJ-45": "Low",
+    "PROJ-46": "Low",
+    "PROJ-47": "Low",
+    "PROJ-48": "Low",
+    "PROJ-49": "Low",
+    "PROJ-50": "Low",
+    "PROJ-51": "Low",
+    "PROJ-52": "Low",
+    "PROJ-53": "Low",
+    "PROJ-54": "Low",
+    "PROJ-55": "Low",
+    "PROJ-56": "Low",
+    "PROJ-57": "Low",
+    "PROJ-58": "Low",
+    "PROJ-59": "Low",
+    "PROJ-60": "Low",
+    "PROJ-61": "Low",
+    "PROJ-62": "Low",
+    "PROJ-63": "Low",
+    "PROJ-64": "Low",
+    "PROJ-65": "Low",
+    "PROJ-66": "Low",
+    "PROJ-67": "Low",
+    "PROJ-68": "Low",
+    "PROJ-69": "Low",
+    "PROJ-70": "Low",
+    "PROJ-71": "Low",
+    "PROJ-72": "Low",
+    "PROJ-73": "Low",
+    "PROJ-74": "Low",
+    "PROJ-75": "Low",
+    "PROJ-76": "Low",
+    "PROJ-77": "Low",
+    "PROJ-78": "Low",
+    "PROJ-79": "Low",
+    "PROJ-80": "Low",
+    "PROJ-81": "Low",
+    "PROJ-82": "Low",
+    "PROJ-83": "Low",
+    "PROJ-84": "Low",
+    "PROJ-85": "Low",
+    "PROJ-86": "Low",
+    "PROJ-87": "Low",
+    "PROJ-88": "Low",
+    "PROJ-89": "Low",
+    "PROJ-90": "Low",
+    "PROJ-91": "Low",
+    "PROJ-92": "Low",
+    "PROJ-93": "Low",
+    "PROJ-94": "Low",
+    "PROJ-95": "Low",
+    "PROJ-96": "Low",
+    "PROJ-97": "Low",
+    "PROJ-98": "Low",
+    "PROJ-99": "Low",
+    "PROJ-100": "Low",
+    "PROJ-101": "Medium",
+    "PROJ-102": "Medium",
+    "PROJ-103": "Medium",
+    "PROJ-104": "Medium",
+    "PROJ-105": "Medium",
+    "PROJ-106": "Medium",
+    "PROJ-107": "Medium",
+    "PROJ-108": "Medium",
+    "PROJ-109": "Medium",
+    "PROJ-110": "Medium",
+    "PROJ-111": "Medium",
+    "PROJ-112": "Medium",
+    "PROJ-113": "Medium",
+    "PROJ-114": "Medium",
+    "PROJ-115": "Medium",
+    "PROJ-116": "Medium",
+    "PROJ-117": "Medium",
+    "PROJ-118": "Medium",
+    "PROJ-119": "Medium",
+    "PROJ-120": "Medium",
+    "PROJ-121": "Medium",
+    "PROJ-122": "Medium",
+    "PROJ-123": "Medium",
+    "PROJ-124": "Medium",
+    "PROJ-125": "Medium",
+    "PROJ-126": "Medium",
+    "PROJ-127": "Medium",
+    "PROJ-128": "Medium",
+    "PROJ-129": "Medium",
+    "PROJ-130": "Medium",
+    "PROJ-131": "Medium",
+    "PROJ-132": "Medium",
+    "PROJ-133": "Medium",
+    "PROJ-134": "Medium",
+    "PROJ-135": "Medium",
+    "PROJ-136": "Medium",
+    "PROJ-137": "Medium",
+    "PROJ-138": "Medium",
+    "PROJ-139": "Medium",
+    "PROJ-140": "Medium",
+    "PROJ-141": "Medium",
+    "PROJ-142": "Medium",
+    "PROJ-143": "Medium",
+    "PROJ-144": "Medium",
+    "PROJ-145": "Medium",
+    "PROJ-146": "Medium",
+    "PROJ-147": "Medium",
+    "PROJ-148": "Medium",
+    "PROJ-149": "Medium",
+    "PROJ-150": "Medium",
+    "PROJ-151": "Medium",
+    "PROJ-152": "Medium",
+    "PROJ-153": "Medium",
+    "PROJ-154": "Medium",
+    "PROJ-155": "Medium",
+    "PROJ-156": "Medium",
+    "PROJ-157": "Medium",
+    "PROJ-158": "Medium",
+    "PROJ-159": "Medium",
+    "PROJ-160": "Medium",
+    "PROJ-161": "Medium",
+    "PROJ-162": "Medium",
+    "PROJ-163": "Medium",
+    "PROJ-164": "Medium",
+    "PROJ-165": "Medium",
+    "PROJ-166": "Medium",
+    "PROJ-167": "Medium",
+    "PROJ-168": "Medium",
+    "PROJ-169": "Medium",
+    "PROJ-170": "Medium",
+    "PROJ-171": "Medium",
+    "PROJ-172": "Medium",
+    "PROJ-173": "Medium",
+    "PROJ-174": "Medium",
+    "PROJ-175": "Medium",
+    "PROJ-176": "Medium",
+    "PROJ-177": "Medium",
+    "PROJ-178": "Medium",
+    "PROJ-179": "Medium",
+    "PROJ-180": "Medium",
+    "PROJ-181": "Medium",
+    "PROJ-182": "Medium",
+    "PROJ-183": "Medium",
+    "PROJ-184": "Medium",
+    "PROJ-185": "Medium",
+    "PROJ-186": "Medium",
+    "PROJ-187": "Medium",
+    "PROJ-188": "Medium",
+    "PROJ-189": "Medium",
+    "PROJ-190": "Medium",
+    "PROJ-191": "Medium",
+    "PROJ-192": "Medium",
+    "PROJ-193": "Medium",
+    "PROJ-194": "Medium",
+    "PROJ-195": "Medium",
+    "PROJ-196": "Medium",
+    "PROJ-197": "Medium",
+    "PROJ-198": "Medium",
+    "PROJ-199": "Medium",
+    "PROJ-200": "Medium",
+    "PROJ-201": "Medium",
+    "PROJ-202": "Medium",
+    "PROJ-203": "Medium",
+    "PROJ-204": "Medium",
+    "PROJ-205": "Medium",
+    "PROJ-206": "Medium",
+    "PROJ-207": "Medium",
+    "PROJ-208": "Medium",
+    "PROJ-209": "Medium",
+    "PROJ-210": "Medium",
+    "PROJ-211": "Medium",
+    "PROJ-212": "Medium",
+    "PROJ-213": "Medium",
+    "PROJ-214": "Medium",
+    "PROJ-215": "Medium",
+    "PROJ-216": "Medium",
+    "PROJ-217": "Medium",
+    "PROJ-218": "Medium",
+    "PROJ-219": "Medium",
+    "PROJ-220": "Medium",
+    "PROJ-221": "Medium",
+    "PROJ-222": "Medium",
+    "PROJ-223": "Medium",
+    "PROJ-224": "Medium",
+    "PROJ-225": "Medium",
+    "PROJ-226": "Medium",
+    "PROJ-227": "Medium",
+    "PROJ-228": "Medium",
+    "PROJ-229": "Medium",
+    "PROJ-230": "Medium",
+    "PROJ-231": "Medium",
+    "PROJ-232": "Medium",
+    "PROJ-233": "Medium",
+    "PROJ-234": "Medium",
+    "PROJ-235": "Medium",
+    "PROJ-236": "Medium",
+    "PROJ-237": "Medium",
+    "PROJ-238": "Medium",
+    "PROJ-239": "Medium",
+    "PROJ-240": "Medium",
+    "PROJ-241": "Medium",
+    "PROJ-242": "Medium",
+    "PROJ-243": "Medium",
+    "PROJ-244": "Medium",
+    "PROJ-245": "Medium",
+    "PROJ-246": "Medium",
+    "PROJ-247": "Medium",
+    "PROJ-248": "Medium",
+    "PROJ-249": "Medium",
+    "PROJ-250": "Medium",
+    "PROJ-251": "Medium",
+    "PROJ-252": "Medium",
+    "PROJ-253": "Medium",
+    "PROJ-254": "Medium",
+    "PROJ-255": "Medium",
+    "PROJ-256": "Medium",
+    "PROJ-257": "Medium",
+    "PROJ-258": "Medium",
+    "PROJ-259": "Medium",
+    "PROJ-260": "Medium",
+    "PROJ-261": "Medium",
+    "PROJ-262": "Medium",
+    "PROJ-263": "Medium",
+    "PROJ-264": "Medium",
+    "PROJ-265": "Medium",
+    "PROJ-266": "Medium",
+    "PROJ-267": "Medium",
+    "PROJ-268": "Medium",
+    "PROJ-269": "Medium",
+    "PROJ-270": "Medium",
+    "PROJ-271": "Medium",
+    "PROJ-272": "Medium",
+    "PROJ-273": "Medium",
+    "PROJ-274": "Medium",
+    "PROJ-275": "Medium",
+    "PROJ-276": "Medium",
+    "PROJ-277": "Medium",
+    "PROJ-278": "Medium",
+    "PROJ-279": "Medium",
+    "PROJ-280": "Medium",
+    "PROJ-281": "Medium",
+    "PROJ-282": "Medium",
+    "PROJ-283": "Medium",
+    "PROJ-284": "Medium",
+    "PROJ-285": "Medium",
+    "PROJ-286": "Medium",
+    "PROJ-287": "Medium",
+    "PROJ-288": "Medium",
+    "PROJ-289": "Medium",
+    "PROJ-290": "Medium",
+    "PROJ-291": "Medium",
+    "PROJ-292": "Medium",
+    "PROJ-293": "Medium",
+    "PROJ-294": "Medium",
+    "PROJ-295": "Medium",
+    "PROJ-296": "Medium",
+    "PROJ-297": "Medium",
+    "PROJ-298": "Medium",
+    "PROJ-299": "Medium",
+    "PROJ-300": "Medium"
+  }
+}

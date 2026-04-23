@@ -1,0 +1,8 @@
+{"type":"pull_request.merged","number":42,"sha":"sha-merge-3790e1"}
+{"type":"check_suite.requested","sha":"sha-merge-3790e1","id":"a12a077f"}
+{"type":"check_suite.in_progress","sha":"sha-merge-3790e1","id":"a12a077f"}
+{"type":"check_suite.completed","sha":"sha-merge-3790e1","id":"a12a077f","conclusion":"success"}
+{"type":"deployment.created","id":"e807208a","sha":"sha-merge-3790e1"}
+{"type":"deployment.success","id":"e807208a","sha":"sha-merge-3790e1"}
+{"type":"revert_pr.merged","number":100,"sha":"sha-revert-ac6079","reverts":"sha-merge-3790e1"}
+{"type":"check_suite.requested","sha":"sha-revert-ac6079","id":"e7b6468a"}

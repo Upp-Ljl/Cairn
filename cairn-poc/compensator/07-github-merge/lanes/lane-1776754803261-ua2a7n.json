@@ -1,0 +1,44 @@
+{
+  "laneId": "lane-1776754803261-ua2a7n",
+  "endpoint": "github.pull.merge",
+  "createdAt": "2026-04-21T07:00:03.276Z",
+  "recordLatencyMs": 13,
+  "beforeImage": {
+    "mainTip": {
+      "sha": "sha-base-0",
+      "message": "initial"
+    },
+    "deployments": []
+  },
+  "forwardRequest": {
+    "owner": "octo",
+    "repo": "demo",
+    "num": "42"
+  },
+  "forwardResponse": {
+    "sha": "sha-merge-54d071",
+    "merged": true
+  },
+  "cascadeSideEffects": {
+    "reversible": [
+      "revert commit on main (adds to history, does not rewrite)",
+      "trigger new CI + redeploy previous artifact"
+    ],
+    "irreversible": [
+      "CI minutes already consumed",
+      "production served responses from the merged artifact during the window",
+      "webhook pull_request.merged already delivered to Slack/PagerDuty/external subscribers",
+      "check_suite.completed webhook already delivered"
+    ]
+  },
+  "compensator": {
+    "method": "POST",
+    "url": "http://127.0.0.1:4107/repos/octo/demo/pulls",
+    "body": {
+      "title": "Revert merge of PR #42",
+      "revert_of_sha": "sha-merge-54d071",
+      "auto_merge": true
+    },
+    "note": "forward-only revert — appends a revert commit, does NOT rewrite history or undo deploy bytes"
+  }
+}
