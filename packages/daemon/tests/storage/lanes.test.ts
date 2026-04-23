@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { makeTmpDb } from './helpers.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { ALL_MIGRATIONS } from '../../src/storage/migrations/index.js';
-import { createLane, getLaneById, listLanesByTask, acquireLaneLock, releaseLaneLock } from '../../src/storage/repositories/lanes.js';
+import { createLane, getLaneById, listLanesByTask, acquireLaneLock, releaseLaneLock, transitionLaneState } from '../../src/storage/repositories/lanes.js';
 import type { Database as DB } from 'better-sqlite3';
 
 let db: DB;
@@ -85,5 +85,27 @@ describe('lanes lock', () => {
 
     releaseLaneLock(db, lane.id, 'daemon@1');
     expect(getLaneById(db, lane.id)!.lock_holder).toBeNull();
+  });
+});
+
+describe('lanes.transitionLaneState', () => {
+  it('returns true when from matches current', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    expect(transitionLaneState(db, lane.id, 'RECORDED', 'REVERTING')).toBe(true);
+    expect(getLaneById(db, lane.id)!.state).toBe('REVERTING');
+  });
+
+  it('returns false when from does not match', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    expect(transitionLaneState(db, lane.id, 'REVERTING', 'REVERTED')).toBe(false);
+    expect(getLaneById(db, lane.id)!.state).toBe('RECORDED');
+  });
+
+  it('only one of two concurrent transitions from same state wins', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    const a = transitionLaneState(db, lane.id, 'RECORDED', 'REVERTING');
+    const b = transitionLaneState(db, lane.id, 'RECORDED', 'FAILED_RETRYABLE');
+    expect([a, b].sort()).toEqual([false, true]);
+    expect(getLaneById(db, lane.id)!.state).toBe('REVERTING');
   });
 });

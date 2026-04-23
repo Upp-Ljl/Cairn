@@ -84,3 +84,17 @@ export function releaseLaneLock(db: DB, id: string, holder: string): void {
      WHERE id = ? AND lock_holder = ?`
   ).run(Date.now(), id, holder);
 }
+
+export function transitionLaneState(
+  db: DB,
+  id: string,
+  from: LaneState,
+  to: LaneState
+): boolean {
+  const result = db.prepare(
+    `UPDATE lanes
+       SET state = ?, updated_at = ?
+     WHERE id = ? AND state = ?`
+  ).run(to, Date.now(), id, from);
+  return result.changes === 1;
+}
