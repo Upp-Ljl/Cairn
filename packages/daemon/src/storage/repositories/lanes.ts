@@ -57,3 +57,30 @@ export function listLanesByTask(db: DB, taskId: string | null, state?: LaneState
   sql += ' ORDER BY created_at DESC';
   return db.prepare(sql).all(...params) as LaneRow[];
 }
+
+export function acquireLaneLock(
+  db: DB,
+  id: string,
+  holder: string,
+  ttlMs: number
+): boolean {
+  const now = Date.now();
+  const expires = now + ttlMs;
+  const result = db.prepare(
+    `UPDATE lanes
+       SET lock_holder = @holder,
+           lock_expires_at = @expires,
+           updated_at = @now
+     WHERE id = @id
+       AND (lock_holder IS NULL OR lock_expires_at IS NULL OR lock_expires_at <= @now)`
+  ).run({ id, holder, expires, now });
+  return result.changes === 1;
+}
+
+export function releaseLaneLock(db: DB, id: string, holder: string): void {
+  db.prepare(
+    `UPDATE lanes
+       SET lock_holder = NULL, lock_expires_at = NULL, updated_at = ?
+     WHERE id = ? AND lock_holder = ?`
+  ).run(Date.now(), id, holder);
+}

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { makeTmpDb } from './helpers.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { ALL_MIGRATIONS } from '../../src/storage/migrations/index.js';
-import { createLane, getLaneById, listLanesByTask } from '../../src/storage/repositories/lanes.js';
+import { createLane, getLaneById, listLanesByTask, acquireLaneLock, releaseLaneLock } from '../../src/storage/repositories/lanes.js';
 import type { Database as DB } from 'better-sqlite3';
 
 let db: DB;
@@ -57,5 +57,33 @@ describe('lanes.listLanesByTask', () => {
     const nulls = listLanesByTask(db, null);
     expect(nulls).toHaveLength(1);
     expect(nulls[0]!.endpoint).toBe('x');
+  });
+});
+
+describe('lanes lock', () => {
+  it('acquireLaneLock succeeds on free lane, fails when held and unexpired', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    expect(acquireLaneLock(db, lane.id, 'daemon@1', 60_000)).toBe(true);
+    expect(acquireLaneLock(db, lane.id, 'daemon@2', 60_000)).toBe(false);
+  });
+
+  it('acquireLaneLock succeeds when existing lock is expired', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    expect(acquireLaneLock(db, lane.id, 'daemon@1', -1)).toBe(true);
+    // simulate time passing by writing expired lock directly
+    db.prepare('UPDATE lanes SET lock_expires_at = 1 WHERE id = ?').run(lane.id);
+    expect(acquireLaneLock(db, lane.id, 'daemon@2', 60_000)).toBe(true);
+    expect(getLaneById(db, lane.id)!.lock_holder).toBe('daemon@2');
+  });
+
+  it('releaseLaneLock clears holder only when matching', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    acquireLaneLock(db, lane.id, 'daemon@1', 60_000);
+
+    releaseLaneLock(db, lane.id, 'daemon@WRONG');
+    expect(getLaneById(db, lane.id)!.lock_holder).toBe('daemon@1');
+
+    releaseLaneLock(db, lane.id, 'daemon@1');
+    expect(getLaneById(db, lane.id)!.lock_holder).toBeNull();
   });
 });
