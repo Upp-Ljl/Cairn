@@ -41,3 +41,19 @@ export function getLaneById(db: DB, id: string): LaneRow | null {
   const row = db.prepare('SELECT * FROM lanes WHERE id = ?').get(id) as LaneRow | undefined;
   return row ?? null;
 }
+
+export function listLanesByTask(db: DB, taskId: string | null, state?: LaneState): LaneRow[] {
+  const params: unknown[] = [];
+  let sql = 'SELECT * FROM lanes WHERE ';
+  if (taskId === null) sql += 'task_id IS NULL';
+  else {
+    sql += 'task_id = ?';
+    params.push(taskId);
+  }
+  if (state) {
+    sql += ' AND state = ?';
+    params.push(state);
+  }
+  sql += ' ORDER BY created_at DESC';
+  return db.prepare(sql).all(...params) as LaneRow[];
+}
