@@ -19,7 +19,10 @@ export interface Workspace {
 }
 
 export function openWorkspace(opts: WorkspaceOpts = {}): Workspace {
-  const cairnRoot = opts.cairnRoot ?? join(homedir(), '.cairn');
+  const cairnRoot =
+    opts.cairnRoot ??
+    process.env['CAIRN_HOME'] ??
+    join(homedir(), '.cairn');
   mkdirSync(cairnRoot, { recursive: true });
   const db = openDatabase(join(cairnRoot, 'cairn.db'));
   runMigrations(db, ALL_MIGRATIONS);

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cairn-wedge": {
+      "command": "node",
+      "args": ["./packages/mcp-server/dist/index.js"],
+      "env": {}
+    }
+  }
+}
