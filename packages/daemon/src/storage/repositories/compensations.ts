@@ -82,7 +82,8 @@ export function listPendingCompensationsByLane(
        FROM compensations c
        JOIN ops o ON o.id = c.op_id
       WHERE o.lane_id = ?
-        AND c.status IN ('PENDING','FAILED')
+        AND (c.status = 'PENDING'
+             OR (c.status = 'FAILED' AND c.attempt < c.max_attempts))
       ORDER BY o.seq ASC, c.created_at ASC`
   ).all(laneId) as CompensationRow[];
 }

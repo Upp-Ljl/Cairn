@@ -89,3 +89,43 @@ describe('compensations.listPendingCompensationsByLane', () => {
     expect(pending.map((c) => c.id)).toEqual([c1.id]);
   });
 });
+
+describe('compensations.listPendingCompensationsByLane retry exhaustion', () => {
+  it('excludes FAILED comp when attempt >= max_attempts', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    const op = appendOp(db, dir, lane.id, {
+      method: 'PATCH', url: 'u', classification: 'SAFE_REVERT',
+    });
+    // Create comp with max_attempts=2 so we can exhaust it quickly
+    const c = createCompensation(db, dir, op.id, {
+      strategy: 'reverse_http',
+      max_attempts: 2,
+    });
+
+    // Attempt 1: in-progress -> failed (attempt becomes 1)
+    markCompensationInProgress(db, c.id);
+    markCompensationResult(db, c.id, false, 'first failure');
+    // Still retriable (attempt=1, max_attempts=2)
+    expect(listPendingCompensationsByLane(db, lane.id)).toHaveLength(1);
+
+    // Attempt 2: in-progress -> failed (attempt becomes 2, equal to max)
+    markCompensationInProgress(db, c.id);
+    markCompensationResult(db, c.id, false, 'second failure');
+    // Now attempt == max_attempts: should NOT appear
+    expect(listPendingCompensationsByLane(db, lane.id)).toHaveLength(0);
+  });
+
+  it('still includes PENDING comps regardless of attempt count', () => {
+    const lane = createLane(db, { endpoint: 'e' });
+    const op = appendOp(db, dir, lane.id, {
+      method: 'PATCH', url: 'u', classification: 'SAFE_REVERT',
+    });
+    const c = createCompensation(db, dir, op.id, {
+      strategy: 'reverse_http',
+      max_attempts: 1,
+    });
+    // Brand-new PENDING with attempt=0, max=1 — clearly retriable
+    expect(listPendingCompensationsByLane(db, lane.id).map((r) => r.id))
+      .toEqual([c.id]);
+  });
+});
