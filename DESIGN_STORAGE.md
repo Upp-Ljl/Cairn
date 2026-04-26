@@ -596,3 +596,44 @@ Phase 4（按需）
 ---
 
 **拍板后下一步**：把 §17 喂给 `/superpowers:writing-plans`，产出每个 phase 的 TDD 任务序列。
+
+---
+
+## 17.1 W1 楔期 MVP 路径偏离记录
+
+> **写入日期**：2026-04-26（W1 末尾）
+> **背景**：W1 采纳路径 B（参考 `docs/superpowers/plans/2026-04-23-wedge-w1.md`），从 P2/P3 抽出最小子集落地以赶上 PRODUCT.md §9.1 的 MCP 楔 W1-W3 deadline。
+
+### 已提前落地的 schema（与 P2/P3 计划一致，**勿重写**）
+
+| Migration | 原计划归属 | W1 实际编号 | 状态 |
+|---|---|---|---|
+| `001-init.ts` | P1 | 001 | ✅ 已落（lanes/ops/compensations） |
+| `002-scratchpad.ts` | P3 原 005 | **002** | ✅ 已落（schema 与 P3 §4.8 完全一致） |
+| `003-checkpoints.ts` | P2 原 002 | **003** | ✅ 已落（schema 与 §4.4 完全一致） |
+
+### 已提前落地的代码（裁剪过逻辑量，但接口稳定）
+
+- `src/storage/repositories/scratchpad.ts` — 仅 `putScratch / getScratch / listAllScratch / deleteScratch` + blob 分流。**未实现**：`gcExpiredScratch`、namespace 解析、`listScratchByTask`、TTL 默认值。这些 P3 加，**不动表**。
+- `src/storage/snapshots/git-stash.ts` — git-stash backend 全实现（capture / restore / affectedFiles）。**未实现**：rsync、APFS clonefile（P2 补）。
+- `src/storage/repositories/checkpoints.ts` — 仅 `createPendingCheckpoint / markCheckpointReady / getCheckpointById / listCheckpoints`。**未实现**：CORRUPTED 5 分钟扫描、`captureCheckpoint` 两阶段提交 helper（W1 由 MCP server 工具层组合实现）、snapshot 目录 GC。这些 P2 加，**不动表**。
+
+### 已知 W1 技术债（P2/P3 落地时需要清理）
+
+1. **stash SHA 暂存于 `checkpoints.label` 字段**：W1 用 `<userLabel>::stash:<sha>` 编码，因为 schema 没有给 backend 留专门的列。P2 加 `backend_data TEXT` 列后，写一个 migration 把 label 解码迁出去。
+2. **`packages/mcp-server` 直接 import daemon `dist/`**（而不是源码或 package exports map）。daemon `tsconfig.json` 启用了 `declaration: true` 以支持这种用法。等我们引入 monorepo 工具（pnpm workspaces / nx）时统一治理。
+3. **`packages/daemon/src/index.ts` 是空 placeholder**（来自 P1 Task 0 — tsc 需要至少一个源文件）。等真正的 daemon 主入口实现时覆盖。
+
+### P2/P3 真正执行时的对照修正
+
+- P2 计划中 "Migration 002 checkpoints" → **跳过**（已是 W1 migration 003）
+- P2 计划的 snapshot backend 三选一 → **只做 rsync 和 APFS**（git-stash 已落）
+- P2 计划的 CORRUPTED scan → **保留**（W1 跳过的，必须 P2 补上）
+- P3 计划中 "Migration 005 scratchpad" → **跳过**（已是 W1 migration 002）
+- P3 计划的 scratchpad 仓储 → **只补 gcExpired / listByTask / namespace**（基础 CRUD 已落）
+
+### 不变量（保证 W1 落地不堵 P2/P3）
+
+- W1 没有引入任何 P2/P3 不知道的新 schema 列或新表
+- W1 写入的所有 SQL 在 P2/P3 后仍是合法的（CHECK 约束、FK、INDEX 都对得上）
+- W1 的 MCP 楔本身（`packages/mcp-server`）不在 P2/P3 范围内，独立演进
