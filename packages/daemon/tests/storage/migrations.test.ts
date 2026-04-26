@@ -128,3 +128,31 @@ describe('001-init schema', () => {
     expect(comps.n).toBe(0);
   });
 });
+
+describe('002-scratchpad schema', () => {
+  it('creates scratchpad table with PK key + 2 indexes + correct columns', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare("PRAGMA table_info(scratchpad)").all() as Array<{
+      name: string; pk: number; notnull: number;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'key', 'value_json', 'value_path', 'task_id',
+      'expires_at', 'created_at', 'updated_at',
+    ]));
+    // key is PK
+    const keyCol = cols.find((c) => c.name === 'key');
+    expect(keyCol?.pk).toBe(1);
+    // created_at + updated_at NOT NULL
+    expect(cols.find((c) => c.name === 'created_at')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'updated_at')?.notnull).toBe(1);
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='scratchpad'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toEqual(
+      expect.arrayContaining(['idx_scratchpad_task_id', 'idx_scratchpad_expires_at']),
+    );
+  });
+});

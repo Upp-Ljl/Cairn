@@ -72,3 +72,13 @@ export interface CompensationRow {
   created_at: number;
   updated_at: number;
 }
+
+export interface ScratchpadRow {
+  key: string;
+  value_json: string | null;
+  value_path: string | null;
+  task_id: string | null;
+  expires_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
