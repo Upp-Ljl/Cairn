@@ -156,3 +156,42 @@ describe('002-scratchpad schema', () => {
     );
   });
 });
+
+describe('003-checkpoints schema', () => {
+  it('creates checkpoints table with PK id + 2 indexes + CHECK on snapshot_status', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare("PRAGMA table_info(checkpoints)").all() as Array<{
+      name: string; pk: number; notnull: number;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'id', 'task_id', 'label', 'git_head', 'snapshot_dir',
+      'snapshot_status', 'size_bytes', 'created_at', 'ready_at',
+    ]));
+    // id PK
+    expect(cols.find((c) => c.name === 'id')?.pk).toBe(1);
+    // snapshot_dir + snapshot_status + created_at NOT NULL
+    expect(cols.find((c) => c.name === 'snapshot_dir')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'snapshot_status')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'created_at')?.notnull).toBe(1);
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='checkpoints'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toEqual(
+      expect.arrayContaining(['idx_checkpoints_task_id', 'idx_checkpoints_status']),
+    );
+  });
+
+  it('enforces snapshot_status CHECK constraint', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO checkpoints (id, snapshot_dir, snapshot_status, created_at)
+         VALUES ('c1', '/tmp/x', 'NOT_A_STATUS', 0)`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+});

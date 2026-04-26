@@ -82,3 +82,18 @@ export interface ScratchpadRow {
   created_at: number;
   updated_at: number;
 }
+
+export const CHECKPOINT_STATUSES = ['PENDING', 'READY', 'CORRUPTED'] as const;
+export type CheckpointStatus = typeof CHECKPOINT_STATUSES[number];
+
+export interface CheckpointRow {
+  id: string;
+  task_id: string | null;
+  label: string | null;
+  git_head: string | null;
+  snapshot_dir: string;
+  snapshot_status: CheckpointStatus;
+  size_bytes: number | null;
+  created_at: number;
+  ready_at: number | null;
+}
