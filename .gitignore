@@ -32,3 +32,5 @@ Thumbs.db
 .env.*.local
 *.pem
 *.key
+
+.cairn-push-token/
