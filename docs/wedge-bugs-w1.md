@@ -18,7 +18,7 @@
 
 > 来源：W2 dogfood（T2.3-T2.5）。详细体验感见 `docs/wedge-friction-w1.md`，本文件只记功能层面的"应该但没"或"做错了"。
 
-- [x] **[高] checkpoint**：clean 工作树下 `cairn.checkpoint.create` 返回 `stash_sha: null`，但 API 不警告；后续 `rewind.preview` / `rewind.to` 对该 checkpoint 直接报错 "no stash backend recorded"
+- [x] **[高] checkpoint**：clean 工作树下 `cairn.checkpoint.create` 返回 `stash_sha: null`，但 API 不警告；后续 `rewind.preview` / `rewind.to` 对该 checkpoint 直接报错 "no stash backend recorded" ✅ FIXED W2 (commit 3fa561b)
   - 复现步骤：
     1. `git status` 确认 clean
     2. 调 `cairn.checkpoint.create({ label: "x" })` → 返回 `{ id, git_head, stash_sha: null }`
@@ -28,20 +28,23 @@
   - 实际行为：step 2 静默成功，step 4 报 `error: "no stash backend recorded (clean checkpoint?)"` —— 用户已经损失 step 3 的工作
   - 临时绕过：dogfood 期间靠"先改一个文件再 checkpoint"绕开（即先制造 dirty tree）。但这反人类直觉
   - 优先级：**W2 必修**（friction #2 升级为 bug；T2.7-T2.9 处理）
+  - **修复**：commit 3fa561b — toolCreateCheckpoint returns warning field; rewind error message rewritten
 
-- [x] **[中] rewind.preview**：错误信息使用内部术语 "stash backend"
+- [x] **[中] rewind.preview**：错误信息使用内部术语 "stash backend" ✅ FIXED W2 (commit 3fa561b)
   - 复现步骤：对一个 `stash_sha: null` 的 checkpoint 调 `cairn.rewind.preview`
   - 期望行为：错误信息用用户语言（"this checkpoint captured no changes" / "did you make changes before checkpointing?"）
   - 实际行为：返回 `"no stash backend recorded (clean checkpoint?)"` —— "stash backend" 是实现细节，用户读不懂
   - 临时绕过：无（用户只能猜）
   - 优先级：W2 必修（与上一条同 fix，文案一起改）
+  - **修复**：commit 3fa561b — toolCreateCheckpoint returns warning field; rewind error message rewritten
 
-- [x] **[中] scratchpad.list**：`updated_at` 字段是 unix ms（如 `1777261555464`），人类不可读
+- [x] **[中] scratchpad.list**：`updated_at` 字段是 unix ms（如 `1777261555464`），人类不可读 ✅ FIXED W2 (commit 2455770)
   - 复现步骤：调 `cairn.scratchpad.list`
   - 期望行为：除 unix ms 外提供 ISO 字符串或 "X 分钟前" 相对时间
   - 实际行为：仅 unix ms。用户必须心算 / 借助外部工具
   - 临时绕过：让 Claude 解析（但每次响应都要解一次）
   - 优先级：W2 必修（响应字段加 `updated_at_iso`，向后兼容）
+  - **修复**：commit 2455770 — toolListScratch returns updated_at_iso ISO string alongside unix ms
 
 - [x] **[低] checkpoint.create**：`size_bytes` 总是 0
   - 复现步骤：任何 checkpoint，都看 DB 的 `checkpoints.size_bytes` 列

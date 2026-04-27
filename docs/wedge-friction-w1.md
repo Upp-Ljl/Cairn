@@ -29,6 +29,7 @@
 
 | 字段 | 内容 |
 |---|---|
+| **状态** | ✅ W2 已修 (commit 3fa561b) |
 | 场景 | 我把所有改动都 commit 了，工作树 clean，然后调 `cairn.checkpoint.create({ label: "before-readme-edit" })`，准备改 README |
 | 期望 | checkpoint 应该捕获"当前 commit 的状态"作为基准。改完 README 后调 `rewind.to` 应该能把 README 还原回 clean 状态（即丢弃我的未提交改动） |
 | 实际 | `checkpoint.create` 返回 `stash_sha: null`（clean tree, nothing to stash）。改完 README 后调 `rewind.preview` 返回 `error: "no stash backend recorded (clean checkpoint?)"` + `files: []`。**checkpoint 完全不能用来撤销我接下来的改动** |
@@ -39,6 +40,7 @@
 
 | 字段 | 内容 |
 |---|---|
+| **状态** | ✅ W2 已修 (commit 3fa561b) |
 | 场景 | 调 `cairn.rewind.preview` 对一个 stash_sha=null 的 checkpoint |
 | 期望 | 错误信息能让用户知道"为什么这个 checkpoint 不能 rewind" + "下一步该做什么" |
 | 实际 | 返回 `"no stash backend recorded (clean checkpoint?)"` — "stash backend" 是实现术语，用户读完不知所措 |
@@ -79,6 +81,7 @@
 
 | 字段 | 内容 |
 |---|---|
+| **状态** | ✅ W2 已修 (commit 2455770) |
 | 场景 | 调 `cairn.scratchpad.list` 看本会话所有草稿 |
 | 期望 | 能直接看到"哪条最近写的"或"X 分钟前" |
 | 实际 | 返回 `"updated_at": 1777261555464`，需要心算或工具解读 |
@@ -109,6 +112,7 @@
 
 | 字段 | 内容 |
 |---|---|
+| **状态** | 🟡 文档化（README "在多 Agent 工作流里使用"），代码层面待 W3 决策 |
 | 场景 | T2.5 我以为 checkpoint 只会捕获我刚建的 rewind-demo.md，结果 preview 列出了**两个文件**（demo 文件 + 之前已 dirty 的 wedge-bugs-w1.md） |
 | 期望 | 用户心智："checkpoint 我即将工作的内容"。实际行为："checkpoint 此刻所有 dirty 文件" |
 | 实际 | 不丢数据（stash 里 wedge-bugs-w1.md 的内容就是当前内容，rewind 写回等于无变化）。但 preview 输出会让用户惊讶："为什么列了那个文件？" |

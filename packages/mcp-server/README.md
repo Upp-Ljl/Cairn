@@ -79,8 +79,8 @@ cd ../mcp-server && npm install && npx tsc -p tsconfig.json
 |---|---|---|---|
 | `cairn.scratchpad.write` | `{ key, content }` | `{ ok, key }` | 跨 turn 存草稿 |
 | `cairn.scratchpad.read` | `{ key }` | `{ key, found, value }` | 读回草稿 |
-| `cairn.scratchpad.list` | `{}` | `{ items: [{ key, updated_at, has_value }] }` | 看本地有哪些草稿 |
-| `cairn.checkpoint.create` | `{ label? }` | `{ id, git_head, stash_sha }` | 改大动作前先存档 |
+| `cairn.scratchpad.list` | `{}` | `{ items: [{ key, updated_at, updated_at_iso, has_value }] }` | 看本地有哪些草稿 |
+| `cairn.checkpoint.create` | `{ label? }` | `{ id, git_head, stash_sha, warning? }` | 改大动作前先存档 |
 | `cairn.checkpoint.list` | `{}` | `{ items: [{ id, label, git_head, created_at }] }` | 看历史档 |
 | `cairn.rewind.preview` | `{ checkpoint_id }` | `{ checkpoint_id, files, git_head_at_checkpoint }` | rewind 前确认影响文件 |
 | `cairn.rewind.to` | `{ checkpoint_id }` | `{ ok, restored_files }` | 真的回滚 |
@@ -114,7 +114,29 @@ Claude: [calls cairn.rewind.to({ checkpoint_id: "01HXY..." })]
 
 ---
 
+## 在多 Agent 工作流里使用
+
+楔的工具只暴露给**当前 Claude Code 进程**。如果你的工作流是"父 agent 派发 subagent 干代码活"，subagent 调不到楔工具——楔的能力不可下传。这是产品定位（楔 = 宿主 Agent 的本地工具），不是 bug。
+
+实际工作流中的 checkpoint 时机：
+
+```
+父 agent  → checkpoint.create (before-subagent)   ← 推荐：先 commit 后 checkpoint，让 stash 抓得到 dirty 文件
+父 agent  → 派发 subagent 改代码
+父 agent  → checkpoint.create (after-subagent)    ← 想精确回滚到 subagent 的工作前后状态
+父 agent  → rewind.preview/to                     ← 选择回到哪个状态
+```
+
+**反模式**：在工作树 clean 时调 `cairn.checkpoint.create`。返回的 `stash_sha: null` + `warning` 提示这个 checkpoint 不能撤销未来改动。先 dirty 工作树（哪怕只是改一个字符），再 checkpoint。
+
+---
+
 ## W1 已知限制（重要）
+
+> **W2 已修**（2026-04-27）：
+> - clean-tree checkpoint 现在返回明确的 `warning` 字段
+> - rewind 错误信息改为用户语言（不再用 "stash backend" 内部术语）
+> - `scratchpad.list` 返回 `updated_at_iso` ISO 字符串
 
 **首要限制**：rewind 只覆盖 git-tracked 文件。新文件在 `git add -A` 暂存后也会被 stash 捕获，但已 commit 的历史不动 — 这是楔期约定。
 
