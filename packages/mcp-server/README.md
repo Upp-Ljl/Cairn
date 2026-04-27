@@ -17,8 +17,8 @@ Cairn MCP wedge — 给你的 AI 编码 Agent（Claude Code 等）提供 `cairn.
 ## 安装（60 秒）
 
 ```bash
-git clone <repo>
-cd cairn
+git clone https://github.com/Upp-renlab/Cairn.git
+cd Cairn
 
 # 1. 编译 daemon（持久层）
 cd packages/daemon && npm install && npx tsc -p tsconfig.json
@@ -55,6 +55,21 @@ cd ../mcp-server && npm install && npx tsc -p tsconfig.json
   }
 }
 ```
+
+---
+
+## 接通后快速验证（30 秒）
+
+重启 Claude Code 后，工具列表里应出现 `cairn-wedge`。在新会话里发：
+
+```
+请帮我验证 cairn 楔接通：
+1. 调 cairn.scratchpad.list，应返回 { items: [] }
+2. 调 cairn.scratchpad.write，参数 { key: "test", content: "hello" }，应返回 { ok: true, key: "test" }
+3. 调 cairn.scratchpad.read，参数 { key: "test" }，应返回 { found: true, value: "hello" }
+```
+
+三步都过就接通了。任一步报错，参考下方 [故障排查](#故障排查)。
 
 ---
 
