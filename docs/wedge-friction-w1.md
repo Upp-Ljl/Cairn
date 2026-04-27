@@ -94,3 +94,23 @@
 | 实际 | 隔了一层 — 我调 checkpoint 的时机（before subagent / after subagent）变成产品决策。最终我两次都调了：before（无效 because clean）+ after（dirty，工作）。这种"两次 checkpoint 包夹一次代码改动"的 pattern 是楔在多 agent 工作流里的真实位置，但 README 没讲过 |
 | 严重度 | 中（影响产品定位的清晰度） |
 | 修复 idea | README 加一节"在多 agent 工作流里怎么用"，给 before/after 双 checkpoint 的示例。或者把"先 commit 再 checkpoint"的反模式明确写出来劝退 |
+
+### #9 — `cairn.rewind.to` 实际 e2e 工作（正面记录）
+
+| 字段 | 内容 |
+|---|---|
+| 场景 | T2.5 故意搞坏：建临时文件 v1 → checkpoint → 改成 v2/v3/中文乱码 → `rewind.to` |
+| 期望 | 文件回到 v1，git HEAD 不动 |
+| 实际 | 完美工作。`rewind.to` 返回 `{ ok: true, restored_files: [...] }`，文件内容字节级 v1，wedge-bugs-w1.md 内容也保留 |
+| 严重度 | 正面信号（不算 friction） |
+| 修复 idea | 无需修。这是楔最核心卖点的一次端到端确认 |
+
+### #10 — `rewind.preview` 暴露"stash 捕获范围 ≠ 用户当前关注范围"
+
+| 字段 | 内容 |
+|---|---|
+| 场景 | T2.5 我以为 checkpoint 只会捕获我刚建的 rewind-demo.md，结果 preview 列出了**两个文件**（demo 文件 + 之前已 dirty 的 wedge-bugs-w1.md） |
+| 期望 | 用户心智："checkpoint 我即将工作的内容"。实际行为："checkpoint 此刻所有 dirty 文件" |
+| 实际 | 不丢数据（stash 里 wedge-bugs-w1.md 的内容就是当前内容，rewind 写回等于无变化）。但 preview 输出会让用户惊讶："为什么列了那个文件？" |
+| 严重度 | 中（不损失数据，但用户每次都要心理 reconcile） |
+| 修复 idea | 三选一：(a) `checkpoint.create` 接受可选 `paths` 参数，只 stash 指定文件；(b) preview 输出时，把"checkpoint 时已 dirty 但与 HEAD 一致的文件" mark 为 "(unchanged from HEAD)"；(c) 文档明示"checkpoint = snapshot of all dirty"。短期做 (c)，长期做 (a)。 |
