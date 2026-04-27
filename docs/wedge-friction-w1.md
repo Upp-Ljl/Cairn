@@ -64,3 +64,33 @@
 | 实际 | 被自动链接化。工具调用本身不受影响，但用户文档/复述时 confusing |
 | 严重度 | 低（不影响功能，影响阅读） |
 | 修复 idea | README 里所有工具名都用 inline code 包裹（`cairn.xxx`）。我们已经这么做了，但"对话示例"段里 `cairn.checkpoint.create({...})` 这种一行长 call 不在 backtick 里，可考虑改成 fenced code block。 |
+
+### #6 — Dirty tree 下 checkpoint/preview 完全正常（friction #2 的对照）
+
+| 字段 | 内容 |
+|---|---|
+| 场景 | T2.4 dispatching subagent 加 JSDoc 后，工作树脏（scratchpad.ts modified），调 `cairn.checkpoint.create({ label: "after-jsdoc-dirty-tree-test" })` |
+| 期望 | 能正常捕获脏改动并允许 preview/rewind |
+| 实际 | 完美工作 — 返回 `stash_sha: "19f29845..."`，`rewind.preview` 准确列出 `["packages/daemon/src/storage/repositories/scratchpad.ts"]` |
+| 严重度 | 正面信号（不算 friction） |
+| 修复 idea | 无需修。这条用来 **对比验证 friction #2 是 clean-tree 专属**，dirty-tree 路径不需要重写。修补丁时只需 `toolCreateCheckpoint` 在 `stash_sha === null` 分支增加处理（警告 / 退化策略 / 文件 watch list），不动现有的 stash 路径 |
+
+### #7 — `scratchpad.list` 返回的 `updated_at` 是 unix ms，肉眼不可读
+
+| 字段 | 内容 |
+|---|---|
+| 场景 | 调 `cairn.scratchpad.list` 看本会话所有草稿 |
+| 期望 | 能直接看到"哪条最近写的"或"X 分钟前" |
+| 实际 | 返回 `"updated_at": 1777261555464`，需要心算或工具解读 |
+| 严重度 | 中（每次都烦，但有信息） |
+| 修复 idea | 工具响应保持 unix ms（机器读），但**附加** `updated_at_iso: "2026-04-27T07:25:55.464Z"` 字段。或者在 list 工具上加可选 `format: "iso"` 参数。低复杂度 |
+
+### #8 — Subagent-driven dogfood 的隔层感
+
+| 字段 | 内容 |
+|---|---|
+| 场景 | T2.4 派 sonnet subagent 加 JSDoc，我（父 agent）只调楔工具 |
+| 期望 | 能像直接做一样直观感受楔的位置 |
+| 实际 | 隔了一层 — 我调 checkpoint 的时机（before subagent / after subagent）变成产品决策。最终我两次都调了：before（无效 because clean）+ after（dirty，工作）。这种"两次 checkpoint 包夹一次代码改动"的 pattern 是楔在多 agent 工作流里的真实位置，但 README 没讲过 |
+| 严重度 | 中（影响产品定位的清晰度） |
+| 修复 idea | README 加一节"在多 agent 工作流里怎么用"，给 before/after 双 checkpoint 的示例。或者把"先 commit 再 checkpoint"的反模式明确写出来劝退 |
