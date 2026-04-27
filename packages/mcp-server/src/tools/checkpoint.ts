@@ -38,7 +38,17 @@ export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) 
   // Phase 3: mark READY
   markCheckpointReady(ws.db, ckpt.id, { size_bytes: 0, git_head: gitHead });
 
-  return { id: ckpt.id, git_head: gitHead, stash_sha: stashSha };
+  const result: { id: string; git_head: string | null; stash_sha: string | null; warning?: string } = {
+    id: ckpt.id,
+    git_head: gitHead,
+    stash_sha: stashSha,
+  };
+  if (stashSha === null) {
+    result.warning =
+      'Working tree was clean — this checkpoint records HEAD only and cannot restore any future uncommitted edits. ' +
+      'To capture future edits, make changes first then create the checkpoint.';
+  }
+  return result;
 }
 
 export function toolListCheckpoints(ws: Workspace) {

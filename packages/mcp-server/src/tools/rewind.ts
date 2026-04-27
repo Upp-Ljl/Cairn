@@ -6,6 +6,11 @@ import type { Workspace } from '../workspace.js';
 
 export interface RewindArgs { checkpoint_id: string }
 
+const CLEAN_CHECKPOINT_ERROR =
+  'This checkpoint captured no changes (working tree was clean when it was created). ' +
+  'It records HEAD only and cannot restore files. ' +
+  'Tip: make changes BEFORE calling cairn.checkpoint.create.';
+
 function extractStashSha(label: string | null): string | null {
   if (!label) return null;
   const m = label.match(/::stash:([0-9a-f]{40})/);
@@ -16,7 +21,7 @@ export function toolRewindPreview(ws: Workspace, args: RewindArgs) {
   const c = getCheckpointById(ws.db, args.checkpoint_id);
   if (!c) return { error: 'checkpoint not found' };
   const sha = extractStashSha(c.label);
-  if (!sha) return { error: 'no stash backend recorded (clean checkpoint?)', files: [] };
+  if (!sha) return { error: CLEAN_CHECKPOINT_ERROR, files: [] };
   const files = gitStashAffectedFiles(ws.cwd, sha);
   return {
     checkpoint_id: c.id,
@@ -29,7 +34,7 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
   const c = getCheckpointById(ws.db, args.checkpoint_id);
   if (!c) return { ok: false, error: 'checkpoint not found' };
   const sha = extractStashSha(c.label);
-  if (!sha) return { ok: false, error: 'no stash backend recorded' };
+  if (!sha) return { ok: false, error: CLEAN_CHECKPOINT_ERROR };
   gitStashRestore(ws.cwd, sha);
   return { ok: true, restored_files: gitStashAffectedFiles(ws.cwd, sha) };
 }

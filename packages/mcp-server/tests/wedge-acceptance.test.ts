@@ -198,3 +198,82 @@ describe('wedge acceptance — §17.1 7 tools end to end', () => {
     }
   });
 });
+
+describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
+  it('cairn.checkpoint.create on clean tree returns warning field', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      // do NOT modify any file — clean tree
+      const r = toolCreateCheckpoint(wsLocal, { label: 'clean-test' });
+      expect(r.stash_sha).toBeNull();
+      expect((r as { warning?: string }).warning).toMatch(/Working tree was clean/);
+      expect((r as { warning?: string }).warning).toMatch(/cannot restore/);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.checkpoint.create on dirty tree does NOT include warning field', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    writeFileSync(join(repo, 'a.txt'), 'modified');
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      const r = toolCreateCheckpoint(wsLocal, { label: 'dirty-test' });
+      expect(r.stash_sha).toMatch(/^[0-9a-f]{40}$/);
+      // warning field should be absent (undefined when accessed)
+      expect((r as { warning?: string }).warning).toBeUndefined();
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.rewind.preview on clean-tree checkpoint returns user-friendly error', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'x' });
+      // user makes edits AFTER checkpoint
+      writeFileSync(join(repo, 'a.txt'), 'changed-after-clean-checkpoint');
+      const preview = toolRewindPreview(wsLocal, { checkpoint_id: ckpt.id });
+      const err = (preview as { error?: string }).error ?? '';
+      // No internal jargon
+      expect(err).not.toMatch(/stash backend/);
+      // User-actionable language
+      expect(err).toMatch(/captured no changes/);
+      expect(err).toMatch(/working tree was clean/);
+      expect(err).toMatch(/Tip:/);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.rewind.to on clean-tree checkpoint returns same friendly error', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'x' });
+      writeFileSync(join(repo, 'a.txt'), 'oops');
+      const r = toolRewindTo(wsLocal, { checkpoint_id: ckpt.id });
+      expect(r.ok).toBe(false);
+      const err = (r as { error?: string }).error ?? '';
+      expect(err).not.toMatch(/stash backend/);
+      expect(err).toMatch(/captured no changes/);
+      expect(err).toMatch(/Tip:/);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+});
