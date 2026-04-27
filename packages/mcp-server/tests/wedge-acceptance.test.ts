@@ -277,3 +277,103 @@ describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
     }
   });
 });
+
+describe('wedge — scratchpad.list ISO timestamp (bug #3 fix)', () => {
+  it('cairn.scratchpad.list returns updated_at_iso ISO string', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      toolWriteScratch(ws2, { key: 'k1', content: 'x' });
+      const r = toolListScratch(ws2);
+      expect(r.items).toHaveLength(1);
+      const item = r.items[0]!;
+      expect(item.updated_at).toBeGreaterThan(0);
+      expect((item as { updated_at_iso?: string }).updated_at_iso).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+      );
+      // The ISO string should reflect the same instant as updated_at
+      const parsed = new Date((item as { updated_at_iso: string }).updated_at_iso).getTime();
+      expect(parsed).toBe(item.updated_at);
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('wedge — edge cases (T2.10)', () => {
+  // Edge 1: 中文 key
+  it('scratchpad accepts and round-trips Chinese-character keys', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      toolWriteScratch(ws2, { key: '笔记:重要', content: '中文内容测试' });
+      const r = toolReadScratch(ws2, { key: '笔记:重要' });
+      expect(r.found).toBe(true);
+      expect(r.value).toBe('中文内容测试');
+      const list = toolListScratch(ws2);
+      expect(list.items.map((i) => i.key)).toContain('笔记:重要');
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Edge 2: large value (>128KB blob threshold)
+  it('scratchpad blob-spills values exceeding 128KB and reads them back intact', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      const big = { data: 'x'.repeat(200_000) };
+      toolWriteScratch(ws2, { key: 'huge', content: big });
+      const r = toolReadScratch(ws2, { key: 'huge' });
+      expect(r.found).toBe(true);
+      expect(r.value).toEqual(big);
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Edge 3: non-git directory still works (checkpoint just returns null stash, with warning)
+  it('checkpoint.create in non-git dir returns null stash_sha + warning, no throw', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const nonGit = mkdtempSync(join(tmpdir(), 'cairn-nongit-'));
+    const wsLocal = openWorkspace({ cairnRoot, cwd: nonGit });
+    try {
+      const r = toolCreateCheckpoint(wsLocal, { label: 'no-git' });
+      // gitStashSnapshot will throw inside try/catch → null
+      // git rev-parse HEAD will throw inside try/catch → null
+      expect(r.stash_sha).toBeNull();
+      expect(r.git_head).toBeNull();
+      // The clean-tree warning should still appear
+      expect((r as { warning?: string }).warning).toBeDefined();
+    } finally {
+      wsLocal.db.close();
+      rmSync(nonGit, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Edge 4: concurrent writes to same key (UPSERT semantics)
+  it('scratchpad concurrent writes to same key — last write wins, no error', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      // Write 5 times in rapid succession (better-sqlite3 is sync, so this is serial-rapid not threaded-concurrent,
+      // but exercises the UPSERT ON CONFLICT path)
+      for (let i = 0; i < 5; i++) {
+        toolWriteScratch(ws2, { key: 'race', content: `iteration-${i}` });
+      }
+      const r = toolReadScratch(ws2, { key: 'race' });
+      expect(r.value).toBe('iteration-4');
+      // List should have only 1 entry for this key (UPSERT, not INSERT)
+      const list = toolListScratch(ws2);
+      const raceEntries = list.items.filter((i) => i.key === 'race');
+      expect(raceEntries).toHaveLength(1);
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+});

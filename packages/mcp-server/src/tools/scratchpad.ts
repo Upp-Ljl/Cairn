@@ -21,6 +21,7 @@ export function toolListScratch(ws: Workspace) {
     items: listAllScratch(ws.db).map((row) => ({
       key: row.key,
       updated_at: row.updated_at,
+      updated_at_iso: new Date(row.updated_at).toISOString(),
       has_value: row.value_json !== null || row.value_path !== null,
     })),
   };
