@@ -34,3 +34,6 @@ Thumbs.db
 *.key
 
 .cairn-push-token/
+
+# Local MCP config (use .mcp.json.example as template)
+.mcp.json
