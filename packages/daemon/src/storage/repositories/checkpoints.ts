@@ -51,13 +51,47 @@ export function getCheckpointById(db: DB, id: string): CheckpointRow | null {
   return row ?? null;
 }
 
-export function listCheckpoints(db: DB, status?: CheckpointStatus): CheckpointRow[] {
-  if (status) {
-    return db.prepare(
-      'SELECT * FROM checkpoints WHERE snapshot_status = ? ORDER BY created_at DESC, rowid DESC'
-    ).all(status) as CheckpointRow[];
+export interface ListCheckpointsFilter {
+  status?: CheckpointStatus;
+  /**
+   * If supplied, returns only checkpoints whose `task_id` matches exactly.
+   * Pass an empty string `''` to match the literal empty-string task_id
+   * (rare). Pass `null` to match rows where `task_id IS NULL` (the default
+   * for checkpoints created without a task tag).
+   */
+  task_id?: string | null;
+}
+
+/**
+ * @deprecated since adding the filter object form; use the object form
+ * `listCheckpoints(db, { status, task_id })`. Kept for the existing
+ * call sites that pass a bare status string.
+ */
+export function listCheckpoints(db: DB, status?: CheckpointStatus): CheckpointRow[];
+export function listCheckpoints(db: DB, filter: ListCheckpointsFilter): CheckpointRow[];
+export function listCheckpoints(
+  db: DB,
+  arg?: CheckpointStatus | ListCheckpointsFilter,
+): CheckpointRow[] {
+  // Normalize: legacy `status` string vs new filter object.
+  const filter: ListCheckpointsFilter =
+    typeof arg === 'string' ? { status: arg } : (arg ?? {});
+
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (filter.status !== undefined) {
+    where.push('snapshot_status = ?');
+    params.push(filter.status);
   }
-  return db.prepare(
-    'SELECT * FROM checkpoints ORDER BY created_at DESC, rowid DESC'
-  ).all() as CheckpointRow[];
+  if (filter.task_id !== undefined) {
+    if (filter.task_id === null) {
+      where.push('task_id IS NULL');
+    } else {
+      where.push('task_id = ?');
+      params.push(filter.task_id);
+    }
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const sql = `SELECT * FROM checkpoints ${whereSql} ORDER BY created_at DESC, rowid DESC`;
+  return db.prepare(sql).all(...params) as CheckpointRow[];
 }

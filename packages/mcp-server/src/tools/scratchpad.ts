@@ -13,6 +13,12 @@ export interface WriteScratchArgs {
    * should not pollute the timeline (e.g. progress notes inside a tight loop).
    */
   skip_auto_checkpoint?: boolean;
+  /**
+   * Task tag propagated to the implicit auto-checkpoint. Pair this with the
+   * matching `task_id` on `cairn.checkpoint.list({task_id})` to slice the
+   * timeline by task — AC for US-2 (independent rewind per parallel task).
+   */
+  task_id?: string;
 }
 export interface ReadScratchArgs { key: string }
 
@@ -24,7 +30,11 @@ export function toolWriteScratch(ws: Workspace, args: WriteScratchArgs) {
   // right before that work begins.
   const auto_checkpoint_id = args.skip_auto_checkpoint
     ? null
-    : tryAutoCheckpoint(ws, `auto:before-scratchpad.write:${args.key}`);
+    : tryAutoCheckpoint(
+        ws,
+        `auto:before-scratchpad.write:${args.key}`,
+        args.task_id,
+      );
 
   putScratch(ws.db, ws.blobRoot, { key: args.key, value: args.content });
   return { ok: true, key: args.key, auto_checkpoint_id };

@@ -27,6 +27,12 @@ export interface RewindArgs {
    * RestoreFromSnapshot semantics).
    */
   skip_auto_checkpoint?: boolean;
+  /**
+   * Task tag propagated to the implicit auto-checkpoint (the pre-rewind
+   * snapshot that lets the user undo the rewind). Lets the undo-undo
+   * node show up under the same task slice as the original work.
+   */
+  task_id?: string;
 }
 
 const NO_HEAD_ERROR =
@@ -146,7 +152,11 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
   // validation passes — bad arguments shouldn't pollute the timeline.
   const auto_checkpoint_id = args.skip_auto_checkpoint
     ? null
-    : tryAutoCheckpoint(ws, `auto:before-rewind-to:${args.checkpoint_id.slice(0, 8)}`);
+    : tryAutoCheckpoint(
+        ws,
+        `auto:before-rewind-to:${args.checkpoint_id.slice(0, 8)}`,
+        args.task_id,
+      );
 
   const sha = extractStashSha(c.label);
 
