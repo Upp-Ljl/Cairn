@@ -126,7 +126,8 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 ## 风格约定
 
 - 与用户对话主要用中文，代码 / 命令 / 文件路径英文
-- commit message 用 conventional commits（feat / fix / chore / docs / test）+ 中文不进 message 主体（用英文短句，附 `Co-Authored-By: Claude...`）
+- commit message 用 conventional commits（feat / fix / chore / docs / test）+ 中文不进 message 主体（用英文短句）
+- **不加 `Co-Authored-By: Claude` 等共创 trailer**（用户 2026-04-27 EOD 明示）
 - 用户口味：直说，不空话；产出物先给路径再讲内容；3 选 1 选项题给清单不给散文
 - `subagent-driven-development` 模式：每个 task 一只新 sonnet，避免上下文积累；mechanical task 用 haiku；战略分析用 sonnet
 
