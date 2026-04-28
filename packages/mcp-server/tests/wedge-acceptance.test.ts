@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openWorkspace, type Workspace } from '../src/workspace.js';
 import {
-  toolWriteScratch, toolReadScratch, toolListScratch,
+  toolWriteScratch, toolReadScratch, toolListScratch, toolDeleteScratch,
 } from '../src/tools/scratchpad.js';
 import {
   toolCreateCheckpoint, toolListCheckpoints,
@@ -479,6 +479,106 @@ describe('wedge — rewind paths param (friction #10 close — per-file granular
     } finally {
       wsLocal.db.close();
       rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('wedge — scratchpad.delete (8th tool, completes the read/write/list/delete CRUD)', () => {
+  it('delete on existing key returns ok with deleted=true', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      toolWriteScratch(ws2, { key: 'kill-me', content: 'goodbye', skip_auto_checkpoint: true });
+      const r = toolDeleteScratch(ws2, { key: 'kill-me' });
+      expect(r.ok).toBe(true);
+      expect(r.deleted).toBe(true);
+      expect(r.key).toBe('kill-me');
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('delete on non-existent key is idempotent (returns ok with deleted=false)', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      const r = toolDeleteScratch(ws2, { key: 'never-existed' });
+      expect(r.ok).toBe(true);
+      expect(r.deleted).toBe(false);
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('delete then read returns found=false', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      toolWriteScratch(ws2, { key: 'tmp', content: { data: 1 }, skip_auto_checkpoint: true });
+      toolDeleteScratch(ws2, { key: 'tmp' });
+      const r = toolReadScratch(ws2, { key: 'tmp' });
+      expect(r.found).toBe(false);
+      expect(r.value).toBeNull();
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('delete then list excludes the key', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      toolWriteScratch(ws2, { key: 'a', content: 1, skip_auto_checkpoint: true });
+      toolWriteScratch(ws2, { key: 'b', content: 2, skip_auto_checkpoint: true });
+      toolWriteScratch(ws2, { key: 'c', content: 3, skip_auto_checkpoint: true });
+      toolDeleteScratch(ws2, { key: 'b' });
+      const r = toolListScratch(ws2);
+      expect(new Set(r.items.map((i) => i.key))).toEqual(new Set(['a', 'c']));
+    } finally {
+      ws2.db.close();
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('delete creates auto-checkpoint by default (write-effecting tool, undo-undo enabler)', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'work-in-progress');
+      toolWriteScratch(wsLocal, { key: 'k', content: 'v', skip_auto_checkpoint: true });
+
+      const r = toolDeleteScratch(wsLocal, { key: 'k' });
+      expect(r.ok).toBe(true);
+      expect((r as { auto_checkpoint_id: string | null }).auto_checkpoint_id).toMatch(
+        /^[0-9A-HJKMNP-TV-Z]{26}$/,
+      );
+
+      const list = toolListCheckpoints(wsLocal);
+      expect(list.items.some((c) =>
+        c.label?.startsWith('auto:before-scratchpad.delete:k'),
+      )).toBe(true);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('delete with skip_auto_checkpoint=true skips the auto node', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const ws2 = openWorkspace({ cairnRoot });
+    try {
+      toolWriteScratch(ws2, { key: 'k', content: 'v', skip_auto_checkpoint: true });
+      const r = toolDeleteScratch(ws2, { key: 'k', skip_auto_checkpoint: true });
+      expect(r.ok).toBe(true);
+      expect((r as { auto_checkpoint_id: string | null }).auto_checkpoint_id).toBeNull();
+    } finally {
+      ws2.db.close();
       rmSync(cairnRoot, { recursive: true, force: true });
     }
   });
