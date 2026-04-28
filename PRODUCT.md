@@ -369,13 +369,17 @@ User <──► Outward Agent ──► [Sub-agent A]
 
 指标按已解决的歧义（见 §12）设定如下。
 
-### 10.1 v0.1 Ship 门槛（第 13 周末）
+### 10.1 v0.1 完成判据（工程交付驱动）
 
-- **装机量 ≥ 30**。目标群体：早期种子用户 + 相关社区自发安装。
-- US-1 / US-2 / US-4 三条用户故事在 Ship 候选构建上端到端跑通（内部 dogfood 验证）。
-- MCP 前奏已发布满 10 周且至少有 3 个非作者的持续用户。
+v0.1 何时算完成：**由工程质量决定，不由装机量、用户数或私有发布决定**。完成判据详见 `docs/v0.1-validation-plan.md` §5 工程交付闸（10 条二值判据，全部 ✓ 即视为完成）。
 
-30 是一个**故意低**的门槛。v0.1 不拿装机量判断产品对错，只用来证明"能跑、有人愿装"。
+核心要点：
+- US-1 / US-2 / US-4 三条用户故事在 release candidate 构建上端到端 dogfood 跑通（US-4 至少 5 次连续成功）。
+- `docs/v0.1-failure-modes.md` 标记为 v0.1 必修的全部条目已被对应 unit 的 acceptance test 覆盖。
+- Windows 11 + Ubuntu LTS 两平台测试全绿，性能基线（基准硬件：Windows 11 + 8GB RAM + SSD + Node.js 24）达到 §5 阈值。
+- PRODUCT.md / DESIGN_STORAGE.md / w4-path-decision.md 与代码实现一致（人工审查通过）。
+
+"ship"在本文档语义 = 工程交付完成，不是商业发布。商业发布节奏由另行讨论决定。
 
 ### 10.2 v0.1 Kill 标准（Ship 后 +3 月）
 
@@ -435,7 +439,7 @@ User <──► Outward Agent ──► [Sub-agent A]
 ### A2. Ship 门槛与 Kill 标准的具体数字
 
 **决议**：
-- **Ship 门槛（第 13 周）**：装机量 ≥ **30**。
+- **Ship 门槛**：工程交付闸（`docs/v0.1-validation-plan.md` §5）10 条二值判据全部 ✓。不以装机量数字作为 ship 门槛（2026-04-28 v3 修订，与验证计划 §5 对齐）。
 - **Kill 标准（Ship 后 +3 月）**：MAU < **300** 且 外部 PR < **3** 且 GitHub stars < **200**，三项同时未达。
 
 见 §10.1、§10.2。
