@@ -199,17 +199,21 @@ describe('wedge acceptance — §17.1 7 tools end to end', () => {
   });
 });
 
-describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
-  it('cairn.checkpoint.create on clean tree returns warning field', () => {
+describe('wedge — clean-tree checkpoint + rewind via git_head fallback (friction #2 close)', () => {
+  it('cairn.checkpoint.create on clean tree returns scope-aware warning, not "cannot restore"', () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
     const repo = makeGitRepo();
     const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
     try {
-      // do NOT modify any file — clean tree
       const r = toolCreateCheckpoint(wsLocal, { label: 'clean-test' });
       expect(r.stash_sha).toBeNull();
-      expect((r as { warning?: string }).warning).toMatch(/Working tree was clean/);
-      expect((r as { warning?: string }).warning).toMatch(/cannot restore/);
+      const warning = (r as { warning?: string }).warning ?? '';
+      // New behavior: rewind WORKS on clean tree, warning describes scope.
+      expect(warning).toMatch(/Working tree was clean/);
+      expect(warning).toMatch(/Rewind will restore the tree to git_head/);
+      expect(warning).toMatch(/gitignored files .* are left alone/);
+      // Old "cannot restore" language must be gone.
+      expect(warning).not.toMatch(/cannot restore/i);
     } finally {
       wsLocal.db.close();
       rmSync(repo, { recursive: true, force: true });
@@ -217,7 +221,7 @@ describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
     }
   });
 
-  it('cairn.checkpoint.create on dirty tree does NOT include warning field', () => {
+  it('cairn.checkpoint.create on dirty tree omits warning field', () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
     const repo = makeGitRepo();
     writeFileSync(join(repo, 'a.txt'), 'modified');
@@ -225,7 +229,6 @@ describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
     try {
       const r = toolCreateCheckpoint(wsLocal, { label: 'dirty-test' });
       expect(r.stash_sha).toMatch(/^[0-9a-f]{40}$/);
-      // warning field should be absent (undefined when accessed)
       expect((r as { warning?: string }).warning).toBeUndefined();
     } finally {
       wsLocal.db.close();
@@ -234,22 +237,40 @@ describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
     }
   });
 
-  it('cairn.rewind.preview on clean-tree checkpoint returns user-friendly error', () => {
+  it('cairn.checkpoint.create outside a git repo returns "not a git repo" warning', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const noGit = mkdtempSync(join(tmpdir(), 'cairn-no-git-'));
+    const wsLocal = openWorkspace({ cairnRoot, cwd: noGit });
+    try {
+      const r = toolCreateCheckpoint(wsLocal, { label: 'no-git' });
+      expect(r.stash_sha).toBeNull();
+      expect(r.git_head).toBeNull();
+      expect((r as { warning?: string }).warning).toMatch(/Not in a git repository/);
+    } finally {
+      wsLocal.db.close();
+      rmSync(noGit, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.rewind.preview on clean-tree checkpoint lists files modified since git_head', () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
     const repo = makeGitRepo();
     const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
     try {
       const ckpt = toolCreateCheckpoint(wsLocal, { label: 'x' });
-      // user makes edits AFTER checkpoint
       writeFileSync(join(repo, 'a.txt'), 'changed-after-clean-checkpoint');
+      writeFileSync(join(repo, 'fresh.txt'), 'brand new');
+
       const preview = toolRewindPreview(wsLocal, { checkpoint_id: ckpt.id });
-      const err = (preview as { error?: string }).error ?? '';
-      // No internal jargon
-      expect(err).not.toMatch(/stash backend/);
-      // User-actionable language
-      expect(err).toMatch(/captured no changes/);
-      expect(err).toMatch(/working tree was clean/);
-      expect(err).toMatch(/Tip:/);
+      expect('error' in preview).toBe(false);
+      expect((preview as { mode: string }).mode).toBe('git_head_clean');
+      const files = (preview as { files: string[] }).files;
+      expect(files).toContain('a.txt');
+      expect(files).toContain('fresh.txt');
+      expect((preview as { git_head_at_checkpoint: string }).git_head_at_checkpoint).toBe(
+        ckpt.git_head,
+      );
     } finally {
       wsLocal.db.close();
       rmSync(repo, { recursive: true, force: true });
@@ -257,19 +278,62 @@ describe('wedge — clean-tree checkpoint UX (bug #1+#2 fix)', () => {
     }
   });
 
-  it('cairn.rewind.to on clean-tree checkpoint returns same friendly error', () => {
+  it('cairn.rewind.to on clean-tree checkpoint reverts tracked edits to git_head', () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
     const repo = makeGitRepo();
     const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
     try {
-      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'x' });
-      writeFileSync(join(repo, 'a.txt'), 'oops');
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'pre-edits' });
+      writeFileSync(join(repo, 'a.txt'), 'totally-different');
+
+      const r = toolRewindTo(wsLocal, { checkpoint_id: ckpt.id });
+      expect(r.ok).toBe(true);
+      expect((r as { mode: string }).mode).toBe('git_head_clean');
+      expect((r as { restored_files: string[] }).restored_files).toContain('a.txt');
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('v0');
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.rewind.to on clean-tree checkpoint deletes new untracked files', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'pre-new-file' });
+      writeFileSync(join(repo, 'should-vanish.txt'), 'noise');
+
+      const r = toolRewindTo(wsLocal, { checkpoint_id: ckpt.id });
+      expect(r.ok).toBe(true);
+      expect((r as { restored_files: string[] }).restored_files).toContain(
+        'should-vanish.txt',
+      );
+      // file must actually be gone from disk
+      expect(() => readFileSync(join(repo, 'should-vanish.txt'), 'utf8')).toThrow();
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.rewind.to on clean-tree checkpoint refuses when HEAD has moved', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'before-move' });
+
+      // user commits something, advancing HEAD past the checkpoint's git_head
+      writeFileSync(join(repo, 'a.txt'), 'new commit content');
+      execSync('git add . && git commit -q -m moved', { cwd: repo });
+
       const r = toolRewindTo(wsLocal, { checkpoint_id: ckpt.id });
       expect(r.ok).toBe(false);
-      const err = (r as { error?: string }).error ?? '';
-      expect(err).not.toMatch(/stash backend/);
-      expect(err).toMatch(/captured no changes/);
-      expect(err).toMatch(/Tip:/);
+      expect((r as { error: string }).error).toMatch(/HEAD has moved/i);
     } finally {
       wsLocal.db.close();
       rmSync(repo, { recursive: true, force: true });

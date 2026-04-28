@@ -43,10 +43,20 @@ export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) 
     git_head: gitHead,
     stash_sha: stashSha,
   };
-  if (stashSha === null) {
+  if (stashSha === null && gitHead === null) {
+    // Genuinely unrecoverable: no stash AND no git HEAD (not a git repo).
     result.warning =
-      'Working tree was clean — this checkpoint records HEAD only and cannot restore any future uncommitted edits. ' +
-      'To capture future edits, make changes first then create the checkpoint.';
+      'Not in a git repository — this checkpoint records nothing and cannot be rewound. ' +
+      'Run cairn from inside a git working tree to capture state.';
+  } else if (stashSha === null) {
+    // Clean tree at checkpoint time: rewind will use the git_head fallback,
+    // which reverts tracked edits and removes new untracked files (gitignored
+    // files are never touched). Surface the scope so the user knows what
+    // rewind will and won't restore.
+    result.warning =
+      'Working tree was clean at checkpoint time. Rewind will restore the tree to git_head ' +
+      `(${gitHead!.slice(0, 7)}): tracked edits revert, new untracked files are removed, ` +
+      'gitignored files (DBs, .env, node_modules) are left alone.';
   }
   return result;
 }
