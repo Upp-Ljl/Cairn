@@ -7,6 +7,7 @@ import {
   gitHeadCleanRestoreFiltered,
   gitHeadCleanAffectedFiles,
 } from '../../../daemon/dist/storage/snapshots/git-stash.js';
+import { tryAutoCheckpoint } from './_auto-checkpoint.js';
 import type { Workspace } from '../workspace.js';
 
 export interface RewindArgs {
@@ -19,6 +20,13 @@ export interface RewindArgs {
    * checkpoint are reported in `skipped`, not as errors.
    */
   paths?: string[];
+  /**
+   * Skip the implicit pre-rewind checkpoint. Default: false (auto-checkpoint
+   * runs, capturing the current working-tree state so the user can undo
+   * the rewind itself if it turns out to be a mistake — GitButler-style
+   * RestoreFromSnapshot semantics).
+   */
+  skip_auto_checkpoint?: boolean;
 }
 
 const NO_HEAD_ERROR =
@@ -132,6 +140,14 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
     return { ok: false, error: (e as Error).message };
   }
 
+  // Auto-checkpoint BEFORE rewinding so the user can undo a mistaken
+  // rewind. Captures the current working-tree state under a label like
+  // `auto:before-rewind-to:<target_short>`. Created only after input
+  // validation passes — bad arguments shouldn't pollute the timeline.
+  const auto_checkpoint_id = args.skip_auto_checkpoint
+    ? null
+    : tryAutoCheckpoint(ws, `auto:before-rewind-to:${args.checkpoint_id.slice(0, 8)}`);
+
   const sha = extractStashSha(c.label);
 
   // Path 1: stash backend
@@ -142,6 +158,7 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
         ok: true,
         mode: 'stash',
         restored_files: gitStashAffectedFiles(ws.cwd, sha),
+        auto_checkpoint_id,
       };
     }
     const result = gitStashRestoreFiltered(ws.cwd, sha, pathsFilter);
@@ -150,6 +167,7 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
       mode: 'stash',
       restored_files: result.restored,
       skipped: result.skipped,
+      auto_checkpoint_id,
     };
   }
 
@@ -158,7 +176,12 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
     try {
       if (pathsFilter === null) {
         const restored = gitHeadCleanRestore(ws.cwd, c.git_head);
-        return { ok: true, mode: 'git_head_clean', restored_files: restored };
+        return {
+          ok: true,
+          mode: 'git_head_clean',
+          restored_files: restored,
+          auto_checkpoint_id,
+        };
       }
       const result = gitHeadCleanRestoreFiltered(ws.cwd, c.git_head, pathsFilter);
       return {
@@ -166,11 +189,12 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
         mode: 'git_head_clean',
         restored_files: result.restored,
         skipped: result.skipped,
+        auto_checkpoint_id,
       };
     } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      return { ok: false, error: (e as Error).message, auto_checkpoint_id };
     }
   }
 
-  return { ok: false, error: NO_HEAD_ERROR };
+  return { ok: false, error: NO_HEAD_ERROR, auto_checkpoint_id };
 }
