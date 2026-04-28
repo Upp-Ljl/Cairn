@@ -610,6 +610,171 @@ describe('wedge — auto-checkpoint on write-effecting tools (timeline auto-popu
   });
 });
 
+describe('wedge — task_id slicing (AC for US-2 — multi-task isolation, phase 1)', () => {
+  it('cairn.checkpoint.create stores and echoes task_id', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'edit');
+      const r = toolCreateCheckpoint(wsLocal, {
+        label: 'tagged',
+        task_id: 'refactor-auth',
+      });
+      expect(r.task_id).toBe('refactor-auth');
+
+      const list = toolListCheckpoints(wsLocal);
+      const row = list.items.find((c) => c.id === r.id)!;
+      expect(row.task_id).toBe('refactor-auth');
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cairn.checkpoint.list with task_id filter returns only matching rows', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'v1');
+      toolCreateCheckpoint(wsLocal, { label: 'A1', task_id: 'task-A' });
+      writeFileSync(join(repo, 'a.txt'), 'v2');
+      toolCreateCheckpoint(wsLocal, { label: 'B1', task_id: 'task-B' });
+      writeFileSync(join(repo, 'a.txt'), 'v3');
+      toolCreateCheckpoint(wsLocal, { label: 'A2', task_id: 'task-A' });
+      writeFileSync(join(repo, 'a.txt'), 'v4');
+      toolCreateCheckpoint(wsLocal, { label: 'untagged' });
+
+      const all = toolListCheckpoints(wsLocal);
+      expect(all.items.length).toBeGreaterThanOrEqual(4);
+
+      const onlyA = toolListCheckpoints(wsLocal, { task_id: 'task-A' });
+      expect(onlyA.items.every((c) => c.task_id === 'task-A')).toBe(true);
+      expect(new Set(onlyA.items.map((c) => c.label?.split('::')[0]))).toEqual(
+        new Set(['A1', 'A2']),
+      );
+
+      const onlyB = toolListCheckpoints(wsLocal, { task_id: 'task-B' });
+      expect(onlyB.items.length).toBe(1);
+      expect(onlyB.items[0]!.label).toMatch(/^B1::/);
+
+      const onlyUntagged = toolListCheckpoints(wsLocal, { task_id: null });
+      expect(onlyUntagged.items.every((c) => c.task_id === null)).toBe(true);
+      expect(onlyUntagged.items.some((c) => c.label?.startsWith('untagged'))).toBe(true);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('scratchpad.write task_id propagates to the auto-checkpoint', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'edit');
+      const r = toolWriteScratch(wsLocal, {
+        key: 'plan',
+        content: 'do thing',
+        task_id: 'task-X',
+      });
+      expect(r.ok).toBe(true);
+
+      const tagged = toolListCheckpoints(wsLocal, { task_id: 'task-X' });
+      expect(tagged.items.length).toBe(1);
+      expect(tagged.items[0]!.label).toMatch(/^auto:before-scratchpad\.write:plan::/);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rewind.to task_id propagates to the auto-checkpoint (timeline stays sliceable)', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'state-X');
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'X', task_id: 'task-Y' });
+
+      writeFileSync(join(repo, 'a.txt'), 'state-Y');
+      toolRewindTo(wsLocal, { checkpoint_id: ckpt.id, task_id: 'task-Y' });
+
+      const list = toolListCheckpoints(wsLocal, { task_id: 'task-Y' });
+      // Two checkpoints under task-Y: the original X + the auto pre-rewind snapshot
+      expect(list.items.length).toBe(2);
+      expect(list.items.some((c) => c.label?.startsWith('auto:before-rewind-to:'))).toBe(true);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('end-to-end: 3 parallel tasks, each rewindable independently via paths', () => {
+    // This is the full AC for US-2 demo (within wedge means: agent supplies
+    // paths). Three tasks edit three disjoint files; rewinding one task's
+    // checkpoint with that task's paths must NOT touch the other two tasks'
+    // files.
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    writeFileSync(join(repo, 'task-a-file.txt'), 'A-v0');
+    writeFileSync(join(repo, 'task-b-file.txt'), 'B-v0');
+    writeFileSync(join(repo, 'task-c-file.txt'), 'C-v0');
+    execSync('git add . && git commit -q -m three-files', { cwd: repo });
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      // Task A makes a change + checkpoint (with task_id and paths)
+      writeFileSync(join(repo, 'task-a-file.txt'), 'A-v1');
+      const ckptA = toolCreateCheckpoint(wsLocal, { label: 'A', task_id: 'task-a' });
+
+      // Task B does the same on its own file
+      writeFileSync(join(repo, 'task-b-file.txt'), 'B-v1');
+      toolCreateCheckpoint(wsLocal, { label: 'B', task_id: 'task-b' });
+
+      // Task C
+      writeFileSync(join(repo, 'task-c-file.txt'), 'C-v1');
+      toolCreateCheckpoint(wsLocal, { label: 'C', task_id: 'task-c' });
+
+      // Now task A's user wants to rewind ONLY task A — supplies paths
+      // explicitly because the wedge does not auto-track files per task.
+      writeFileSync(join(repo, 'task-a-file.txt'), 'A-v1-mistake');
+      writeFileSync(join(repo, 'task-b-file.txt'), 'B-v2-progress');
+      writeFileSync(join(repo, 'task-c-file.txt'), 'C-v2-progress');
+
+      const r = toolRewindTo(wsLocal, {
+        checkpoint_id: ckptA.id,
+        paths: ['task-a-file.txt'],
+        task_id: 'task-a',
+        skip_auto_checkpoint: true,
+      });
+      expect(r.ok).toBe(true);
+      expect((r as { restored_files: string[] }).restored_files).toEqual(['task-a-file.txt']);
+
+      // Task A is back to its checkpoint state; B and C are untouched
+      expect(readFileSync(join(repo, 'task-a-file.txt'), 'utf8')).toBe('A-v1');
+      expect(readFileSync(join(repo, 'task-b-file.txt'), 'utf8')).toBe('B-v2-progress');
+      expect(readFileSync(join(repo, 'task-c-file.txt'), 'utf8')).toBe('C-v2-progress');
+
+      // Per-task lists are correctly partitioned
+      const aList = toolListCheckpoints(wsLocal, { task_id: 'task-a' });
+      const bList = toolListCheckpoints(wsLocal, { task_id: 'task-b' });
+      const cList = toolListCheckpoints(wsLocal, { task_id: 'task-c' });
+      expect(aList.items.every((c) => c.task_id === 'task-a')).toBe(true);
+      expect(bList.items.every((c) => c.task_id === 'task-b')).toBe(true);
+      expect(cList.items.every((c) => c.task_id === 'task-c')).toBe(true);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('wedge — scratchpad.list ISO timestamp (bug #3 fix)', () => {
   it('cairn.scratchpad.list returns updated_at_iso ISO string', () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));

@@ -13,6 +13,11 @@ import type { Workspace } from '../workspace.js';
  * between "user must call cairn.checkpoint.create explicitly" and
  * "the timeline appears for free".
  *
+ * `task_id` propagates from the caller (e.g. scratchpad.write({task_id}))
+ * to the auto-checkpoint, so multi-task isolation (AC for US-2) is
+ * preserved automatically — the agent doesn't have to remember to tag
+ * every implicit timeline node it produces.
+ *
  * Failure semantics: never throw. If the auto-checkpoint cannot be
  * created (e.g. workspace is not a git repo, or the label is malformed),
  * return `null` and let the caller proceed with its primary work.
@@ -21,9 +26,14 @@ import type { Workspace } from '../workspace.js';
  *
  * Returns the checkpoint id on success, null on failure.
  */
-export function tryAutoCheckpoint(ws: Workspace, label: string): string | null {
+export function tryAutoCheckpoint(
+  ws: Workspace,
+  label: string,
+  task_id?: string,
+): string | null {
   try {
-    const r = toolCreateCheckpoint(ws, { label });
+    const args = task_id !== undefined ? { label, task_id } : { label };
+    const r = toolCreateCheckpoint(ws, args);
     return r.id;
   } catch {
     return null;

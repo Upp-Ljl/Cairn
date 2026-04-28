@@ -8,12 +8,34 @@ import {
 import { gitStashSnapshot } from '../../../daemon/dist/storage/snapshots/git-stash.js';
 import type { Workspace } from '../workspace.js';
 
-export interface CreateCheckpointArgs { label?: string }
+export interface CreateCheckpointArgs {
+  label?: string;
+  /**
+   * Optional task tag. When supplied, this checkpoint is associated with
+   * the given task identifier and can be filtered out of `cairn.checkpoint.list`
+   * via the `task_id` filter. Use this to isolate parallel work — agents
+   * doing concurrent refactors should each pick a stable `task_id` so the
+   * timeline can be sliced per task. Has no effect on rewind semantics
+   * (file scoping is still controlled by the `paths` argument on rewind).
+   */
+  task_id?: string;
+}
+
+export interface ListCheckpointsArgs {
+  /**
+   * If supplied, returns only checkpoints tagged with this task_id.
+   * Omit (undefined) to return all checkpoints across all tasks.
+   * Pass null explicitly to return only untagged checkpoints
+   * (rows whose task_id IS NULL).
+   */
+  task_id?: string | null;
+}
 
 export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) {
   // Phase 1: insert PENDING row
   const ckpt = createPendingCheckpoint(ws.db, {
     label: args.label ?? null,
+    task_id: args.task_id ?? null,
     snapshot_dir: join(ws.cairnRoot, 'snapshots', '.git-stash'),
   });
 
@@ -38,8 +60,15 @@ export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) 
   // Phase 3: mark READY
   markCheckpointReady(ws.db, ckpt.id, { size_bytes: 0, git_head: gitHead });
 
-  const result: { id: string; git_head: string | null; stash_sha: string | null; warning?: string } = {
+  const result: {
+    id: string;
+    task_id: string | null;
+    git_head: string | null;
+    stash_sha: string | null;
+    warning?: string;
+  } = {
     id: ckpt.id,
+    task_id: ckpt.task_id,
     git_head: gitHead,
     stash_sha: stashSha,
   };
@@ -61,10 +90,18 @@ export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) 
   return result;
 }
 
-export function toolListCheckpoints(ws: Workspace) {
+export function toolListCheckpoints(ws: Workspace, args: ListCheckpointsArgs = {}) {
+  // task_id is treated tri-state: undefined = no filter, string = exact match,
+  // null = match rows with NULL task_id explicitly. The daemon listCheckpoints
+  // helper already implements that exact tri-state.
+  const rows =
+    args.task_id !== undefined
+      ? listCheckpoints(ws.db, { status: 'READY', task_id: args.task_id })
+      : listCheckpoints(ws.db, 'READY');
   return {
-    items: listCheckpoints(ws.db, 'READY').map((c) => ({
+    items: rows.map((c) => ({
       id: c.id,
+      task_id: c.task_id,
       label: c.label,
       git_head: c.git_head,
       created_at: c.created_at,
