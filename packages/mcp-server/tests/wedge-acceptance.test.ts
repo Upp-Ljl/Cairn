@@ -320,6 +320,33 @@ describe('wedge — clean-tree checkpoint + rewind via git_head fallback (fricti
     }
   });
 
+  it('cairn.rewind.to on clean-tree checkpoint with paths reverts only listed files', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    // add a second tracked file so we have something to NOT touch
+    writeFileSync(join(repo, 'b.txt'), 'b-v0');
+    execSync('git add . && git commit -q -m b-init', { cwd: repo });
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'pre-paths' });
+      writeFileSync(join(repo, 'a.txt'), 'a-edited');
+      writeFileSync(join(repo, 'b.txt'), 'b-edited');
+
+      const r = toolRewindTo(wsLocal, {
+        checkpoint_id: ckpt.id,
+        paths: ['a.txt'],
+      });
+      expect(r.ok).toBe(true);
+      expect((r as { restored_files: string[] }).restored_files).toEqual(['a.txt']);
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('v0');
+      expect(readFileSync(join(repo, 'b.txt'), 'utf8')).toBe('b-edited');
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
   it('cairn.rewind.to on clean-tree checkpoint refuses when HEAD has moved', () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
     const repo = makeGitRepo();
@@ -334,6 +361,121 @@ describe('wedge — clean-tree checkpoint + rewind via git_head fallback (fricti
       const r = toolRewindTo(wsLocal, { checkpoint_id: ckpt.id });
       expect(r.ok).toBe(false);
       expect((r as { error: string }).error).toMatch(/HEAD has moved/i);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('wedge — rewind paths param (friction #10 close — per-file granularity)', () => {
+  it('stash-mode rewind with paths reverts only listed files, lists rest as skipped', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    // need three tracked files for the test
+    writeFileSync(join(repo, 'b.txt'), 'b-v0');
+    writeFileSync(join(repo, 'c.txt'), 'c-v0');
+    execSync('git add . && git commit -q -m more-files', { cwd: repo });
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      // dirty tree at checkpoint time so we go through the stash backend
+      writeFileSync(join(repo, 'a.txt'), 'a-checkpoint');
+      writeFileSync(join(repo, 'b.txt'), 'b-checkpoint');
+      writeFileSync(join(repo, 'c.txt'), 'c-checkpoint');
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'multi-file' });
+
+      // user keeps editing all three
+      writeFileSync(join(repo, 'a.txt'), 'a-now');
+      writeFileSync(join(repo, 'b.txt'), 'b-now');
+      writeFileSync(join(repo, 'c.txt'), 'c-now');
+
+      const r = toolRewindTo(wsLocal, {
+        checkpoint_id: ckpt.id,
+        paths: ['a.txt', 'c.txt', 'never-touched.txt'],
+      });
+      expect(r.ok).toBe(true);
+      expect((r as { mode: string }).mode).toBe('stash');
+      expect(new Set((r as { restored_files: string[] }).restored_files)).toEqual(
+        new Set(['a.txt', 'c.txt']),
+      );
+      expect((r as { skipped: string[] }).skipped).toEqual(['never-touched.txt']);
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('a-checkpoint');
+      expect(readFileSync(join(repo, 'b.txt'), 'utf8')).toBe('b-now'); // untouched
+      expect(readFileSync(join(repo, 'c.txt'), 'utf8')).toBe('c-checkpoint');
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rewind.preview with paths returns the filtered subset + skipped list', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'edit');
+      writeFileSync(join(repo, 'extra.txt'), 'extra-content');
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'p' });
+
+      const preview = toolRewindPreview(wsLocal, {
+        checkpoint_id: ckpt.id,
+        paths: ['a.txt', 'unknown.txt'],
+      });
+      expect('error' in preview).toBe(false);
+      expect((preview as { files: string[] }).files).toEqual(['a.txt']);
+      expect((preview as { skipped: string[] }).skipped).toEqual(['unknown.txt']);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rewind.to with empty paths array returns a clear validation error', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'edit');
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'p' });
+
+      const r = toolRewindTo(wsLocal, {
+        checkpoint_id: ckpt.id,
+        paths: [],
+      });
+      expect(r.ok).toBe(false);
+      expect((r as { error: string }).error).toMatch(/empty/i);
+      expect((r as { error: string }).error).toMatch(/omit/i);
+    } finally {
+      wsLocal.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cairnRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rewind.to without paths still does full-scope rewind (backward-compat)', () => {
+    const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-acc-'));
+    const repo = makeGitRepo();
+    writeFileSync(join(repo, 'b.txt'), 'b-v0');
+    execSync('git add . && git commit -q -m b', { cwd: repo });
+    const wsLocal = openWorkspace({ cairnRoot, cwd: repo });
+    try {
+      writeFileSync(join(repo, 'a.txt'), 'a-checkpoint');
+      writeFileSync(join(repo, 'b.txt'), 'b-checkpoint');
+      const ckpt = toolCreateCheckpoint(wsLocal, { label: 'p' });
+
+      writeFileSync(join(repo, 'a.txt'), 'a-now');
+      writeFileSync(join(repo, 'b.txt'), 'b-now');
+
+      const r = toolRewindTo(wsLocal, { checkpoint_id: ckpt.id });
+      expect(r.ok).toBe(true);
+      expect(new Set((r as { restored_files: string[] }).restored_files)).toEqual(
+        new Set(['a.txt', 'b.txt']),
+      );
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('a-checkpoint');
+      expect(readFileSync(join(repo, 'b.txt'), 'utf8')).toBe('b-checkpoint');
     } finally {
       wsLocal.db.close();
       rmSync(repo, { recursive: true, force: true });

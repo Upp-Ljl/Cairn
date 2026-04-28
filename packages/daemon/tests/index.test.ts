@@ -33,8 +33,10 @@ describe('@cairn/daemon public API barrel', () => {
   it('exports git-stash snapshot backend', () => {
     expect(typeof daemon.gitStashSnapshot).toBe('function');
     expect(typeof daemon.gitStashRestore).toBe('function');
+    expect(typeof daemon.gitStashRestoreFiltered).toBe('function');
     expect(typeof daemon.gitStashAffectedFiles).toBe('function');
     expect(typeof daemon.gitHeadCleanRestore).toBe('function');
+    expect(typeof daemon.gitHeadCleanRestoreFiltered).toBe('function');
     expect(typeof daemon.gitHeadCleanAffectedFiles).toBe('function');
   });
 

@@ -41,8 +41,10 @@ export {
 export {
   gitStashSnapshot,
   gitStashRestore,
+  gitStashRestoreFiltered,
   gitStashAffectedFiles,
   gitHeadCleanRestore,
+  gitHeadCleanRestoreFiltered,
   gitHeadCleanAffectedFiles,
 } from './storage/snapshots/git-stash.js';
 
