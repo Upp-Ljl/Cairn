@@ -1,5 +1,5 @@
 import {
-  putScratch, getScratch, listAllScratch,
+  putScratch, getScratch, listAllScratch, deleteScratch,
 } from '../../../daemon/dist/storage/repositories/scratchpad.js';
 import { tryAutoCheckpoint } from './_auto-checkpoint.js';
 import type { Workspace } from '../workspace.js';
@@ -15,6 +15,15 @@ export interface WriteScratchArgs {
   skip_auto_checkpoint?: boolean;
 }
 export interface ReadScratchArgs { key: string }
+
+export interface DeleteScratchArgs {
+  key: string;
+  /**
+   * Skip the implicit pre-delete checkpoint. Default: false (auto-checkpoint runs).
+   * Match {@link WriteScratchArgs} semantics — delete is a write-effecting tool.
+   */
+  skip_auto_checkpoint?: boolean;
+}
 
 export function toolWriteScratch(ws: Workspace, args: WriteScratchArgs) {
   // Auto-checkpoint BEFORE the write so the user can rewind to the
@@ -33,6 +42,23 @@ export function toolWriteScratch(ws: Workspace, args: WriteScratchArgs) {
 export function toolReadScratch(ws: Workspace, args: ReadScratchArgs) {
   const value = getScratch(ws.db, args.key);
   return { key: args.key, found: value !== null, value };
+}
+
+export function toolDeleteScratch(ws: Workspace, args: DeleteScratchArgs) {
+  // Auto-checkpoint BEFORE the delete so the user can undo a mistaken
+  // delete via rewind. Symmetric with scratchpad.write — both are
+  // write-effecting and both should anchor a recoverable point.
+  const auto_checkpoint_id = args.skip_auto_checkpoint
+    ? null
+    : tryAutoCheckpoint(ws, `auto:before-scratchpad.delete:${args.key}`);
+
+  // Idempotent: probe whether the key exists, then delete unconditionally.
+  // Probing first lets the caller learn whether their delete actually
+  // removed something (deleted=true) or was a no-op (deleted=false).
+  // Both outcomes are `ok: true` — delete-of-nonexistent is not an error.
+  const existed = getScratch(ws.db, args.key) !== null;
+  deleteScratch(ws.db, args.key);
+  return { ok: true, key: args.key, deleted: existed, auto_checkpoint_id };
 }
 
 export function toolListScratch(ws: Workspace) {

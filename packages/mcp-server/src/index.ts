@@ -6,7 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { openWorkspace } from './workspace.js';
-import { toolWriteScratch, toolReadScratch, toolListScratch } from './tools/scratchpad.js';
+import { toolWriteScratch, toolReadScratch, toolListScratch, toolDeleteScratch } from './tools/scratchpad.js';
 import { toolCreateCheckpoint, toolListCheckpoints } from './tools/checkpoint.js';
 import { toolRewindPreview, toolRewindTo } from './tools/rewind.js';
 
@@ -40,6 +40,18 @@ const TOOLS = [
     name: 'cairn.scratchpad.list',
     description: '列出当前会话的所有草稿键名',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'cairn.scratchpad.delete',
+    description: '删除一个命名草稿（幂等：键不存在也返回 ok）',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        skip_auto_checkpoint: { type: 'boolean' },
+      },
+      required: ['key'],
+    },
   },
   {
     name: 'cairn.checkpoint.create',
@@ -85,6 +97,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.scratchpad.write':  result = toolWriteScratch(ws, a); break;
     case 'cairn.scratchpad.read':   result = toolReadScratch(ws, a); break;
     case 'cairn.scratchpad.list':   result = toolListScratch(ws); break;
+    case 'cairn.scratchpad.delete': result = toolDeleteScratch(ws, a); break;
     case 'cairn.checkpoint.create': result = toolCreateCheckpoint(ws, a); break;
     case 'cairn.checkpoint.list':   result = toolListCheckpoints(ws); break;
     case 'cairn.rewind.preview':    result = toolRewindPreview(ws, a); break;

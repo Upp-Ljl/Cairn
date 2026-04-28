@@ -82,7 +82,7 @@ class MCPClient {
 }
 
 describe('stdio smoke test — production binary speaks MCP', () => {
-  it('initializes, lists 7 tools, write+read roundtrip', async () => {
+  it('initializes, lists 8 tools, write+read+delete roundtrip', async () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-smoke-'));
     const client = new MCPClient({ CAIRN_HOME: cairnRoot });
     try {
@@ -106,6 +106,7 @@ describe('stdio smoke test — production binary speaks MCP', () => {
         'cairn.checkpoint.list',
         'cairn.rewind.preview',
         'cairn.rewind.to',
+        'cairn.scratchpad.delete',
         'cairn.scratchpad.list',
         'cairn.scratchpad.read',
         'cairn.scratchpad.write',
@@ -114,10 +115,10 @@ describe('stdio smoke test — production binary speaks MCP', () => {
       // 3. tools/call cairn.scratchpad.write
       const writeRes = await client.request('tools/call', {
         name: 'cairn.scratchpad.write',
-        arguments: { key: 'smoke', content: { ping: 'pong' } },
+        arguments: { key: 'smoke', content: { ping: 'pong' }, skip_auto_checkpoint: true },
       });
       const writeText = (writeRes.result as any).content[0].text as string;
-      expect(JSON.parse(writeText)).toEqual({ ok: true, key: 'smoke' });
+      expect(JSON.parse(writeText)).toMatchObject({ ok: true, key: 'smoke' });
 
       // 4. tools/call cairn.scratchpad.read
       const readRes = await client.request('tools/call', {
@@ -127,6 +128,26 @@ describe('stdio smoke test — production binary speaks MCP', () => {
       const readText = (readRes.result as any).content[0].text as string;
       expect(JSON.parse(readText)).toEqual({
         key: 'smoke', found: true, value: { ping: 'pong' },
+      });
+
+      // 5. tools/call cairn.scratchpad.delete
+      const deleteRes = await client.request('tools/call', {
+        name: 'cairn.scratchpad.delete',
+        arguments: { key: 'smoke', skip_auto_checkpoint: true },
+      });
+      const deleteText = (deleteRes.result as any).content[0].text as string;
+      expect(JSON.parse(deleteText)).toMatchObject({
+        ok: true, key: 'smoke', deleted: true,
+      });
+
+      // 6. read after delete returns found=false
+      const readAfterRes = await client.request('tools/call', {
+        name: 'cairn.scratchpad.read',
+        arguments: { key: 'smoke' },
+      });
+      const readAfterText = (readAfterRes.result as any).content[0].text as string;
+      expect(JSON.parse(readAfterText)).toEqual({
+        key: 'smoke', found: false, value: null,
       });
     } finally {
       await client.close();
