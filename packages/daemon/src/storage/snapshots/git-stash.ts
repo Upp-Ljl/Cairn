@@ -77,3 +77,199 @@ export function gitStashAffectedFiles(cwd: string, stashSha: string): string[] {
   const out = git(cwd, `diff-tree --name-only -r ${stashSha}~1 ${stashSha}`);
   return out.split('\n').filter(Boolean);
 }
+
+// =============================================================================
+// Clean-tree (git_head only) snapshot path
+// =============================================================================
+//
+// When a checkpoint is created on a clean working tree, gitStashSnapshot returns
+// null because there is nothing for `stash create` to capture. The checkpoint
+// still records `git_head` (the commit SHA at checkpoint time). The pair of
+// helpers below let `rewind` use that git_head as the restore target — making
+// the natural workflow `commit → checkpoint → edit → rewind` actually work.
+//
+// Semantics: "restore working tree to the exact state at git_head". Concretely:
+//   - revert tracked-file modifications via `git checkout <git_head> -- .`
+//   - delete untracked files created since the checkpoint via `git clean -fd`
+//   - leave gitignored files alone (consistent with stash backend, which never
+//     captures gitignored files either — documented limitation)
+//   - leave HEAD and commit history untouched (PRODUCT.md §8.3)
+//
+// Hard precondition: current HEAD must equal the supplied git_head. If HEAD has
+// moved (user committed since the checkpoint), the semantics get ambiguous and
+// could destroy committed work, so we throw rather than guess.
+
+/**
+ * Return the list of file paths whose state diverges from the given git_head.
+ *
+ * Includes both tracked-but-modified files and currently-untracked files
+ * (which by definition did not exist at git_head). Respects .gitignore (ignored
+ * files are NOT listed). Used by rewind.preview on clean-tree checkpoints.
+ */
+export function gitHeadCleanAffectedFiles(cwd: string, gitHead: string): string[] {
+  // Validate current HEAD matches the supplied git_head BEFORE inspecting the
+  // tree. If HEAD has moved (user committed since the checkpoint), the
+  // semantics get ambiguous and could destroy committed work, so we surface
+  // that as an explicit error rather than silently restoring against the
+  // wrong baseline.
+  const currentHead = git(cwd, 'rev-parse HEAD');
+  if (currentHead !== gitHead) {
+    throw new Error(
+      `HEAD has moved since checkpoint (now ${currentHead.slice(0, 7)}, ` +
+        `checkpoint git_head was ${gitHead.slice(0, 7)}). ` +
+        'Clean-tree rewind requires HEAD to match the checkpoint. ' +
+        'Either reset HEAD with `git reset` or pick a different checkpoint.',
+    );
+  }
+  // Two machine-readable name lists, more reliable across platforms than
+  // parsing `status --porcelain` (which has whitespace quirks on Windows).
+  //   - `diff --name-only HEAD` → tracked files differing from HEAD
+  //   - `ls-files --others --exclude-standard` → untracked, gitignore-respecting
+  const tracked = git(cwd, 'diff --name-only HEAD').split('\n').filter(Boolean);
+  const untracked = git(cwd, 'ls-files --others --exclude-standard')
+    .split('\n')
+    .filter(Boolean);
+  // Dedupe in case of overlap (shouldn't happen, but cheap insurance).
+  return Array.from(new Set([...tracked, ...untracked]));
+}
+
+/**
+ * Restore only the listed paths from a stash commit, leaving every other
+ * file in the working tree untouched.
+ *
+ * Use case: `cairn.rewind.to({ checkpoint_id, paths: [...] })` — the user
+ * wants to undo edits to a few specific files while keeping changes to
+ * other files since the checkpoint. Increases the granularity of the
+ * "atomic operation" unit from "all files in stash" to "any subset of
+ * files in stash".
+ *
+ * Paths in the input that are NOT part of the stash (i.e. not affected by
+ * the original snapshot) are reported in the `skipped` list rather than
+ * causing an error — typing a path the user thought was checkpointed should
+ * be informative, not a failure.
+ *
+ * Empty paths array throws — that case is ambiguous (callers should use the
+ * full-scope gitStashRestore instead) and silently mapping it to a no-op or
+ * to "restore everything" would surprise.
+ */
+export function gitStashRestoreFiltered(
+  cwd: string,
+  stashSha: string,
+  paths: string[],
+): { restored: string[]; skipped: string[] } {
+  if (paths.length === 0) {
+    throw new Error('paths must not be empty (use gitStashRestore for full-scope rewind)');
+  }
+  const affected = new Set(gitStashAffectedFiles(cwd, stashSha));
+  const restored: string[] = [];
+  const skipped: string[] = [];
+  for (const p of paths) {
+    if (affected.has(p)) {
+      restored.push(p);
+    } else {
+      skipped.push(p);
+    }
+  }
+  if (restored.length > 0) {
+    const quoted = restored.map((f) => `"${f}"`).join(' ');
+    git(cwd, `restore --source=${stashSha} --worktree -- ${quoted}`);
+  }
+  return { restored, skipped };
+}
+
+/**
+ * Restore the working tree to its state at the given git_head.
+ *
+ * Behavior:
+ *   - reverts every tracked-but-modified file to its git_head blob
+ *   - deletes every untracked-non-ignored file created since git_head
+ *   - leaves gitignored files alone (e.g. local DBs, .env, node_modules)
+ *   - leaves HEAD, the index baseline, and commit history untouched
+ *
+ * Throws if current HEAD has diverged from the supplied git_head — see
+ * gitHeadCleanAffectedFiles for rationale.
+ *
+ * Returns the list of paths that were touched (reverted or deleted).
+ */
+export function gitHeadCleanRestore(cwd: string, gitHead: string): string[] {
+  const affected = gitHeadCleanAffectedFiles(cwd, gitHead);
+  if (affected.length === 0) return [];
+  // 1. Revert all tracked changes back to git_head's blobs.
+  //    `checkout <commit> -- .` writes blobs from <commit> over the working tree
+  //    for every path that exists in the index; it does not touch HEAD or stage
+  //    anything. New untracked files are not touched here.
+  git(cwd, `checkout ${gitHead} -- .`);
+  // 2. Remove untracked-non-ignored files created since git_head.
+  //    `-f` required to actually delete; `-d` recurses into untracked dirs.
+  //    No `-x` flag → gitignored files survive (matches stash backend behavior).
+  git(cwd, 'clean -fd');
+  return affected;
+}
+
+/**
+ * Restore only the listed paths to their state at git_head, leaving every
+ * other file (including other dirty / new untracked files) untouched.
+ *
+ * Use case: same as gitStashRestoreFiltered but for the clean-tree backend.
+ * Each requested path is dispatched based on its current state:
+ *   - tracked + modified vs git_head → `git checkout <git_head> -- <path>`
+ *   - currently untracked (didn't exist at git_head)  → file is deleted
+ *   - tracked + matches git_head (no change)         → reported as skipped
+ *
+ * Refuses if HEAD has moved since git_head (same hard precondition as the
+ * full-scope variant — see gitHeadCleanAffectedFiles for rationale).
+ */
+export function gitHeadCleanRestoreFiltered(
+  cwd: string,
+  gitHead: string,
+  paths: string[],
+): { restored: string[]; skipped: string[] } {
+  if (paths.length === 0) {
+    throw new Error(
+      'paths must not be empty (use gitHeadCleanRestore for full-scope rewind)',
+    );
+  }
+  // HEAD-moved guard runs first (gitHeadCleanAffectedFiles itself throws).
+  const trackedDirty = new Set(
+    git(cwd, 'diff --name-only HEAD').split('\n').filter(Boolean),
+  );
+  // Validate HEAD match independently in case the diff above is empty
+  // (gitHeadCleanAffectedFiles normally raises this; replicate so we don't
+  // depend on calling it here when the affected list might be huge).
+  const currentHead = git(cwd, 'rev-parse HEAD');
+  if (currentHead !== gitHead) {
+    throw new Error(
+      `HEAD has moved since checkpoint (now ${currentHead.slice(0, 7)}, ` +
+        `checkpoint git_head was ${gitHead.slice(0, 7)}). ` +
+        'Clean-tree rewind requires HEAD to match the checkpoint. ' +
+        'Either reset HEAD with `git reset` or pick a different checkpoint.',
+    );
+  }
+  const untracked = new Set(
+    git(cwd, 'ls-files --others --exclude-standard').split('\n').filter(Boolean),
+  );
+
+  const restored: string[] = [];
+  const skipped: string[] = [];
+  const trackedToRevert: string[] = [];
+
+  for (const p of paths) {
+    if (trackedDirty.has(p)) {
+      trackedToRevert.push(p);
+      restored.push(p);
+    } else if (untracked.has(p)) {
+      // Use `git clean -f -- <path>` so behavior matches the bulk variant
+      // (respects .gitignore by default, since no -x flag).
+      git(cwd, `clean -f -- "${p}"`);
+      restored.push(p);
+    } else {
+      skipped.push(p);
+    }
+  }
+
+  if (trackedToRevert.length > 0) {
+    const quoted = trackedToRevert.map((f) => `"${f}"`).join(' ');
+    git(cwd, `checkout ${gitHead} -- ${quoted}`);
+  }
+  return { restored, skipped };
+}
