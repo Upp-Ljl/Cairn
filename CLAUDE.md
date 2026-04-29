@@ -93,8 +93,8 @@ import { openDatabase } from '../../daemon/dist/storage/db.js';
 每个包独立跑：
 
 ```bash
-cd packages/daemon && npm test           # 67 tests
-cd packages/mcp-server && npm test       # 9 tests (8 acceptance + 1 stdio smoke)
+cd packages/daemon && npm test           # 90 tests (15 test files; 实测 2026-04-29 EOD)
+cd packages/mcp-server && npm test       # 42 tests (2 test files; 含 8 acceptance + 1 stdio smoke + W2 features)
 ```
 
 不要给 `cd packages/daemon` 加 `cd D:/lll/cairn &&` 前缀 — 工作目录已经是仓库根。

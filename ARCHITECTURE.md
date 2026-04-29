@@ -497,7 +497,7 @@ cairn.scratchpad.write(
 
 ---
 
-### ADR-4：Dispatch LLM 走 provider-agnostic 接口（不锁定单一供应商）🚧 PoC-3 验证默认 provider 与可移植性
+### ADR-4：Dispatch LLM 走 provider-agnostic 接口（不锁定单一供应商）✓ PoC-3 partial（2026-04-29）— 第二 provider 待补
 
 **为什么这一节存在**：v2 项目维护方测试期间使用 MiniMax / DeepSeek / Qwen 等中国模型 coding plan（成本敏感 + 数据驻留中国），最终用户的 LLM 选型更碎（OpenAI / Anthropic / Chinese LLMs / 本地 Ollama）。锁死任何一家供应商都和"开源 + 本地优先 + 成本敏感"调性冲突。Dispatch 必须走 provider-agnostic 接口。
 
@@ -521,6 +521,38 @@ cairn.scratchpad.write(
 - 任一 provider 均分 < 5.0 → 该 provider 不推荐，但接口本身仍可用
 - ≥ 2 个 provider 通过 → ADR-4 接口抽象成立；用户可自由切换
 
+**✓ PoC-3 partial 执行结果（2026-04-29）**：
+
+单 provider 跑完（user 暂无 DeepSeek 等第二 provider key，"接口可移植性"命题留待增量补跑）：
+
+| 维度 | MiniMax-M2.7（runner 因 Text-01 plan 限制自动 fallback；reasoning model；中文 instruction） |
+|---|---|
+| 整体均分 | **7.36/10** |
+| 类别均分 | A=9.32 / B=8.40 / C=6.92 / **D=4.80** |
+| 维度均分 | 意图=7.25 / agent选型=8.45 / prompt=7.20 / 历史关键词=8.10 / **风险提示=5.70** |
+| HTTP 200 | 20/20 |
+| JSON parse 成功 | 18/20（C.3 语法错；D.3 reasoning 模型只输出 think 块无 JSON） |
+| Instruction-following 违规率 | 30%（6/20：markdown 包裹 / JSON 前后散文 / 无 JSON 输出 / 语法错） |
+| 平均 latency | 13.8s（reasoning 思考时间，约为典型 chat completion 5-10×） |
+
+**Verdict**：
+
+1. **MiniMax-M2.7 进 v0.1 推荐 provider 清单**（整体 ≥ 7.0）
+2. **Dispatch v0.1 走 LLM-driven (OpenAI-compat 接口)**（按 §6.2 决策矩阵 ≥ 7.0 档位）
+3. **关键警示**：D 类（危险/边界）4.80 + 风险维度 5.70 是悬崖式断崖——LLM 自身识别不可逆操作 / 架构约束的能力**系统性不足**
+4. **接口可移植性**：partial 验证——MiniMax-M2.7 通过 OpenAI-compat endpoint 跑通 20/20，无需 provider-specific prompt 调整。第二 provider 跑通后才能完整断言
+
+**对 W5-W7 Dispatch v1 编码的硬要求（应用层兜底清单）**：
+
+LLM 不能完全依赖。W5-W7 plan 的 acceptance 必须含以下 4 条：
+
+1. **不可逆操作（rewind / delete）一律强制 preview**——不依赖 LLM 自动识别（D.2/D.3 数据：模型在 scratchpad 批量删 / SQLite 直接改场景下系统性失败）
+2. **调外部 API 类任务一律强制 user 知情同意提示**——违反 ADR-2 本地优先时显式 warn（D.5 数据：模型直接写脚本，未识别本地优先原则）
+3. **同文件多 agent 并行一律提示串行化**——LLM 即使识别了冲突仍可能给出并行 prompt（D.4 数据）
+4. **直接 SQL 操作一律走 cairn 工具路径**——LLM 可能完全失败输出 JSON（D.3 数据）
+
+详见 `docs/superpowers/plans/2026-04-29-poc-3-results.md`。
+
 **v0.1 范围**：
 - 实现 OpenAI-compatible 接口适配器（一份代码跑所有 OpenAI-compatible provider）
 - 推荐 provider 清单（PoC-3 跑过且均分 ≥ 7 的）写进 README + 首次启动 onboarding
@@ -532,9 +564,10 @@ cairn.scratchpad.write(
 - 多 provider 路由（按任务类型挑 provider，例：意图解析用便宜的，prompt 生成用质量高的）
 
 **未决**：
-- 中文 instruction vs 英文 instruction 哪种更稳定（PoC-3 数据决定）
+- 中文 instruction 在 reasoning model 上稳定性偏低（partial PoC-3 数据：30% instruction-following 违规率）。增量跑 non-reasoning model（如 deepseek-chat、MiniMax-Text-01 升级 plan 后）能验证"reasoning 模型 attention 占用导致 instruction 守纪律下降"假说
+- 第二 provider（DeepSeek / Qwen / Kimi 等）的接口可移植性数据——user 拿到 key 后增量补跑 partial PoC-3
 - Chinese model 用户在没有 Anthropic key 的情况下，CC（Claude Code）这条 host 链路怎么办——这是 Cairn ICP 之外的问题（CC 自己的供应商绑定不归 Cairn 管），但需要在文档里说明 Cairn 不替代 CC 的 LLM 选择
-- temperature / top_p / max_tokens 等通用参数的默认值（v0.1 用 OpenAI 默认，PoC-3 跑过的数据可作为基线）
+- temperature / top_p / max_tokens 等通用参数的默认值（v0.1 用 PoC-3 实测的 temperature=0.3 + max_tokens=2048 作为 baseline）
 
 ---
 
@@ -734,7 +767,7 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 |---|---|---|---|
 | ✓ PoC-1 | §6.1 §9（技术债） | MCP-call 边界 race window；SQLite 锁语义；并发 `checkpoint.create` 语义 | **已完成（2026-04-29）**：N=2/5/10 PASS，N=50 p99=449ms 记录为 v0.3 议题。详 `docs/superpowers/plans/2026-04-29-poc-1-results.md` |
 | ✓ PoC-2 | §6.1 | hook 端到端延迟 + fail-open 行为 | **已完成（2026-04-29）**：5/5 场景全 PASS，large p99=122ms（预算 1000ms），fail-open 验证。详 `docs/superpowers/plans/2026-04-29-poc-2-results.md` |
-| 🚧 PoC-3 | §6.3 ADR-4 | Dispatch LLM 接口可移植性 + 默认 provider 选型（MiniMax + DeepSeek 起步，≥ 2 provider 跑同测试集） | 任一 provider 均分 ≥ 7.0 即可作为推荐 provider；≥ 2 provider 通过则接口抽象验证 |
+| ✓ PoC-3 partial | §6.3 ADR-4 | Dispatch LLM 接口可移植性 + 默认 provider 选型 | **partial（2026-04-29）**：MiniMax-M2.7 整体均分 7.36/10 PASS，进 v0.1 推荐清单；Dispatch 走 LLM-driven (OpenAI-compat)；但 D 类 4.80 + 风险维度 5.70 触发应用层兜底要求 4 条（详 ADR-4 + `docs/superpowers/plans/2026-04-29-poc-3-results.md`）。第二 provider 接口可移植性命题待 user 拿到 key 后增量补跑 |
 | 🚧 PoC-4 | §6.4 | CC Task tool 实际调用 `cairn.scratchpad.write` 的频率；v0.1 是否需要"强制 reload"兜底 | dogfood 会话记录（每次 subagent 结束时的调用率统计） |
 | 🚧 D-1 | ADR-6 | 非 MCP-aware agent（Cursor / Cline）接入路径调研 | 用户反馈 Cursor / Cline 接入需求的强度 |
 | 🚧 D-2 | §4.4 §8.1 §6.1（通知机制） | daemon 资源占用 baseline（idle / busy 两种状态 RAM / CPU）；通知形式；索引 / VACUUM 策略 | dogfood 阶段 1 周实测数据 |
@@ -755,4 +788,6 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 | scratchpad 默认 TTL（选项 A） | 86400000 ms（24 小时） | DESIGN_STORAGE.md §15 OQ-5 |
 | 大对象内联 / 外联阈值 | 128 KB | DESIGN_STORAGE.md §2.1；小于 128 KB 内联 JSON，大于走 blob 文件 |
 | in-flight 冲突检测窗口 | 由应用层 SELECT + INSERT 构成（无显式 window）；SQLite WAL + busy_timeout=5000ms 提供并发隔离 | PoC-1（2026-04-29）已验证至 N=10 |
-| Dispatch LLM 超时 | 待 PoC-3 确认 | 🚧 PoC-3 |
+| Dispatch LLM 超时 | 30s（含 reasoning 思考时间） | PoC-3 partial（2026-04-29）：MiniMax-M2.7 平均 13.8s / max 25.2s；30s timeout 留足头空间 |
+| Dispatch LLM temperature | 0.3 | PoC-3 partial：低温确保严格 JSON 输出；过高会增加 instruction-following 违规率 |
+| Dispatch LLM max_tokens | 2048 | PoC-3 partial：reasoning model 含 think 块单条最大 ~800 completion tokens，2048 留 2.5× 头空间 |
