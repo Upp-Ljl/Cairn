@@ -411,7 +411,7 @@ L3~L6 粒度推迟到 v0.2，见 PRODUCT.md §5.2 粒度矩阵。
   → agent 读取后执行（Cairn 退出，不跟踪后续执行）
 ```
 
-**LLM 选型**：🚧 PoC-3（Sonnet 薄壳 vs 本地 7B 模型）。v0.1 先用 Claude Sonnet API，评估维度见 ADR-4。
+**LLM provider**：v0.1 走 OpenAI-compatible 接口抽象，用户自配（MiniMax / DeepSeek / Qwen / OpenAI / Anthropic / Ollama 等）。详见 ADR-4。🚧 PoC-3 验证默认 provider 选型 + 接口可移植性。
 
 **单 agent 退化**：当 `processes` 表里只有一个活跃 agent 时，"agent 选型"步骤退化为"直接转发"，不调用 LLM 选型逻辑。这保证了单 agent 用户场景的可用性。
 
@@ -497,21 +497,44 @@ cairn.scratchpad.write(
 
 ---
 
-### ADR-4：LLM 选型 🚧 PoC-3 决定
+### ADR-4：Dispatch LLM 走 provider-agnostic 接口（不锁定单一供应商）🚧 PoC-3 验证默认 provider 与可移植性
 
-**候选**：
+**为什么这一节存在**：v2 项目维护方测试期间使用 MiniMax / DeepSeek / Qwen 等中国模型 coding plan（成本敏感 + 数据驻留中国），最终用户的 LLM 选型更碎（OpenAI / Anthropic / Chinese LLMs / 本地 Ollama）。锁死任何一家供应商都和"开源 + 本地优先 + 成本敏感"调性冲突。Dispatch 必须走 provider-agnostic 接口。
 
-| 选项 | 优点 | 缺点 |
-|---|---|---|
-| Claude Sonnet API（云端） | 质量高；无需本地资源；现成 | 依赖网络；API 费用；数据离本机 |
-| 本地 7B 模型（Ollama / llamafile）| 离线；无费用；数据不离机 | 质量存疑；本地 GPU 需求；启动延迟 |
+**决策**：
+
+1. **接口层**：v0.1 Dispatch 走 OpenAI-compatible API 抽象（业界事实标准；Anthropic / MiniMax / DeepSeek / Qwen / Kimi / Ollama 都有 OpenAI-compatible endpoint）
+2. **配置层**：用户在 `~/.cairn/config.json`（或环境变量）指定 provider + endpoint + API key + model name；Cairn 不内嵌任何供应商凭证
+3. **默认策略**：v0.1 不预设默认 provider，首次启动 onboarding 让用户选 / 配
+4. **测试覆盖**：PoC-3 用 ≥ 2 个 provider（MiniMax + DeepSeek 起步）跑同一套 20 条 NL 测试集，验证：
+   - (a) 接口抽象在多 provider 下是否真的可移植（指令格式 / 输出格式 / temperature 参数 / token limit 都得抽象）
+   - (b) 不同 provider 在 Dispatch 任务上的质量分布
 
 **评估维度**（PoC-3 需要测量的）：
-- NL 意图解析的准确率（测试集：20 条真实 Dispatch 请求）
-- 平均响应延迟（用户感知等待时间）
-- 本地模型的 GPU / CPU 资源占用
+- 5 维度 rubric 均分（详见 `docs/superpowers/plans/2026-04-29-poc-3-prep.md` §4）
+- 是否需要 provider-specific 的 prompt 调整（如：Chinese models 是否需要中文 instruction 才稳定输出 JSON）
+- 平均响应延迟（不同 provider 的差异）
+- 单次 Dispatch 调用的 token 成本（不同 provider 的成本对比）
 
-**当前默认**：v0.1 先用 Claude Sonnet API，等 PoC-3 结论后决定是否引入本地模型作为 fallback 或主路。
+**通过判据**（按 PoC-3 prep §6）：
+- 单个 provider 均分 ≥ 7.0 → 该 provider 进入"v0.1 推荐 provider 清单"
+- 任一 provider 均分 < 5.0 → 该 provider 不推荐，但接口本身仍可用
+- ≥ 2 个 provider 通过 → ADR-4 接口抽象成立；用户可自由切换
+
+**v0.1 范围**：
+- 实现 OpenAI-compatible 接口适配器（一份代码跑所有 OpenAI-compatible provider）
+- 推荐 provider 清单（PoC-3 跑过且均分 ≥ 7 的）写进 README + 首次启动 onboarding
+- 不实现 provider-specific 适配（如 Anthropic native API / Google Gemini API），用户要用就靠 OpenAI-compatible proxy（litellm 等）
+
+**v0.2 候选**：
+- 本地 Ollama 接入（也走 OpenAI-compatible，零额外工作）
+- provider-specific 优化（如启用 Anthropic 的 prompt caching）
+- 多 provider 路由（按任务类型挑 provider，例：意图解析用便宜的，prompt 生成用质量高的）
+
+**未决**：
+- 中文 instruction vs 英文 instruction 哪种更稳定（PoC-3 数据决定）
+- Chinese model 用户在没有 Anthropic key 的情况下，CC（Claude Code）这条 host 链路怎么办——这是 Cairn ICP 之外的问题（CC 自己的供应商绑定不归 Cairn 管），但需要在文档里说明 Cairn 不替代 CC 的 LLM 选择
+- temperature / top_p / max_tokens 等通用参数的默认值（v0.1 用 OpenAI 默认，PoC-3 跑过的数据可作为基线）
 
 ---
 
@@ -711,11 +734,11 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 |---|---|---|---|
 | ✓ PoC-1 | §6.1 §9（技术债） | MCP-call 边界 race window；SQLite 锁语义；并发 `checkpoint.create` 语义 | **已完成（2026-04-29）**：N=2/5/10 PASS，N=50 p99=449ms 记录为 v0.3 议题。详 `docs/superpowers/plans/2026-04-29-poc-1-results.md` |
 | ✓ PoC-2 | §6.1 | hook 端到端延迟 + fail-open 行为 | **已完成（2026-04-29）**：5/5 场景全 PASS，large p99=122ms（预算 1000ms），fail-open 验证。详 `docs/superpowers/plans/2026-04-29-poc-2-results.md` |
-| 🚧 PoC-3 | §6.3 ADR-4 | Dispatch LLM 选型（Sonnet API vs 本地 7B 模型） | 准确率测试集跑完 + 延迟对比 |
+| 🚧 PoC-3 | §6.3 ADR-4 | Dispatch LLM 接口可移植性 + 默认 provider 选型（MiniMax + DeepSeek 起步，≥ 2 provider 跑同测试集） | 任一 provider 均分 ≥ 7.0 即可作为推荐 provider；≥ 2 provider 通过则接口抽象验证 |
 | 🚧 PoC-4 | §6.4 | CC Task tool 实际调用 `cairn.scratchpad.write` 的频率；v0.1 是否需要"强制 reload"兜底 | dogfood 会话记录（每次 subagent 结束时的调用率统计） |
 | 🚧 D-1 | ADR-6 | 非 MCP-aware agent（Cursor / Cline）接入路径调研 | 用户反馈 Cursor / Cline 接入需求的强度 |
 | 🚧 D-2 | §4.4 §8.1 §6.1（通知机制） | daemon 资源占用 baseline（idle / busy 两种状态 RAM / CPU）；通知形式；索引 / VACUUM 策略 | dogfood 阶段 1 周实测数据 |
-| 🚧 D-3 | ADR-4 | LLM 选型质量差距测量（Sonnet vs 本地 7B 意图解析准确率 + 延迟） | PoC-3 测试集结果 |
+| 🚧 D-3 | ADR-4 | provider 间质量差距测量（MiniMax / DeepSeek / Qwen 等 vs Anthropic / OpenAI 在 Dispatch 任务上的均分对比） | PoC-3 多 provider 测试集结果 |
 | 🚧 D-4 | §6.1 §8.2 | 冲突检测假阳性率（dogfood 实测数据）；误报导致用户关闭通知的阈值 | dogfood 阶段记录所有冲突通知 + 用户标记 IGNORED 的比例 |
 
 ---
