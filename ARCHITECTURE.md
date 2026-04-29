@@ -158,6 +158,7 @@ packages/
 
 | 候选包 | 触发条件 | 说明 |
 |---|---|---|
+| `packages/desktop-shell/` | **v0.2 主要工作之一** | 悬浮标 + Inspector panel，Tauri 实施。与 daemon 通过本地 IPC 或共享 SQLite 文件通信。详 PRODUCT.md §8.2。 |
 | `packages/conflict-engine/` | 冲突检测逻辑复杂度超过单文件可维护范围 | 冲突检测 + 诊断逻辑模块 |
 | `packages/dispatcher/` | Dispatch LLM 调用逻辑独立成服务 | NL 意图解析 + agent 选型 + prompt 生成 |
 | `packages/process-bus/` | 进程总线有专属 GC / 心跳超时逻辑 | agent 注册 / 心跳 / 状态查询 |
@@ -547,6 +548,35 @@ cairn.scratchpad.write(
 
 ---
 
+### ADR-8：悬浮标技术栈选 Tauri
+
+**决策**：v0.2 桌面 UI 用 Tauri（Rust + WebView）实施，不选 Electron 或 Native+WebView。
+
+**理由**：
+
+| 维度 | Tauri | Electron | Native+WebView |
+|---|---|---|---|
+| 体积 | ~5-10MB | ~80-150MB | ~3-5MB（每 OS 独立） |
+| 启动延迟 | < 200ms（典型） | ~1s（典型） | 最快（原生） |
+| 跨平台 | 一套代码（Rust + WebView） | 一套代码（Chromium） | macOS / Windows / Linux 各写一遍 |
+| Rust 成本 | 一次性学习曲线 | Node.js / JS，团队熟悉 | 各 OS 原生语言（Swift / C++ / GTK） |
+
+- 体积符合"安静常驻"调性：Tauri ~5-10MB vs Electron ~80-150MB
+- 启动 < 200ms，对"随时在屏幕角落"的悬浮标场景是硬要求
+- 跨平台：Tauri 与 Electron 持平；Native 需要每 OS 独立维护
+- 团队 Rust 成本是一次性投入，长期受益；退路是 Electron（接受体积代价）
+
+**后果**：
+- 与 daemon（Node + better-sqlite3）通过本地 IPC（Unix socket / Windows named pipe）或共享 SQLite 文件通信
+- daemon 实现不动；`packages/desktop-shell/` 是新加的独立进程
+- v0.2 实施前做 1 周 Tauri starter 原型，验证 IPC 方案可行性
+
+**未决**：
+- IPC vs 共享 SQLite 哪个先用？取决于 v0.2 评估时 daemon 是否已升级为长跑独立进程（v0.1 是 library，mcp-server 直接 import dist/，无 daemon 独立进程）
+- 若团队评估 Rust 学习曲线超预期，退路：Electron（接受 80-150MB 体积，其余架构不变）
+
+---
+
 ## 8. 横切关注点
 
 ### 8.1 资源占用基线
@@ -640,9 +670,9 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 
 | 扩展 | 架构变化 |
 |---|---|
+| **桌面悬浮标 + Inspector panel UI** | Tauri 实施，新增 `packages/desktop-shell/` 包。Inspector NL 查询 / 冲突历史可视化 / checkpoint 时间线 / scratchpad 浏览。技术细节见 PRODUCT.md §8.2。 |
 | 路径 (b) Task tool wrapper | 新增 per-agent 适配层（强 CC 耦合），需独立包 |
 | 反汇总（层 3）| `cairn.echo.diff` 新工具 + LLM 调用 + `echo/` key 读取逻辑 |
-| Inspector GUI 评估 | 若做，新增 `packages/inspector-ui/`（Tauri 或 Web） |
 | daemon 独立进程（IPC 通信）| mcp-server 改为通过 IPC 连接 daemon，不再直接 import dist/ |
 | SQLCipher（加密）| `better-sqlite3` 替换为 `better-sqlite3-sqlcipher` 或同等方案 |
 

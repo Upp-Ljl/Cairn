@@ -1,283 +1,339 @@
 # Cairn
 
-> **Undo for agents.** 让你敢让 AI 干活。
+> Multi-agent collaboration kernel for your dev machine.
 
-![status](https://img.shields.io/badge/status-early--development-orange)
-
-**Cairn is the safety net for agents** — let the AI do the work without piling on restrictions or watching every step. If something goes wrong, roll it back. Every action is recorded. What can't be undone, Cairn will tell you honestly.
-
----
-
-## You are probably using AI like this right now
-
-You open Claude Code or Cursor, give the agent a task, and then — you hesitate. Not because the agent is bad at its job. Because there is no way back if it does something you didn't intend.
-
-So you compensate with friction:
-
-- **Add restrictions upfront.** "Don't touch this directory." "Ask me before opening a PR." "Read-only mode." "No `rm` commands." You cut capability in half just to feel safe.
-- **Sit there and approve every step.** You wanted the AI to do the work. You ended up being the keyboard operator anyway.
-
-Both approaches are the same thing: **using human effort to compensate for the absence of a rollback net.** The agent is capable of far more than you let it do, because you cannot trust what you cannot undo.
-
-The root cause is narrow but concrete. File-layer mistakes are already solved — GitButler, Claude Code worktrees, and Dagger Container Use let agents make changes in isolation and discard them. But the moment an agent does something outside the file layer — opens a PR, runs a database migration, charges a Stripe customer, posts to Slack, writes to a SaaS — there is no unified tool to undo it. You are left hunting through logs and writing one-off rollback scripts per incident.
-
-Cairn is not another agent tool. It replaces the mental model of "add restrictions and watch closely" as your primary risk management strategy.
+![status](https://img.shields.io/badge/status-v0.1--dogfood-orange)
+![node](https://img.shields.io/badge/node-%3E%3D24-green)
+![license](https://img.shields.io/badge/license-TBD-lightgrey)
 
 ---
 
-## What Cairn does
+## 30-second summary
 
-Cairn sits between your agent and the outside world. Every time the agent makes an external call, Cairn handles three things:
+Cairn is the coordination layer that sits under your AI coding agents. When you run Claude Code and Cursor side by side, or spawn three subagents from a single CC session, nothing in the current ecosystem handles how those agents coordinate. Each one assumes it is the only agent running: they share no file locks, no state, no message bus.
 
-**Record.** Every outbound call is logged to a per-agent lane — what was called, what changed, in what order.
+Cairn fills that gap. It is not another agent. It does not write code. Think of it the way you think of an OS relative to the apps running on it: Word and Excel don't coordinate with each other — the OS does. Cairn is that layer for Claude Code, Cursor, Aider, and friends.
 
-**Classify.** Before the call goes out, Cairn categorizes it: pure read, idempotent write, reversible, or irreversible. The classification drives what happens next.
+- **Cairn does not write code.** It coordinates agents that do.
+- **Three verbs: Dispatch / Rewind / Arbitrate.** These are the only things Cairn does.
+- **Four capabilities:** conflict visibility, reversible state, dispatchable intent, message reachability.
+- **Current status:** v0.1 wedge shipped — 8 MCP tools live, running in dogfood. PoC-1 and PoC-2 pre-implementation validations passed before any feature code was written.
+- **What's next:** W3 pre-implementation validation wrap-up, then W4–W7 four-capability v1 build phase.
 
-**Revert.** If something goes wrong, `cairn revert lane-X` unwinds all of that agent's external side effects in reverse order, using pre-registered compensation actions — GitHub PR closed, database row restored, Stripe charge refunded.
+---
 
-**Five promises Cairn keeps:**
+## Why does this exist?
 
-1. **Honest Receipt** — every revert returns a structured receipt that separates "reverted," "partially reverted," and "could not revert, here's what happened." Exit code `0` means the reversible parts are confirmed gone. It does not mean the world is back to normal if irreversible side effects exist. Cairn says so explicitly.
-2. **Atomicity** — one agent's calls are treated as an all-or-nothing unit. Revert either completes fully or is marked `partial-revert` and halts, forcing human review. No silent half-states.
-3. **Reversibility** — calls are classified before they go out, not after. Compensation actions are registered at call time. You are not discovering what can't be undone after the fact.
-4. **Isolation** — reverting one agent's lane does not touch another agent's lane. If two agents ran in parallel, rolling back one leaves the other intact.
-5. **Semantic Consistency** — after a revert, the API-layer system-of-record state matches what it was before the agent started. Side effects beyond that boundary — emails sent, CI minutes consumed, notifications delivered — are outside what any tool can honestly promise, so Cairn enumerates them in the receipt instead of pretending.
+### The multi-agent coordination gap
 
-**Honest Receipt is the first property, not one of five.** The others are sub-claims it backs up. What distinguishes Cairn from a naive "undo layer" is not that it can revert things — it is that it tells the truth about what it reverted.
+The agent ecosystem is converging on parallel execution: Claude Code has the Task tool to fork subagents, Cursor has Background Agent, Aider can run multiple instances against the same repo. This trend is not reversing.
 
-Cairn is the compensation plane in your agent stack, the same way a control plane handles routing and a data plane handles traffic. It does one thing and does not expand into adjacent concerns.
+But every agent tool still assumes it is the only one present.
+
+**No file locks.** Two agents editing `shared/types.ts` at the same time silently overwrite each other.
+
+**No shared state.** One agent's checkpoint is invisible to the other. A rewind only affects the agent that called it.
+
+**No message bus.** A subagent finishes its work and writes its report back to the main agent's context window. If that window has already been compressed by other output, the report is gone. There is no guarantee of delivery.
+
+**No intent alignment.** The user gives one instruction; two agents interpret it independently. Nobody arbitrates which interpretation is closer to what the user meant.
+
+### What this looks like in practice
+
+A senior engineer using Claude Code and Cursor in parallel on the same codebase. Eight days into a sprint: CC has been refactoring the backend `token_refresh` logic. Cursor is working on the frontend `useAuth` hook. Two days earlier CC changed `TokenStatus` in `shared/types.ts` from an enum to a string union. Cursor, working on React components and seeing no TypeScript error in its local context, quietly changes one of those string values from `"refresh_required"` to `REFRESH_REQUIRED` (all caps). CI fails 23 minutes later. The engineer spends 20 minutes investigating CC's changes before realizing it was Cursor's edit to `shared/`. Manual rollback, re-explaining the correct convention to Cursor, re-run CI: close to an hour lost.
+
+Cairn detects this conflict at MCP-call boundary when Cursor expresses its write intent via `cairn.checkpoint.create`. The notification arrives before the damage is committed.
+
+A second pattern: a subagent writing a Stripe webhook handler discovers that the v3 API is incompatible with the project's existing schema, falls back to v2, and buries this decision in the last two lines of a 1200-token report. The main agent's context window has been filled by two other subagents' output. It reads the summary ("webhook handler done"), misses the v2 fallback, and continues building integration tests against v3 assumptions. CI fails two hours later.
+
+With Cairn, the subagent writes its full report to `cairn.scratchpad.write` before exiting. The main agent can retrieve the original text at any time with `cairn.scratchpad.read`, regardless of how compressed its context window has become.
+
+### Cairn = OS-level coordination
+
+The analogy holds in both directions. An OS does not write your documents. It manages file locks, shared memory, process arbitration, and undo operations so that the applications running on it can do so safely. Cairn does the same for AI coding agents.
+
+---
+
+## What Cairn does (the four capabilities)
+
+### Conflict visibility / 冲突可见
+
+When two agents express write intent against the same file through Cairn's MCP tools, Cairn detects the overlap at MCP-call boundary and issues a non-blocking notification with timestamp, path, and both agents' stated intent. A second detection layer fires at `git commit` via a pre-commit hook. No false silence.
+
+v0.1 boundary: agents must actively call Cairn tools for their write intent to be visible. Agents that operate purely at the filesystem layer without calling Cairn are transparent to it. This is documented as an explicit limitation, not papered over.
+
+### Reversible state / 状态可逆
+
+Cairn checkpoints the working directory and git HEAD on demand. Rewind supports a `paths` parameter for selective restore (roll back `src/` but leave `docs/` and scratchpad untouched). Every destructive operation is preceded by an automatic `auto:before-*` checkpoint. Preview before rewind shows exactly what will change and what will not.
+
+v0.1 covers L0 (full file tree), L1 (paths subset), and L2 (scratchpad). Agent conversation history, tool call traces, and agent internal state (L3–L6) are v0.2 work, and that boundary is stated explicitly in every rewind response.
+
+### Dispatchable intent / 需求可派
+
+The user describes their intent in natural language. Cairn retrieves relevant scratchpad and checkpoint history, selects the best available active agent, generates a prompt with the historical context attached, and presents it for the user's review before forwarding. Cairn exits after forwarding. It does not track whether the agent executes correctly.
+
+### Message reachability / 消息可达
+
+Subagents write their complete results to a shared scratchpad (`cairn.scratchpad.write`) before exiting. The main agent reads from scratchpad (`cairn.scratchpad.read`) rather than from its own context window. The full text is always available regardless of how much context compression has occurred. v0.2 will add semantic diff between the subagent's original report and the main agent's restatement.
+
+---
+
+## Three verbs
+
+**Dispatch.** The user has a task and needs the right agent to handle it with the right context. Cairn finds the relevant history, builds the prompt, gets confirmation, and routes it. The agent does the work. Cairn does not.
+
+**Rewind.** Something went wrong, or the direction was wrong, or the user just wants to see what state the codebase was in yesterday at 3pm. Cairn restores the selected checkpoint — files, git HEAD, optionally specific paths only — and reports exactly what it restored and what it left alone.
+
+**Arbitrate.** Two agents are about to step on each other, or already have. Cairn detects the overlap, diagnoses which agents are involved and what files are at stake, suggests a resolution path, and writes the arbitration decision to scratchpad so both agents can read it. The user makes the final call. Cairn does not override agent execution.
+
+---
+
+## Who is this for?
+
+### You will find this useful if
+
+- You regularly run two or more agent tools at the same time (Claude Code + Cursor, Claude Code + Cline, etc.).
+- You use Claude Code's Task tool and spawn three or more subagents in a single session.
+- You have already hit the "two agents clobbered the same file" or "subagent result never made it back to the main agent" failure modes.
+- You are comfortable with CLI and MCP tool-level interaction. Zero-learning-curve GUI is not a v0.1 goal.
+
+### v0.1 is explicitly not for
+
+- **Teams with strict enterprise compliance requirements.** SSO, RBAC, audit logs, SBOM — none of these are v0.1 scope. Building them would turn Cairn into a different product.
+- **Non-technical end users.** v0.1 assumes the user can read git output, configure an MCP server, and understand what "checkpoint" means.
+- **Multi-person shared daemon scenarios.** v0.1 is single-user local multi-agent. Multi-person shared daemon is v0.3+.
+- **Single-agent users.** If you only ever run one agent tool, you do not have a multi-agent coordination problem. Cairn adds no value in that scenario.
+
+---
+
+## What is in the box
+
+### 8 MCP tools (v0.1 wedge, W1+W2, fully shipped)
+
+| Tool | Semantics |
+|---|---|
+| `cairn.scratchpad.write(key, content, [task_id])` | Persist a named note to SQLite. Supports `task_id` slicing for multi-task isolation. Auto-creates an `auto:before-scratchpad-write` checkpoint before writing. |
+| `cairn.scratchpad.read(key, [task_id])` | Read a named note verbatim, uncompressed. |
+| `cairn.scratchpad.list([task_id])` | List all notes, optionally filtered by `task_id`. |
+| `cairn.scratchpad.delete(key, [task_id])` | Delete a named note. Completes the CRUD set. |
+| `cairn.checkpoint.create(label, [task_id])` | Snapshot the working directory and git HEAD. Two-phase commit: PENDING → READY. |
+| `cairn.checkpoint.list([task_id])` | List checkpoints, optionally filtered by `task_id`. |
+| `cairn.rewind.to(checkpoint_id, [paths])` | Restore to a checkpoint. Supports `paths` for selective restore. Auto-creates an `auto:before-rewind` checkpoint first. |
+| `cairn.rewind.preview(checkpoint_id, [paths])` | Preview what a rewind would change and what it would leave alone. Dry-run, no side effects. |
+
+The `task_id` field on scratchpad and checkpoint provides soft partitioning: all data from a given task shares the same `task_id`, making it filterable across tools. The daemon does not enforce or assign `task_id` values — the host agent generates them and passes them through.
+
+### Pre-implementation validation (PoC-1 + PoC-2, both PASS)
+
+Before writing any feature code for the conflict detection layer, two validation experiments were run.
+
+**PoC-1: SQLite concurrency under multi-agent write load.**
+Simulated N concurrent writers (each representing one agent's mcp-server process) hitting the same SQLite database. At N=2/5/10 (the realistic upper bound for v0.1 single-user scenarios): 100% success rate, p99 < 6ms, zero `SQLITE_BUSY` errors surfaced to the application layer. Data integrity confirmed for all 1000 ops per scenario. At N=50 (extreme stress, outside v0.1 scope): p99 = 449ms — recorded as a v0.3 architectural ceiling for cross-machine / shared-daemon scenarios.
+
+Conclusion: SQLite WAL + `busy_timeout=5000ms` is sufficient for v0.1. No stronger concurrency primitive is needed.
+
+**PoC-2: git pre-commit hook end-to-end latency and fail-open behavior.**
+Ran the conflict-check hook across five scenarios (0 / 10 / 100 / 1000 staged files, plus no-database). All five passed. At 1000 staged files, p99 = 122ms — 8x under the 1000ms budget. Node cold start (~70ms) is the dominant cost; each SQLite path query adds ~45μs. When the database is absent (user has not installed Cairn), the hook exits 0 in 24ms without blocking the commit.
+
+Conclusion: commit-after detection is viable in v0.1. The fail-open guarantee holds.
+
+Full reports: [`docs/superpowers/plans/2026-04-29-poc-1-results.md`](docs/superpowers/plans/2026-04-29-poc-1-results.md) and [`docs/superpowers/plans/2026-04-29-poc-2-results.md`](docs/superpowers/plans/2026-04-29-poc-2-results.md).
 
 ---
 
 ## How it works
 
-**Architecture**
-
 ```
-                              [ Orchestrator ]
-                                     │
-              ┌──────spawn───────────┼──────────spawn───────┐
-              ▼                      ▼                      ▼
-       [ Subagent A ]         [ Subagent B ]         [ Subagent C ]
-        code-agent             db-agent               notify-agent
-              │                      │                      │
-              └──────────────────────┼──────────────────────┘
-                 every external call│is proxied through Cairn
-                                    ▼
-              ╔═══════════════════════════════════════════╗
-              ║                  C A I R N                ║
-              ║   ┌─────────────────────────────────┐     ║
-              ║   │  Recorder     (per-lane log)    │ ◀── timeline + handles
-              ║   ├─────────────────────────────────┤     ║
-              ║   │  Classifier   (① ② ③ ④)         │ ◀── gate decision
-              ║   ├─────────────────────────────────┤     ║
-              ║   │  Reverter     (compensations)   │ ◀── reverse-order unwind
-              ║   └─────────────────────────────────┘     ║
-              ║   ⏸ Approval Gate  — blocks ④ egress      ║
-              ╚═══════════════════════════════════════════╝
-                                    │
-         ┌──────────┬────────────┬──┴───────┬───────────┬──────────┐
-         ▼          ▼            ▼          ▼           ▼          ▼
-      GitHub    Postgres      Stripe      Slack      Linear     Notion
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                      your machine (local)                        │
+  │                                                                  │
+  │   ┌──────────────┐  MCP stdio  ┌──────────────────────────────┐ │
+  │   │ Claude Code  ├────────────►│                              │ │
+  │   │ (Agent A)    │◄────────────┤     cairn  mcp-server        │ │
+  │   └──────────────┘             │     (Node.js subprocess)     │ │
+  │                                │                              │ │
+  │   ┌──────────────┐  MCP stdio  │     8 tools (shipped)        │ │
+  │   │ Cursor / etc.├────────────►│   + N tools (v0.1 roadmap)   │ │
+  │   │ (Agent B)    │◄────────────┤                              │ │
+  │   └──────────────┘             └──────────┬───────────────────┘ │
+  │                                           │ function call        │
+  │                                           ▼                      │
+  │                            ┌─────────────────────────────────┐  │
+  │                            │        cairn daemon             │  │
+  │                            │     packages/daemon/            │  │
+  │                            │                                  │  │
+  │                            │  repositories/                   │  │
+  │                            │  scratchpad / checkpoints        │  │
+  │                            │  processes / conflicts           │  │
+  │                            │           │                      │  │
+  │                            │  SQLite (WAL mode)               │  │
+  │                            │  ~/.cairn/cairn.db               │  │
+  │                            │           │                      │  │
+  │                            │  git-stash backend               │  │
+  │                            │  snapshots/{ckpt_id}/            │  │
+  │                            └─────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key mechanisms**
+Each agent calls Cairn tools via MCP stdio. The mcp-server validates parameters and calls daemon storage functions. The daemon is the sole writer to SQLite. All state is local: `~/.cairn/cairn.db`.
 
-- Single chokepoint — all agent outbound calls go through Cairn (MCP proxy + HTTP proxy)
-- Per-agent lane isolation — each agent has an independent timeline; reverts do not interfere with each other
-- Pre-egress classification — calls are categorized before they leave, not after
-- Compensation handles registered at call time — when a call is allowed through, its rollback action is logged simultaneously
-- Approval gate on irreversible operations — hard deletes, payouts, regulatory submissions block until you explicitly approve or deny
+**v0.1 process model note:** The mcp-server imports daemon's compiled `dist/` functions directly. There is no separate long-running daemon process in v0.1 — both run in the same Node process, one per mcp-server instance. A standalone daemon with IPC is the v0.2 architecture direction.
 
 ---
 
-## The five properties
+## Getting started (current dogfood phase)
 
-| Property | What it means |
-|---|---|
-| **Honest Receipt** | Receipt separates "reverted / partial / irreversible-acknowledged." Exit `0` is not a lie. |
-| **Atomicity** | One agent's ops are all-or-nothing. Partial revert halts and flags. |
-| **Reversibility** | Classification and compensation registration happen before the call goes out. |
-| **Isolation** | Rolling back lane A does not touch lane B. |
-| **Semantic Consistency** | Post-revert API state equals pre-agent API state. Out-of-boundary side effects are enumerated in the receipt, not silently omitted. |
+v0.1 has no release packaging. This is an early-access / dogfood build. You clone, build, and wire up `.mcp.json` manually.
 
-The Reverter is not a thin wrapper around compensation API calls. It enforces five mechanisms on every step: invariant check, optimistic lock, idempotency key, a per-step and per-lane state machine, and structured receipt output. Any compensator that exits `0` without confirming state convergence is a product-level failure more dangerous than "can't undo." Cairn treats that as a regression, not an edge case.
+### Prerequisites
 
----
+- Node.js >= 24
+- Git
+- Claude Code with MCP support (`.mcp.json` configuration)
 
-## Modes: strict / acceptIrreversible / bypass
-
-How Cairn handles calls classified as irreversible (class ④) is up to you, not the product. Three modes, analogous to Claude Code's permission modes:
-
-| Mode | What happens on ④ calls | CC analog | Good for |
-|---|---|---|---|
-| **strict** (default) | Call is blocked, approval gate opens, you must explicitly approve or deny | CC default permission mode | First install, production environments, unfamiliar agents |
-| **acceptIrreversible** | Call goes through with a prominent warning, logged as `accepted-irreversible` | CC `acceptEdits` | Users who know the agent's behavior and review receipts |
-| **bypass** | Call goes through silently, still recorded to timeline | CC `bypassPermissions` | Sandboxes, personal repos, fully isolated environments |
-
-One important difference from CC's bypass: **Cairn's bypass mode still records everything and preserves full revert capability on reversible operations.** CC bypass means no safety net. Cairn bypass means the safety net runs quietly without interrupting you.
-
-Set mode in `~/.cairn/config.yaml`, or per-session: `cairn start --mode bypass` / `CAIRN_MODE=strict cairn start`.
-
----
-
-## Example
-
-A personal dev session, Friday afternoon. You ask Claude Code to add a `TODO.md` to a sandbox repo and open a PR for review, then go make coffee.
-
-```
-╭─────────────────────────────────────────────────────────────────────────────╮
-│  $ cairn lanes                                                              │
-╰─────────────────────────────────────────────────────────────────────────────╯
-pipeline  launch-team-tier-2026-04-21            T+180s   state: PAUSED
-
-  LANE   AGENT          OPS  LAST WRITE              CLASS  STATUS
-  ────   ───────────    ───  ────────────────────    ─────  ──────────────
-  A      code-agent      5   POST /issues/842/..      ③     [PASS] running
-  B      db-agent        5   COMMIT txn (3 writes)    ③     [WARN] data-loss risk on B.2
-  C      notify-agent    6   POST stripe/prices       ③     [WARN] push fan-out on C.2
-  O      orchestrator    1   PUT /pulls/842/merge     ④     [HOLD] approval gate open
-
-╭─────────────────────────────────────────────────────────────────────────────╮
-│  $ cairn revert lane-B --dry-run                                            │
-╰─────────────────────────────────────────────────────────────────────────────╯
-┌─ dry-run · no external calls will be issued ────────────────────────────────┐
-│  step 1  B.5  rollback txn marker                         [PASS]           │
-│  step 2  B.4  DELETE FROM team_seats WHERE id IN (12,13,14)                │
-│  step 3  B.3  DELETE FROM pricing_tiers WHERE id = 7                       │
-│  step 4  B.2  ALTER TABLE pricing_tiers DROP COLUMN new_tier   [WARN]      │
-│               └─ destructive: column data will be lost                     │
-│                                                                             │
-│  cross-lane dependency scan:                                                │
-│   [WARN] lane A.3 writes `pricing.ts` referencing column `new_tier`         │
-│          reverting B alone will leave PR #842 failing CI                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-╭─────────────────────────────────────────────────────────────────────────────╮
-│  $ cairn revert lane-B --confirm                                            │
-╰─────────────────────────────────────────────────────────────────────────────╯
-▸ acquiring lane-B write lock ........................................ [PASS]
-▸ freezing lane-A and lane-C (inbound proxy paused) .................. [PASS]
-▸ executing compensations (reverse order)
-    B.5  rollback marker ............................................. [PASS]  18ms
-    B.4  DELETE FROM team_seats (3 rows) ............................. [PASS]  42ms
-    B.3  DELETE FROM pricing_tiers WHERE id=7 ........................ [PASS]  11ms
-    B.2  ALTER TABLE DROP COLUMN new_tier ............................ [PASS] 204ms
-▸ resuming lane-A, lane-C inbound proxy .............................. [PASS]
-
-┌─ revert complete ───────────────────────────────────────────────────────────┐
-│  lane A   ③ running     (untouched, 5 ops retained)                         │
-│  lane B   ↩ reverted    (5 ops compensated, schema restored)    [PASS]      │
-│  lane C   ③ running     (untouched, 6 ops retained)                         │
-│  lane O   ⏸ still held at approval gate O.1                                 │
-│                                                                             │
-│  note: PR #842 in lane A now fails CI (refs dropped column).                │
-│        run `cairn revert lane-A` or push a fix to `feat/team-tier`.         │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-The receipt shows what was reverted and what wasn't. If the agent had sent an email notification to a reviewer, it would appear in `irreversibleSideEffects` — Cairn tells you it went out and that you may want to send a follow-up manually. It does not pretend it can recall an email.
-
----
-
-## Installation
+### Build
 
 ```bash
-# Install Cairn as a local daemon
-brew install cairn   # macOS (planned)
-# or
-curl -fsSL https://cairn.dev/install.sh | sh   # any platform (planned)
+git clone https://github.com/Upp-renlab/Cairn.git
+cd Cairn
 
-# Start the daemon
-cairn start
+# Build the daemon (output goes to packages/daemon/dist/)
+cd packages/daemon
+npm install
+npm run build
+
+# Build the mcp-server
+cd ../mcp-server
+npm install
+npm run build
 ```
 
-Cairn runs entirely on your local machine. Your agents point to:
-- MCP: `localhost:7777` (stdio or SSE)
-- HTTP proxy: `http://localhost:7778`
+### Wire up Claude Code
 
-No data leaves your machine unless you explicitly configure cloud sync (v0.3+).
+Add to your project's `.mcp.json` (or your global Claude Code MCP config):
 
-**v0.0.1 Preview** is in development. The preview targets a single external target (GitHub sandbox repo) with the full `record → classify → revert` pipeline, the five-mechanism compensator engine, and three fault injection scenarios in CI. See the Status section for the success criteria.
+```json
+{
+  "mcpServers": {
+    "cairn-wedge": {
+      "command": "node",
+      "args": ["<absolute-path-to>/packages/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+Replace `<absolute-path-to>` with the actual path to your Cairn clone.
+
+### Sample workflow
+
+```
+# In a Claude Code session, create a checkpoint before a big change
+cairn.checkpoint.create("before auth refactor")
+
+# Spawn subagents and have them write their results to scratchpad
+# (add this to your subagent system prompt or task description):
+# "When done, call cairn.scratchpad.write with key subagent/{agent_id}/result
+#  and include your full report including any fallback decisions."
+
+# Main agent can read subagent results even after context compression
+cairn.scratchpad.read("subagent/agent-b/result")
+
+# Preview a rewind before executing
+cairn.rewind.preview("<checkpoint_id>")
+
+# Rewind to that checkpoint, leaving docs/ untouched
+cairn.rewind.to("<checkpoint_id>", paths=["src/"])
+```
+
+For full engineering conventions (commit style, test commands, monorepo structure, push instructions), see [`CLAUDE.md`](CLAUDE.md).
+
+### Run tests
+
+```bash
+cd packages/daemon && npm test        # 67 tests
+cd packages/mcp-server && npm test    # 9 tests (8 acceptance + 1 stdio smoke)
+```
 
 ---
 
-## Integrations
+## What Cairn is not
 
-Works with any agent framework that supports an MCP server or HTTP proxy:
+These are boundary definitions, not disclaimers. Any design or feature request that violates these can be vetoed directly by reference to this list.
 
-- **Claude Code** — add Cairn as MCP server in `~/.claude/settings.json`
-- **Cursor** — configure MCP in Cursor settings
-- **LangGraph / CrewAI** — middleware / callback integration (planned v0.2)
-- **GitButler Agents** — drop-in next to virtual branches (planned v0.2)
+1. **Cairn is not an agent.** It does not execute development tasks, write code, open PRs, or edit files. For development work, use an agent. Not Cairn.
 
----
+2. **Cairn is not a dashboard.** You do not need to monitor 10 agents simultaneously in a grid view. That was an earlier design direction that was abandoned. The current UX model is ambient and CLI-first.
 
-## Status
+3. **Cairn is not a desktop pet.** A v1 concept had an anthropomorphized desktop companion. v2 dropped it. The v0.2 Floating Marker is a static visual carrier for the Inspector channel, not an animated character.
 
-**v0.0.1 Preview in development.** Not yet usable in production.
+4. **Cairn is not an agent framework or SDK.** It is a product for end users, not a library for developers building agents.
 
-Preview scope: one external target (GitHub sandbox repo), HTTP proxy only, CLI only, no web UI, no HTTPS MITM. Full compensator engine with fault injection.
+5. **Cairn is not another Claude Code skin.** Claude Code is one of Cairn's "applications." Cairn is the coordination kernel below it.
 
-**Success criteria for v0.0.1 Preview:**
-- A developer who did not write Cairn can install it and run the demo in under 10 minutes
-- Screencast reaches at least one of: 100 GitHub stars / 1k video views / 3 unsolicited issues from non-authors
-- All three fault injection scenarios pass in CI: `F-invariant` (incomplete before-image), `F-optlock` (concurrent modification conflict), `F-midstep` (mid-compensation failure producing `partial-revert`)
+6. **Cairn does not do cross-machine collaboration (v0.1).** Local-first. All data stays on your machine. Cross-machine sync is v0.3+.
 
-**Planned compensation targets for v0.1 MVP:**
-- Local filesystem (write / delete / move)
-- Local HTTP requests (generic)
-- Local SQLite / Postgres (via Docker)
-- GitHub API (PR / issue / branch operations)
-- Stripe (test mode)
-
-**Stretch (v0.2+):** Slack, Linear, Notion, MongoDB, S3, Kafka, Redis, Elasticsearch, BigQuery.
-
----
-
-## Project structure
-
-```
-cairn/
-├── README.md           # This file
-├── IMPLEMENTATION.md   # Engineering implementation doc (single source of truth)
-├── mockups/            # UI mockups
-│   └── timeline.html   # Web timeline preview
-├── cmd/                # CLI + daemon entry points (planned)
-├── recorder/           # MCP + HTTP proxy (planned)
-├── classifier/         # Four-class classification engine (planned)
-├── reverter/           # Compensating action library (planned)
-└── adapters/           # Per-target adapters (planned)
-```
+7. **Cairn does not proxy your agents' external calls.** There is no HTTP proxy, no Recorder/Classifier/Reverter pipeline, no compensation engine for SaaS API side effects. That was a previous product direction (pre-v2) that was replaced by the current Agent OS positioning.
 
 ---
 
 ## Roadmap
 
-- **v0.0.1 Preview (now):** GitHub sandbox, HTTP proxy, CLI, full compensator engine, fault injection CI
-- **v0.1 MVP (0-3 months):** Local-first full pipeline — filesystem + local HTTP + SQLite/Postgres + GitHub + Stripe test mode; MCP proxy; web timeline
-- **v0.2 (3-6 months):** LLM fallback classifier; 15 adapter targets; web approval UI; LangGraph / GitButler integrations
-- **v0.3 (6-12 months):** Team mode — multi-user approval, role-based policy, SIEM export, self-hosted option
-- **v0.4 (12+ months):** Enterprise — SSO, SOC2 Type II, on-prem, policy-as-code
+### v0.1 (in progress, W1–W12 2026)
 
-See `IMPLEMENTATION.md` for the engineering plan and the positioning document for the full roadmap.
+- W1+W2 complete: 8 MCP tools, SQLite persistence, git-stash checkpoint backend, task_id isolation
+- W2 complete: PoC-1 (SQLite concurrency) + PoC-2 (git hook latency) both PASS
+- W3: pre-implementation validation wrap-up (PoC-4 dogfood, D-1 research)
+- W4–W7: four-capability v1 build — conflict detection, process bus, Dispatch NL, Inspector query
+- W8–W10: integration, hardening, acceptance criteria verification
+- W11–W12: release packaging, onboarding polish, seed-user ship
+
+### v0.2
+
+- **Floating Marker** — persistent ambient desktop UI (Tauri; right-corner float panel with three visibility modes). This is the primary v0.2 UX investment.
+- **Path (b): Task tool wrapper** — stronger CC subagent integration for message reachability
+- **Echo diff / reverse summary** — semantic diff between subagent original output and main agent restatement
+- **Inspector panel UI** — conflict history, checkpoint timeline, scratchpad browser
+- L3–L5 checkpoint granularity (conversation truncation, tool call traces, agent internal state)
+
+### v0.3+
+
+- Cross-machine collaboration (multi-daemon sync, likely CRDT-based)
+- Non-MCP-aware agent integration (Cursor, Cline without `.mcp.json` — wrapper/sidecar path, pending D-1 research)
+- Large-concurrency optimization (N=50 SQLite ceiling documented in PoC-1, addressed here)
+- Multi-user shared daemon
 
 ---
 
-## Docs
+## The name
 
-- `IMPLEMENTATION.md` — engineering implementation doc, single source of truth for architecture and build plan
-- `mockups/timeline.html` — UI mockup for the lane timeline view
-- Positioning document is at `~/.claude/plans/agent-gitbutler-b-partitioned-feather.md` (private)
+A **cairn** (n.) is a stack of stones placed on a path to mark where someone has been — a waypoint, a direction indicator, a record that someone passed this way. In Tibetan Buddhist tradition, cairns (玛尼堆) mark sacred routes and accumulate over generations of travelers.
+
+The name fits the function. Cairn marks the path your agents walked, records what they changed, and gives you a way back if the path was wrong. It does not walk the path for you.
+
+The v0.2 Floating Marker is the desktop expression of this same idea: a small, persistent marker on your screen that shows the state of your agent coordination layer, the way a cairn on a trail shows you how far you have come and whether you are still on course.
 
 ---
+
+## Documentation map
+
+| Document | Contents |
+|---|---|
+| [`PRODUCT.md`](PRODUCT.md) | Product definition v2: positioning, four capabilities, user stories, roadmap, anti-definitions, UX forms |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Implementation architecture: system diagram, process model, monorepo structure, SQLite schema, MCP tool list, ADRs, known technical debt |
+| [`CLAUDE.md`](CLAUDE.md) | Engineering conventions: push workflow, Node/SQLite version constraints, commit style, test commands, monorepo build rules |
+| [`docs/superpowers/plans/`](docs/superpowers/plans/) | Weekly plans, PoC result reports, pre-implementation validation tracking |
+
+---
+
+## Contributing
+
+There is no formal contribution process yet. If you are in the early-access group, open an issue or reach out directly.
+
+Commit conventions follow [Conventional Commits](https://www.conventionalcommits.org/): `feat / fix / chore / docs / test` + short English body. No `Co-Authored-By` trailers. No emoji in commit messages. See [`CLAUDE.md`](CLAUDE.md) for the full style guide.
 
 ## License
 
-TBD — likely Apache 2.0 for core, commercial for enterprise features.
+No LICENSE file is present in the repository yet. The codebase is source-available. Do not distribute or use in production without explicit permission from the authors.
 
----
-
-## Contact
-
-TBD
+<!-- TODO for user: decide on license (MIT / Apache 2.0 / source-available with eventual open-source) and add a LICENSE file at repo root. The old README listed "likely Apache 2.0 for core, commercial for enterprise features" as TBD — that decision is still open. -->
