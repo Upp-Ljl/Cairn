@@ -350,8 +350,8 @@ agent 调用 cairn.checkpoint.create(label, paths=[...])
 **通知机制**：v0.1 基础版走 stdout 打印 + CLI 查询（`cairn.conflict.list`）。系统通知（macOS 通知中心 / Windows 通知）的具体形式 🚧 D-2 dogfood 后定，v0.1 先打文字通知。
 
 **相关锚点**：
-- 🚧 PoC-1：race window 处理（两 agent 在 < 1ms 内同时调 `checkpoint.create`，SQLite 锁是否够，语义如何）
-- 🚧 PoC-2：git pre-commit hook 与 daemon 通信的延迟和稳定性
+- ✓ PoC-1（2026-04-29）：在 N=2/5/10 并发 writer 下 SQLite WAL + busy_timeout=5000ms 提供完整事务隔离 + 零数据丢失，p99 < 6ms。conflict-detection 应用层逻辑可以直接叠加，不需要更强的并发原语。N=50 极端场景下 p99=449ms（架构天花板，记录为 v0.3 议题）。详见 `docs/superpowers/plans/2026-04-29-poc-1-results.md`。
+- ✓ PoC-2（2026-04-29）：v0.1 hook 直接打开 SQLite（v0.1 无长跑 daemon），p99 在 clean/small/medium 场景 < 90ms，large（1000 staged files）= 122ms，远低于 1000ms 预算。Node 冷启动 ~70ms 是主要成本，SQLite 边际查询 ~45μs/path。fail-open 验证：DB 缺失时 24ms 内 exit 0。详 `docs/superpowers/plans/2026-04-29-poc-2-results.md`。
 - 🚧 D-4：假阳性率（dogfood 实测）
 
 ### 6.2 状态可逆
@@ -618,7 +618,7 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 | `packages/daemon/src/index.ts` 是占位 | `packages/daemon/src/index.ts` | 真正的 daemon 主入口实现时覆盖 | v0.2 daemon 独立进程 |
 | migration 没有 down migration | `packages/daemon/src/storage/migrations/` | 无法回滚 schema 变更（见 DESIGN_STORAGE.md §11） | v0.2 评估是否需要 |
 | SQLite WAL 在 Windows 含中文 / 空格路径的行为未测 | `~/.cairn/cairn.db` | 潜在路径编码问题 | W3 dogfood 启动时集成测试覆盖 |
-| 8 个工具的并发安全性只有单线程测试 | `packages/daemon/tests/` `packages/mcp-server/tests/` | 多 agent 并发调用未验证 | 🚧 PoC-1（race window 验证） |
+| 8 个工具的并发安全性 | `packages/daemon/tests/` `packages/mcp-server/tests/` | W1+W2 单线程测试覆盖；v0.1 ICP 假设的并发度（N≤10）由 PoC-1（2026-04-29）覆盖，零失败 | N≥50 尾延迟天花板见 §10 v0.3 议题 |
 | v0.1 没有 release packaging | 仓库根 | 用户需要手动 clone + build 安装 | v0.1 ship（W11-W12）前补 |
 | `processes` 表心跳 GC 未实现 | `packages/daemon/src/storage/repositories/` | DEAD 状态的 process 行会积累 | 进程总线实现时补 `gcDeadProcesses()` |
 | conflict 表无自动 GC | `packages/daemon/src/storage/repositories/` | RESOLVED / IGNORED 记录长期积累 | dogfood 数据决定 GC 策略（按天 / 按量） |
@@ -679,8 +679,8 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 
 | 锚点 | 出现节 | 内容 | 回填触发条件 |
 |---|---|---|---|
-| 🚧 PoC-1 | §6.1 §9（技术债） | MCP-call 边界 race window；SQLite 锁语义；并发 `checkpoint.create` 语义 | PoC 用两个并发 MCP client 实测 < 1ms 双写场景 |
-| 🚧 PoC-2 | §6.1 | git pre-commit hook 与 daemon 通信延迟和稳定性 | hook 跑 P95 延迟 < 500ms，用户抱怨率 = 0 |
+| ✓ PoC-1 | §6.1 §9（技术债） | MCP-call 边界 race window；SQLite 锁语义；并发 `checkpoint.create` 语义 | **已完成（2026-04-29）**：N=2/5/10 PASS，N=50 p99=449ms 记录为 v0.3 议题。详 `docs/superpowers/plans/2026-04-29-poc-1-results.md` |
+| ✓ PoC-2 | §6.1 | hook 端到端延迟 + fail-open 行为 | **已完成（2026-04-29）**：5/5 场景全 PASS，large p99=122ms（预算 1000ms），fail-open 验证。详 `docs/superpowers/plans/2026-04-29-poc-2-results.md` |
 | 🚧 PoC-3 | §6.3 ADR-4 | Dispatch LLM 选型（Sonnet API vs 本地 7B 模型） | 准确率测试集跑完 + 延迟对比 |
 | 🚧 PoC-4 | §6.4 | CC Task tool 实际调用 `cairn.scratchpad.write` 的频率；v0.1 是否需要"强制 reload"兜底 | dogfood 会话记录（每次 subagent 结束时的调用率统计） |
 | 🚧 D-1 | ADR-6 | 非 MCP-aware agent（Cursor / Cline）接入路径调研 | 用户反馈 Cursor / Cline 接入需求的强度 |
@@ -701,5 +701,5 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 | checkpoint PENDING 超时阈值 | 5 分钟 | DESIGN_STORAGE.md §8；超时则标 CORRUPTED |
 | scratchpad 默认 TTL（选项 A） | 86400000 ms（24 小时） | DESIGN_STORAGE.md §15 OQ-5 |
 | 大对象内联 / 外联阈值 | 128 KB | DESIGN_STORAGE.md §2.1；小于 128 KB 内联 JSON，大于走 blob 文件 |
-| in-flight 冲突检测窗口 | 待 PoC-1 确认 | 🚧 PoC-1 |
+| in-flight 冲突检测窗口 | 由应用层 SELECT + INSERT 构成（无显式 window）；SQLite WAL + busy_timeout=5000ms 提供并发隔离 | PoC-1（2026-04-29）已验证至 N=10 |
 | Dispatch LLM 超时 | 待 PoC-3 确认 | 🚧 PoC-3 |

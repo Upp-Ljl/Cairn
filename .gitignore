@@ -37,3 +37,6 @@ Thumbs.db
 
 # Local MCP config (use .mcp.json.example as template)
 .mcp.json
+
+# PoC artifacts (run-specific, regenerable)
+artifacts/
