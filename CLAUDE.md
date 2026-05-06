@@ -24,14 +24,28 @@ Token 文件（已 gitignored）：
 D:\lll\cairn\.cairn-push-token\token.txt
 ```
 
-push 命令：
+push 命令（**必须带 `-c http.sslBackend=openssl`**，详见下条）：
 
 ```bash
 cd D:/lll/cairn
 TOKEN=$(cat .cairn-push-token/token.txt | tr -d '[:space:]')
-git push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" main
+git -c http.sslBackend=openssl push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" main
 # 注意：每次输出都要 sed 把 TOKEN 替换成 <REDACTED>，不要泄露到日志
 ```
+
+### TLS 坑（2026-04-29 EOD 发现）
+
+git for Windows 默认 `http.sslBackend=schannel`（Windows 原生 SSL）和 GitHub 的 TLS 1.3 协商在这台机器上有 bug，push 会报：
+
+```
+fatal: unable to access '...': TLS connect error:
+error:0A000126:SSL routines::unexpected eof while reading
+```
+
+注意：curl 能连通 GitHub（HTTP 200），所以**不是网络问题**，是 git 的 TLS 实现问题。
+
+**解法**：每次 push 加 `-c http.sslBackend=openssl`（git for Windows 自带 openssl 后端），单次生效，不污染 global config。
+**也可以**：`git config --global http.sslBackend openssl`（永久切换；但作者倾向单次显式）。
 
 fetch 同理（如果本地 `origin/main` 引用没跟上）：
 
