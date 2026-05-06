@@ -195,3 +195,102 @@ describe('003-checkpoints schema', () => {
     ).toThrow(/CHECK constraint failed/);
   });
 });
+
+describe('004-processes-conflicts schema', () => {
+  it('creates processes table with correct columns', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(processes)').all() as Array<{
+      name: string; pk: number; notnull: number;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'agent_id', 'agent_type', 'capabilities', 'status',
+      'registered_at', 'last_heartbeat', 'heartbeat_ttl',
+    ]));
+    // agent_id PK
+    expect(cols.find((c) => c.name === 'agent_id')?.pk).toBe(1);
+    // NOT NULL columns
+    expect(cols.find((c) => c.name === 'agent_type')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'status')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'registered_at')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'last_heartbeat')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'heartbeat_ttl')?.notnull).toBe(1);
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='processes'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('idx_processes_status');
+  });
+
+  it('creates conflicts table with correct columns', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(conflicts)').all() as Array<{
+      name: string; pk: number; notnull: number;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'id', 'detected_at', 'conflict_type', 'agent_a', 'agent_b',
+      'paths_json', 'summary', 'status', 'resolved_at', 'resolution',
+    ]));
+    // id PK
+    expect(cols.find((c) => c.name === 'id')?.pk).toBe(1);
+    // NOT NULL columns
+    expect(cols.find((c) => c.name === 'detected_at')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'conflict_type')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'agent_a')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'paths_json')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'status')?.notnull).toBe(1);
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='conflicts'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toEqual(
+      expect.arrayContaining(['idx_conflicts_detected_at', 'idx_conflicts_status']),
+    );
+  });
+
+  it('migration 004 is idempotent (running twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 4")
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+
+  it('enforces processes.status CHECK constraint', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO processes (agent_id, agent_type, status, registered_at, last_heartbeat)
+         VALUES ('a1', 'custom', 'ZOMBIE', 0, 0)`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('enforces conflicts.conflict_type CHECK constraint', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO conflicts (id, detected_at, conflict_type, agent_a, paths_json, status)
+         VALUES ('01', 0, 'BOGUS_TYPE', 'a1', '[]', 'OPEN')`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('enforces conflicts.status CHECK constraint', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO conflicts (id, detected_at, conflict_type, agent_a, paths_json, status)
+         VALUES ('02', 0, 'FILE_OVERLAP', 'a1', '[]', 'NOT_A_STATUS')`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+});

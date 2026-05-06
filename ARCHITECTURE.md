@@ -350,10 +350,22 @@ agent 调用 cairn.checkpoint.create(label, paths=[...])
 
 **通知机制**：v0.1 基础版走 stdout 打印 + CLI 查询（`cairn.conflict.list`）。系统通知（macOS 通知中心 / Windows 通知）的具体形式 🚧 D-2 dogfood 后定，v0.1 先打文字通知。
 
+**✓ v0.1 W4 Day 1 实施（2026-05-06）**：
+
+migration 004（`processes` + `conflicts` 表）已落地，进程总线 4 工具 + 冲突检测 service + `cairn.conflict.list` 工具 + git pre-commit hook (`cairn install`) 全部到位。daemon tests 90 → 147（+57），mcp-server tests 42 → 64（+22）。
+
+**v1 简化（必须知道，否则误判检测能力）**：
+
+1. **`checkpoints` 表无 `agent_id` 列也无 `paths_json` 列**（migration 003 已锁，append-only）。conflict-detection 只能用 `task_id` 作为 agent 身份代理——**约定 caller 把 agent_id 作为 task_id 传入** `cairn.checkpoint.create`，否则不归因
+2. **"overlapping paths" 在 v1 直接返回 caller 声明的 paths**（不算真交集）。要做精确"两 agent 真改了同一文件"判断，需 migration 005 给 `checkpoints` 加 `paths_json` 列（v0.2 议题）
+3. **冲突检测窗口默认 5 分钟**，超出窗口的历史 checkpoint 不参与比对
+4. **agent_id 在 `cairn.checkpoint.create` 是可选参数**（向后兼容），未传则跳过冲突检测
+
 **相关锚点**：
 - ✓ PoC-1（2026-04-29）：在 N=2/5/10 并发 writer 下 SQLite WAL + busy_timeout=5000ms 提供完整事务隔离 + 零数据丢失，p99 < 6ms。conflict-detection 应用层逻辑可以直接叠加，不需要更强的并发原语。N=50 极端场景下 p99=449ms（架构天花板，记录为 v0.3 议题）。详见 `docs/superpowers/plans/2026-04-29-poc-1-results.md`。
 - ✓ PoC-2（2026-04-29）：v0.1 hook 直接打开 SQLite（v0.1 无长跑 daemon），p99 在 clean/small/medium 场景 < 90ms，large（1000 staged files）= 122ms，远低于 1000ms 预算。Node 冷启动 ~70ms 是主要成本，SQLite 边际查询 ~45μs/path。fail-open 验证：DB 缺失时 24ms 内 exit 0。详 `docs/superpowers/plans/2026-04-29-poc-2-results.md`。
-- 🚧 D-4：假阳性率（dogfood 实测）
+- ✓ W4 Day 1（2026-05-06）：v1 落地。后续精度提升见上「v1 简化」段
+- 🚧 D-4：假阳性率（自用阶段自己感知；personal-build 决策 36 已砍 dogfood 大样本）
 
 ### 6.2 状态可逆
 
@@ -700,6 +712,7 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 | 项目 | 位置 | 影响 | 清理时机 |
 |---|---|---|---|
 | stash SHA 编码在 `checkpoints.label` | `packages/daemon/src/storage/repositories/checkpoints.ts` | P2 加 `backend_data TEXT` 列后需迁移 | P2 落地时 |
+| `checkpoints` 表缺 `agent_id` + `paths_json` 列 | `packages/daemon/src/storage/migrations/003-checkpoints.ts` | conflict-detection v1 用 task_id 作 agent 代理，"overlapping paths" 不是真交集 | v0.2 加 migration 005（ALTER TABLE checkpoints ADD COLUMN）或新建关联表 |
 | mcp-server 直接 import daemon `dist/` | `packages/mcp-server/src/tools/` | monorepo 工具引入时统一治理 | 引入 pnpm workspaces / nx 时 |
 | `packages/daemon/src/index.ts` 是占位 | `packages/daemon/src/index.ts` | 真正的 daemon 主入口实现时覆盖 | v0.2 daemon 独立进程 |
 | migration 没有 down migration | `packages/daemon/src/storage/migrations/` | 无法回滚 schema 变更（见 DESIGN_STORAGE.md §11） | v0.2 评估是否需要 |

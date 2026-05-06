@@ -6,6 +6,7 @@ import {
   listCheckpoints,
 } from '../../../daemon/dist/storage/repositories/checkpoints.js';
 import { gitStashSnapshot } from '../../../daemon/dist/storage/snapshots/git-stash.js';
+import { detectConflict } from '../../../daemon/dist/services/conflict-detection.js';
 import type { Workspace } from '../workspace.js';
 
 export interface CreateCheckpointArgs {
@@ -19,6 +20,20 @@ export interface CreateCheckpointArgs {
    * (file scoping is still controlled by the `paths` argument on rewind).
    */
   task_id?: string;
+  /**
+   * Optional agent identifier for conflict detection. When supplied, cairn
+   * will query the process bus for other active agents that have recently
+   * created checkpoints and flag any potential FILE_OVERLAP conflicts.
+   * Omitting this parameter skips conflict detection entirely (backward-
+   * compatible behavior for callers that have not opted into the process bus).
+   */
+  agent_id?: string;
+  /**
+   * File paths this checkpoint covers. Used together with `agent_id` to
+   * surface conflict information in the response. Has no effect when
+   * `agent_id` is not supplied.
+   */
+  paths?: string[];
 }
 
 export interface ListCheckpointsArgs {
@@ -32,6 +47,28 @@ export interface ListCheckpointsArgs {
 }
 
 export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) {
+  // Phase 0 (optional): conflict detection — only when agent_id is supplied.
+  let conflictInfo: {
+    id: string;
+    conflictedWith: string[];
+    overlappingPaths: string[];
+  } | undefined;
+
+  if (args.agent_id != null && args.agent_id !== '') {
+    const detection = detectConflict(ws.db, {
+      agentId: args.agent_id,
+      paths: args.paths ?? [],
+      windowMinutes: 5,
+    });
+    if (detection.conflictId !== null) {
+      conflictInfo = {
+        id: detection.conflictId,
+        conflictedWith: detection.conflictedWith,
+        overlappingPaths: detection.overlappingPaths,
+      };
+    }
+  }
+
   // Phase 1: insert PENDING row
   const ckpt = createPendingCheckpoint(ws.db, {
     label: args.label ?? null,
@@ -66,12 +103,21 @@ export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) 
     git_head: string | null;
     stash_sha: string | null;
     warning?: string;
+    conflict?: {
+      id: string;
+      conflictedWith: string[];
+      overlappingPaths: string[];
+    };
   } = {
     id: ckpt.id,
     task_id: ckpt.task_id,
     git_head: gitHead,
     stash_sha: stashSha,
   };
+
+  if (conflictInfo !== undefined) {
+    result.conflict = conflictInfo;
+  }
   if (stashSha === null && gitHead === null) {
     // Genuinely unrecoverable: no stash AND no git HEAD (not a git repo).
     result.warning =
