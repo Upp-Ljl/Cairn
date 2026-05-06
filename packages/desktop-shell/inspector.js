@@ -23,8 +23,26 @@ function renderConflicts(rows) {
   const el = document.getElementById('conflicts-list');
   if (!rows.length) { el.innerHTML = '<span class="empty">no open conflicts</span>'; return; }
   el.innerHTML = rows.map(r =>
-    `<div class="row"><span class="pill pill-open">OPEN</span>#${r.id} ${r.conflict_type} — ${r.agent_a} ↔ ${r.agent_b} — ${trunc(r.summary, 60)} <kbd>${rel(r.detected_at)}</kbd></div>`
+    `<div class="row" data-conflict-id="${r.id}"><span class="pill pill-open">OPEN</span>#${r.id} ${r.conflict_type} — ${r.agent_a} ↔ ${r.agent_b} — ${trunc(r.summary, 60)} <kbd>${rel(r.detected_at)}</kbd> <button class="resolve-btn" data-id="${r.id}">Resolve</button> <span class="resolve-status"></span></div>`
   ).join('');
+
+  el.querySelectorAll('.resolve-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-id');
+      btn.disabled = true;
+      const statusEl = btn.nextElementSibling;
+      const res = await window.cairn.resolveConflict(id);
+      if (res.ok) {
+        statusEl.textContent = 'Resolved!';
+        statusEl.style.color = '#7f7';
+        setTimeout(() => poll(), 800);
+      } else {
+        statusEl.textContent = res.error || 'failed';
+        statusEl.style.color = '#f77';
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 function renderDispatches(rows) {

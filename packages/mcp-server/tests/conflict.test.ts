@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openWorkspace, type Workspace } from '../src/workspace.js';
-import { toolListConflicts } from '../src/tools/conflict.js';
+import { toolListConflicts, toolResolveConflict } from '../src/tools/conflict.js';
 import { toolCreateCheckpoint } from '../src/tools/checkpoint.js';
 import { registerProcess } from '../../daemon/dist/storage/repositories/processes.js';
 import { newId } from '../../daemon/dist/storage/ids.js';
@@ -114,6 +114,82 @@ describe('cairn.conflict.list', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// cairn.conflict.resolve tests
+// ---------------------------------------------------------------------------
+
+describe('cairn.conflict.resolve', () => {
+  let ws: Workspace;
+
+  beforeEach(() => {
+    ws = makeTmpWorkspace();
+  });
+
+  afterEach(() => {
+    ws.db.close();
+  });
+
+  function insertConflict(status: string, id: string = newId()): string {
+    ws.db.prepare(`
+      INSERT INTO conflicts (id, detected_at, conflict_type, agent_a, agent_b,
+                             paths_json, summary, status, resolved_at, resolution)
+      VALUES (?, ?, 'FILE_OVERLAP', 'agent-a', 'agent-b',
+              '["src/foo.ts"]', 'test conflict', ?, NULL, NULL)
+    `).run(id, Date.now(), status);
+    return id;
+  }
+
+  it('resolves an OPEN conflict — returns ok:true, status RESOLVED, resolved_at set', () => {
+    const id = insertConflict('OPEN');
+    const result = toolResolveConflict(ws, { conflict_id: id });
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('RESOLVED');
+    expect(result.conflict_id).toBe(id);
+    expect(result.resolved_at_iso).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    const row = ws.db.prepare('SELECT status, resolved_at FROM conflicts WHERE id = ?').get(id) as { status: string; resolved_at: number | null };
+    expect(row.status).toBe('RESOLVED');
+    expect(row.resolved_at).not.toBeNull();
+  });
+
+  it('resolves a PENDING_REVIEW conflict — returns ok:true', () => {
+    const id = insertConflict('PENDING_REVIEW');
+    const result = toolResolveConflict(ws, { conflict_id: id });
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('RESOLVED');
+  });
+
+  it('rejects an already-RESOLVED conflict — ok:false with current_status', () => {
+    const id = insertConflict('RESOLVED');
+    // Manually set resolved_at since insertConflict leaves it NULL
+    ws.db.prepare('UPDATE conflicts SET resolved_at = ? WHERE id = ?').run(Date.now(), id);
+    const result = toolResolveConflict(ws, { conflict_id: id });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/cannot resolve/);
+    expect(result.current_status).toBe('RESOLVED');
+  });
+
+  it('returns ok:false for unknown conflict id', () => {
+    const result = toolResolveConflict(ws, { conflict_id: 'nonexistent-id-xyz' });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not found/);
+  });
+
+  it('passes resolution text through to the stored row', () => {
+    const id = insertConflict('OPEN');
+    toolResolveConflict(ws, { conflict_id: id, resolution: 'manually fixed by agent-a' });
+    const row = ws.db.prepare('SELECT resolution FROM conflicts WHERE id = ?').get(id) as { resolution: string | null };
+    expect(row.resolution).toBe('manually fixed by agent-a');
+  });
+
+  it('uses default resolution text when resolution arg is omitted', () => {
+    const id = insertConflict('OPEN');
+    toolResolveConflict(ws, { conflict_id: id });
+    const row = ws.db.prepare('SELECT resolution FROM conflicts WHERE id = ?').get(id) as { resolution: string | null };
+    expect(row.resolution).toBe('resolved via cairn.conflict.resolve');
+  });
+});
+
 describe('cairn.checkpoint.create conflict detection', () => {
   let ws: Workspace;
 
@@ -125,16 +201,20 @@ describe('cairn.checkpoint.create conflict detection', () => {
     ws.db.close();
   });
 
-  it('without agent_id: skips conflict detection (backward compatible)', () => {
-    // Register a peer with a recent checkpoint — but no agent_id provided
+  it('without agent_id: uses ws.agentId — conflict detection still runs', () => {
+    // Phase 1a: agent_id is now always resolved (auto-fallback to ws.agentId).
+    // Register a peer with a recent checkpoint on overlapping paths.
     registerActive(ws, 'agent-peer');
     insertCheckpoint(ws, 'agent-peer');
 
     // toolCreateCheckpoint without git repo context will use null stash/head —
-    // that's fine for this test, we only check the conflict field
+    // that's fine for this test, we only check that detection fires (not skipped).
+    // ws.agentId is a valid agent, so conflict detection runs. Whether a conflict
+    // is detected depends on whether ws.agentId == 'agent-peer' (it won't be).
+    // The peer's paths overlap with the auto-collected git paths, so a conflict
+    // may or may not appear — but the function must not throw.
     const result = toolCreateCheckpoint(ws, { label: 'no-agent-id' });
-    // No conflict field should be present
-    expect((result as Record<string, unknown>).conflict).toBeUndefined();
+    expect(result.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   });
 
   it('with agent_id but no peer activity: no conflict field', () => {

@@ -10,7 +10,7 @@ import { toolWriteScratch, toolReadScratch, toolListScratch, toolDeleteScratch }
 import { toolCreateCheckpoint, toolListCheckpoints } from './tools/checkpoint.js';
 import { toolRewindPreview, toolRewindTo } from './tools/rewind.js';
 import { toolRegisterProcess, toolHeartbeat, toolListProcesses, toolGetProcess } from './tools/process.js';
-import { toolListConflicts } from './tools/conflict.js';
+import { toolListConflicts, toolResolveConflict } from './tools/conflict.js';
 import { toolInspectorQuery } from './tools/inspector.js';
 import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
 
@@ -102,7 +102,7 @@ const TOOLS = [
   },
   {
     name: 'cairn.process.register',
-    description: 'Register an agent on the process bus. Re-registering with the same agent_id resets the heartbeat timer.',
+    description: 'Register an agent on the process bus. Re-registering with the same agent_id resets the heartbeat timer. When omitted, agent_id defaults to the session id (sha1 of host+cwd) and agent_type defaults to "session".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,18 +118,16 @@ const TOOLS = [
           description: 'Heartbeat TTL in ms. Defaults to 60000 (1 minute).',
         },
       },
-      required: ['agent_id', 'agent_type'],
     },
   },
   {
     name: 'cairn.process.heartbeat',
-    description: 'Update last_heartbeat for the agent. Keeps the agent ACTIVE; reactivates a DEAD agent.',
+    description: 'Update last_heartbeat for the agent. Keeps the agent ACTIVE; reactivates a DEAD agent. When agent_id is omitted, defaults to the session id (sha1 of host+cwd).',
     inputSchema: {
       type: 'object',
       properties: {
         agent_id: { type: 'string', description: 'Unique identifier for the agent' },
       },
-      required: ['agent_id'],
     },
   },
   {
@@ -147,13 +145,12 @@ const TOOLS = [
   },
   {
     name: 'cairn.process.status',
-    description: 'Get the current status of a specific agent by agent_id.',
+    description: 'Get the current status of a specific agent by agent_id. When agent_id is omitted, defaults to the session id (sha1 of host+cwd).',
     inputSchema: {
       type: 'object',
       properties: {
         agent_id: { type: 'string', description: 'Unique identifier for the agent' },
       },
-      required: ['agent_id'],
     },
   },
   {
@@ -167,6 +164,24 @@ const TOOLS = [
           description: 'ISO 8601 timestamp. Only conflicts detected at or after this time are returned.',
         },
       },
+    },
+  },
+  {
+    name: 'cairn.conflict.resolve',
+    description: '解决一个冲突（OPEN/PENDING_REVIEW → RESOLVED）。可选 resolution 文本记录解决理由。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conflict_id: {
+          type: 'string',
+          description: 'The ULID id of the conflict to resolve.',
+        },
+        resolution: {
+          type: 'string',
+          description: 'Optional human-written explanation of how the conflict was resolved.',
+        },
+      },
+      required: ['conflict_id'],
     },
   },
   {
@@ -243,7 +258,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.process.heartbeat': result = toolHeartbeat(ws, a); break;
     case 'cairn.process.list':      result = toolListProcesses(ws, a); break;
     case 'cairn.process.status':    result = toolGetProcess(ws, a); break;
-    case 'cairn.conflict.list':       result = toolListConflicts(ws, a); break;
+    case 'cairn.conflict.list':        result = toolListConflicts(ws, a); break;
+    case 'cairn.conflict.resolve':     result = toolResolveConflict(ws, a); break;
     case 'cairn.inspector.query':     result = toolInspectorQuery(ws, a); break;
     case 'cairn.dispatch.request':    result = await toolDispatchRequest(ws, a); break;
     case 'cairn.dispatch.confirm':    result = toolDispatchConfirm(ws, a); break;

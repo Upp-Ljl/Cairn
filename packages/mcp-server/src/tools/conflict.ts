@@ -1,11 +1,19 @@
 import {
   listConflicts,
+  getConflict,
+  resolveConflict,
 } from '../../../daemon/dist/storage/repositories/conflicts.js';
 import type { Workspace } from '../workspace.js';
 
 // ---------------------------------------------------------------------------
 // Arg types
 // ---------------------------------------------------------------------------
+
+export interface ResolveConflictArgs {
+  conflict_id: string;
+  /** Optional human-written explanation. */
+  resolution?: string;
+}
 
 export interface ListConflictsArgs {
   /**
@@ -18,6 +26,30 @@ export interface ListConflictsArgs {
 // ---------------------------------------------------------------------------
 // Tool handlers
 // ---------------------------------------------------------------------------
+
+export function toolResolveConflict(ws: Workspace, args: ResolveConflictArgs) {
+  if (!args.conflict_id) {
+    return { ok: false, error: 'conflict_id is required' };
+  }
+
+  const existing = getConflict(ws.db, args.conflict_id);
+  if (!existing) {
+    return { ok: false, error: `conflict not found: ${args.conflict_id}` };
+  }
+  if (existing.status === 'RESOLVED' || existing.status === 'IGNORED') {
+    return { ok: false, error: `cannot resolve: status is ${existing.status}`, current_status: existing.status };
+  }
+
+  const resolutionText = args.resolution ?? 'resolved via cairn.conflict.resolve';
+  const updated = resolveConflict(ws.db, args.conflict_id, resolutionText);
+
+  return {
+    ok: true,
+    conflict_id: args.conflict_id,
+    status: 'RESOLVED',
+    resolved_at_iso: updated?.resolved_at != null ? new Date(updated.resolved_at).toISOString() : new Date().toISOString(),
+  };
+}
 
 export function toolListConflicts(ws: Workspace, args: ListConflictsArgs = {}) {
   // Default: last 24 hours

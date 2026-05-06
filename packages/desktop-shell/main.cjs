@@ -7,12 +7,24 @@ const fs = require('fs');
 const DB_PATH = path.join(os.homedir(), '.cairn', 'cairn.db');
 
 let db = null;
+let writeDb = null;
 let petWindow = null;
 let inspectorWindow = null;
 
+// Read handle: readonly, used for all list/query paths (high-frequency reads).
+// Write handle: opened lazily on first write operation (WAL allows concurrent
+// read+write in-process; keeping separate handles avoids accidentally promoting
+// read paths to RW).
 function openDb() {
   const Database = require('better-sqlite3');
   return new Database(DB_PATH, { readonly: true, fileMustExist: true });
+}
+
+function openWriteDb() {
+  if (writeDb) return writeDb;
+  const Database = require('better-sqlite3');
+  writeDb = new Database(DB_PATH, { fileMustExist: true });
+  return writeDb;
 }
 
 function getTables() {
@@ -153,6 +165,30 @@ ipcMain.handle('get-open-conflicts', () => queryOpenConflicts());
 ipcMain.handle('get-recent-dispatches', () => queryRecentDispatches());
 ipcMain.handle('get-active-lanes', () => queryActiveLanes());
 
+ipcMain.handle('resolve-conflict', (_e, conflictId, resolution) => {
+  try {
+    const wdb = openWriteDb();
+    const resolutionText = resolution || 'resolved via Inspector';
+    const now = Date.now();
+    const result = wdb.prepare(`
+      UPDATE conflicts
+         SET status = 'RESOLVED',
+             resolved_at = ?,
+             resolution = ?
+       WHERE id = ? AND status IN ('OPEN', 'PENDING_REVIEW')
+    `).run(now, resolutionText, conflictId);
+    if (result.changes === 0) {
+      // Either not found or already in a terminal state
+      const row = wdb.prepare('SELECT status FROM conflicts WHERE id = ?').get(conflictId);
+      const reason = row ? `conflict status is already ${row.status}` : 'conflict not found';
+      return { ok: false, error: reason };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.on('open-inspector', () => {
   if (inspectorWindow) {
     inspectorWindow.focus();
@@ -181,6 +217,13 @@ ipcMain.on('do-drag', (_e, { mouseX, mouseY }) => {
 app.whenReady().then(() => {
   const dbAvailable = fs.existsSync(DB_PATH);
   if (dbAvailable) {
+    // ensure WAL mode so pet's read handle never blocks writers
+    try {
+      const Database = require('better-sqlite3');
+      const rwInit = new Database(DB_PATH);
+      rwInit.pragma('journal_mode = WAL');
+      rwInit.close();
+    } catch (_e) { /* DB not ready yet — mcp-server will WAL-init on first write */ }
     try { db = openDb(); } catch (e) { db = null; }
   }
   console.log(`cairn pet ready — db=${DB_PATH} available=${db !== null}`);
