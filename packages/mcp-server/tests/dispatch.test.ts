@@ -22,6 +22,7 @@ import {
 } from '../../daemon/dist/storage/repositories/dispatch-requests.js';
 import {
   getScratch,
+  putScratch,
 } from '../../daemon/dist/storage/repositories/scratchpad.js';
 
 // ---------------------------------------------------------------------------
@@ -405,6 +406,139 @@ describe('dispatch tools', () => {
       const conf = toolDispatchConfirm(ws, { request_id: requestId });
       expect(conf.ok).toBe(true);
       expect((conf as any).target_agent).toBe('doc-agent');
+    });
+  });
+
+  // =========================================================================
+  // 3a: CAIRN_DISPATCH_FORCE_FAIL env hook
+  // =========================================================================
+
+  describe('CAIRN_DISPATCH_FORCE_FAIL', () => {
+    it('FORCE_FAIL=1 → ok=false, status=FAILED, request_id present, DB row FAILED', async () => {
+      const prev = process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+      process.env['CAIRN_DISPATCH_FORCE_FAIL'] = '1';
+      try {
+        const r = await toolDispatchRequest(ws, { nl_intent: 'do some important work here' });
+        expect(r.ok).toBe(false);
+        expect((r as any).status).toBe('FAILED');
+        expect(typeof (r as any).request_id).toBe('string');
+        expect((r as any).error).toMatch(/CAIRN_DISPATCH_FORCE_FAIL/);
+
+        // Verify DB row
+        const row = getDispatchRequest(ws.db, (r as any).request_id);
+        expect(row).not.toBeNull();
+        expect(row!.status).toBe('FAILED');
+      } finally {
+        if (prev === undefined) delete process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+        else process.env['CAIRN_DISPATCH_FORCE_FAIL'] = prev;
+      }
+    });
+
+    it('FORCE_FAIL=true → same FAILED behavior', async () => {
+      const prev = process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+      process.env['CAIRN_DISPATCH_FORCE_FAIL'] = 'true';
+      try {
+        const r = await toolDispatchRequest(ws, { nl_intent: 'another important task here' });
+        expect(r.ok).toBe(false);
+        expect((r as any).status).toBe('FAILED');
+      } finally {
+        if (prev === undefined) delete process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+        else process.env['CAIRN_DISPATCH_FORCE_FAIL'] = prev;
+      }
+    });
+
+    it('FORCE_FAIL unset → normal happy path continues', async () => {
+      const prev = process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+      delete process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+      try {
+        const r = await toolDispatchRequest(ws, { nl_intent: 'implement feature X in typescript' });
+        expect(r.ok).toBe(true);
+      } finally {
+        if (prev !== undefined) process.env['CAIRN_DISPATCH_FORCE_FAIL'] = prev;
+      }
+    });
+  });
+
+  // =========================================================================
+  // 3b: Rule R6 — recent rewind warning
+  // =========================================================================
+
+  describe('applyFallbackRules R6 (unit)', () => {
+    it('R6 triggered: recentRewindMs = 1000 (within 3s) → [FALLBACK R6] in applied', () => {
+      const { prompt, applied } = applyFallbackRules('do work', 'some task', 0, 1000);
+      expect(prompt).toContain('[FALLBACK R6]');
+      expect(applied).toContain('R6');
+    });
+
+    it('R6 triggered: recentRewindMs = 3000 (exactly 3s) → [FALLBACK R6]', () => {
+      const { prompt, applied } = applyFallbackRules('do work', 'some task', 0, 3000);
+      expect(prompt).toContain('[FALLBACK R6]');
+      expect(applied).toContain('R6');
+    });
+
+    it('R6 not triggered: recentRewindMs = 3001 (just over 3s) → no R6', () => {
+      const { prompt, applied } = applyFallbackRules('do work', 'some task', 0, 3001);
+      expect(prompt).not.toContain('[FALLBACK R6]');
+      expect(applied).not.toContain('R6');
+    });
+
+    it('R6 not triggered: recentRewindMs = null (no rewind ever) → no R6', () => {
+      const { prompt, applied } = applyFallbackRules('do work', 'some task', 0, null);
+      expect(prompt).not.toContain('[FALLBACK R6]');
+      expect(applied).not.toContain('R6');
+    });
+
+    it('R6 default param (no 4th arg) → no R6', () => {
+      const { prompt, applied } = applyFallbackRules('do work', 'some task', 0);
+      expect(prompt).not.toContain('[FALLBACK R6]');
+      expect(applied).not.toContain('R6');
+    });
+  });
+
+  describe('R6 integration via scratchpad', () => {
+    it('R6 integration: recent agent-scoped _rewind_last_invoked in scratchpad → R6 applied', async () => {
+      // Write a fresh rewind timestamp under the agent-scoped key
+      putScratch(ws.db, ws.cairnRoot, {
+        key: `_rewind_last_invoked/${ws.agentId}`,
+        value: new Date().toISOString(),
+        task_id: null,
+      });
+      const r = await toolDispatchRequest(ws, { nl_intent: 'continue the refactoring work' });
+      expect(r.ok).toBe(true);
+      expect((r as any).fallback_rules_applied).toContain('R6');
+      expect((r as any).generated_prompt).toContain('[FALLBACK R6]');
+    });
+
+    it('R6 integration: old agent-scoped _rewind_last_invoked (>3s) → no R6', async () => {
+      const staleTs = new Date(Date.now() - 10_000).toISOString();
+      putScratch(ws.db, ws.cairnRoot, {
+        key: `_rewind_last_invoked/${ws.agentId}`,
+        value: staleTs,
+        task_id: null,
+      });
+      const r = await toolDispatchRequest(ws, { nl_intent: 'write unit tests for auth module' });
+      expect(r.ok).toBe(true);
+      expect((r as any).fallback_rules_applied).not.toContain('R6');
+    });
+
+    it('R6 integration: no _rewind_last_invoked key → no R6', async () => {
+      const r = await toolDispatchRequest(ws, { nl_intent: 'add logging to the service layer' });
+      expect(r.ok).toBe(true);
+      expect((r as any).fallback_rules_applied).not.toContain('R6');
+    });
+
+    it('R6 isolation: agent B rewind key does NOT trigger R6 in agent A dispatch', async () => {
+      // Simulate agent B writing its rewind key (different agentId)
+      const agentBId = 'cairn-000000000bbb';
+      putScratch(ws.db, ws.cairnRoot, {
+        key: `_rewind_last_invoked/${agentBId}`,
+        value: new Date().toISOString(), // fresh — would trigger R6 if read
+        task_id: null,
+      });
+      // ws (agent A) dispatches — should NOT see agent B's rewind key
+      const r = await toolDispatchRequest(ws, { nl_intent: 'add pagination to the list view' });
+      expect(r.ok).toBe(true);
+      expect((r as any).fallback_rules_applied).not.toContain('R6');
     });
   });
 

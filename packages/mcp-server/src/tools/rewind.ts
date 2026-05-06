@@ -7,6 +7,7 @@ import {
   gitHeadCleanRestoreFiltered,
   gitHeadCleanAffectedFiles,
 } from '../../../daemon/dist/storage/snapshots/git-stash.js';
+import { putScratch } from '../../../daemon/dist/storage/repositories/scratchpad.js';
 import { tryAutoCheckpoint } from './_auto-checkpoint.js';
 import type { Workspace } from '../workspace.js';
 
@@ -160,10 +161,24 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
 
   const sha = extractStashSha(c.label);
 
+  /** Record invocation time so dispatch.request can detect a recent rewind (R6). */
+  function recordRewindInvoked(): void {
+    try {
+      putScratch(ws.db, ws.blobRoot, {
+        key: `_rewind_last_invoked/${ws.agentId}`,
+        value: new Date().toISOString(),
+        task_id: null,
+      });
+    } catch {
+      // fail-open: don't let scratchpad write break a rewind
+    }
+  }
+
   // Path 1: stash backend
   if (sha) {
     if (pathsFilter === null) {
       gitStashRestore(ws.cwd, sha);
+      recordRewindInvoked();
       return {
         ok: true,
         mode: 'stash',
@@ -172,6 +187,7 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
       };
     }
     const result = gitStashRestoreFiltered(ws.cwd, sha, pathsFilter);
+    recordRewindInvoked();
     return {
       ok: true,
       mode: 'stash',
@@ -186,6 +202,7 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
     try {
       if (pathsFilter === null) {
         const restored = gitHeadCleanRestore(ws.cwd, c.git_head);
+        recordRewindInvoked();
         return {
           ok: true,
           mode: 'git_head_clean',
@@ -194,6 +211,7 @@ export function toolRewindTo(ws: Workspace, args: RewindArgs) {
         };
       }
       const result = gitHeadCleanRestoreFiltered(ws.cwd, c.git_head, pathsFilter);
+      recordRewindInvoked();
       return {
         ok: true,
         mode: 'git_head_clean',

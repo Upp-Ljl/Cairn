@@ -46,18 +46,42 @@ export interface ListCheckpointsArgs {
   task_id?: string | null;
 }
 
+function collectGitPaths(cwd: string): string[] {
+  const run = (cmd: string): string => {
+    try {
+      return execSync(cmd, { cwd, encoding: 'utf8' });
+    } catch {
+      return '';
+    }
+  };
+  const unstaged = run('git diff --name-only HEAD');
+  const staged = run('git diff --name-only --cached');
+  const combined = new Set(
+    [...unstaged.split('\n'), ...staged.split('\n')].filter((p) => p.trim() !== ''),
+  );
+  return [...combined];
+}
+
 export function toolCreateCheckpoint(ws: Workspace, args: CreateCheckpointArgs) {
-  // Phase 0 (optional): conflict detection — only when agent_id is supplied.
+  // Resolve agent_id: explicit value wins; fall back to session default.
+  const effectiveAgentId =
+    args.agent_id != null && args.agent_id !== '' ? args.agent_id : ws.agentId;
+
+  // Resolve paths: explicit non-empty array wins; otherwise auto-collect from git.
+  const effectivePaths =
+    args.paths != null && args.paths.length > 0 ? args.paths : collectGitPaths(ws.cwd);
+
+  // Phase 0: conflict detection — always run with the resolved agent_id.
   let conflictInfo: {
     id: string;
     conflictedWith: string[];
     overlappingPaths: string[];
   } | undefined;
 
-  if (args.agent_id != null && args.agent_id !== '') {
+  {
     const detection = detectConflict(ws.db, {
-      agentId: args.agent_id,
-      paths: args.paths ?? [],
+      agentId: effectiveAgentId,
+      paths: effectivePaths,
       windowMinutes: 5,
     });
     if (detection.conflictId !== null) {

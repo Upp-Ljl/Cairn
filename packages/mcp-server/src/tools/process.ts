@@ -11,15 +11,15 @@ import type { Workspace } from '../workspace.js';
 // ---------------------------------------------------------------------------
 
 export interface RegisterProcessArgs {
-  agent_id: string;
-  agent_type: string;
+  agent_id?: string;
+  agent_type?: string;
   capabilities?: string[] | null;
   /** Override heartbeat TTL in ms. Defaults to 60000 (1 minute). */
   heartbeat_ttl?: number;
 }
 
 export interface HeartbeatArgs {
-  agent_id: string;
+  agent_id?: string;
 }
 
 export interface ListProcessesArgs {
@@ -28,7 +28,7 @@ export interface ListProcessesArgs {
 }
 
 export interface GetProcessArgs {
-  agent_id: string;
+  agent_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -36,9 +36,20 @@ export interface GetProcessArgs {
 // ---------------------------------------------------------------------------
 
 export function toolRegisterProcess(ws: Workspace, args: RegisterProcessArgs) {
+  const effectiveAgentId =
+    args.agent_id != null && args.agent_id !== '' ? args.agent_id : ws.agentId;
+  // When agent_id was auto-resolved (no explicit id) and no agent_type was provided,
+  // default agent_type to "session" so the row is still well-formed.
+  const effectiveAgentType =
+    args.agent_type != null && args.agent_type !== ''
+      ? args.agent_type
+      : args.agent_id != null && args.agent_id !== ''
+        ? args.agent_type ?? 'session'
+        : 'session';
+
   const input: Parameters<typeof registerProcess>[1] = {
-    agentId: args.agent_id,
-    agentType: args.agent_type,
+    agentId: effectiveAgentId,
+    agentType: effectiveAgentType,
     capabilities: args.capabilities ?? null,
   };
   if (args.heartbeat_ttl !== undefined) {
@@ -58,11 +69,13 @@ export function toolRegisterProcess(ws: Workspace, args: RegisterProcessArgs) {
 }
 
 export function toolHeartbeat(ws: Workspace, args: HeartbeatArgs) {
-  const process = heartbeat(ws.db, args.agent_id);
+  const effectiveAgentId =
+    args.agent_id != null && args.agent_id !== '' ? args.agent_id : ws.agentId;
+  const process = heartbeat(ws.db, effectiveAgentId);
   if (process === null) {
     return {
       ok: false,
-      error: `agent not registered: ${args.agent_id}`,
+      error: `agent not registered: ${effectiveAgentId}`,
     };
   }
   return {
@@ -95,11 +108,13 @@ export function toolListProcesses(ws: Workspace, args: ListProcessesArgs = {}) {
 }
 
 export function toolGetProcess(ws: Workspace, args: GetProcessArgs) {
-  const process = getProcess(ws.db, args.agent_id);
+  const effectiveAgentId =
+    args.agent_id != null && args.agent_id !== '' ? args.agent_id : ws.agentId;
+  const process = getProcess(ws.db, effectiveAgentId);
   if (process === null) {
     return {
       ok: false,
-      error: `agent not registered: ${args.agent_id}`,
+      error: `agent not registered: ${effectiveAgentId}`,
     };
   }
   return {

@@ -6,6 +6,8 @@
  * - 4 application-layer fallback rules (keyword-triggered, no LLM)
  * - State machine: PENDING → CONFIRMED via confirm tool
  * - confirm writes generated_prompt to scratchpad
+ *
+ * R5/R4b deferred to v0.2 (see PRODUCT.md TODO).
  */
 
 import {
@@ -19,6 +21,7 @@ import {
 } from '../../../daemon/dist/storage/repositories/processes.js';
 import {
   putScratch,
+  getScratch,
 } from '../../../daemon/dist/storage/repositories/scratchpad.js';
 import {
   loadConfig,
@@ -90,15 +93,17 @@ function containsAny(text: string, keywords: string[]): boolean {
  * Apply application-layer fallback rules to a prompt draft.
  * Rules are keyword-triggered and independent — they can stack.
  *
- * @param promptDraft   - The LLM-generated prompt_to_agent string
- * @param nlIntent      - Original NL intent from user (already lowercased)
- * @param processCount  - Number of currently ACTIVE/IDLE agents
+ * @param promptDraft     - The LLM-generated prompt_to_agent string
+ * @param nlIntentLower   - Original NL intent from user (already lowercased)
+ * @param processCount    - Number of currently ACTIVE/IDLE agents
+ * @param recentRewindMs  - Ms since last cairn.rewind.to, or null if no rewind ever
  * @returns { prompt: string; applied: string[] }
  */
 export function applyFallbackRules(
   promptDraft: string,
   nlIntentLower: string,
   processCount: number,
+  recentRewindMs: number | null = null,
 ): { prompt: string; applied: string[] } {
   let prompt = promptDraft;
   const applied: string[] = [];
@@ -129,6 +134,13 @@ export function applyFallbackRules(
     prompt +=
       '\n\n[FALLBACK R4] 不要直接操作 SQLite 文件。所有数据库变更必须走 cairn 工具（cairn.scratchpad.* / cairn.checkpoint.* / cairn.rewind.* 等）；DDL 变更必须用 migration 而非 ALTER 现网。';
     applied.push('R4');
+  }
+
+  // R6: recent rewind — re-confirm intent
+  if (recentRewindMs !== null && recentRewindMs <= 3000) {
+    prompt +=
+      '\n\n[FALLBACK R6] 检测到 3 秒内刚执行过 cairn.rewind.to。再次派单前请重新评估意图：rewind 已经回退了部分文件状态，原任务的前提可能已不成立。';
+    applied.push('R6');
   }
 
   return { prompt, applied };
@@ -214,6 +226,24 @@ export async function toolDispatchRequest(ws: Workspace, args: DispatchRequestAr
     return { ok: false, error: 'nl_intent must be at least 5 characters' };
   }
 
+  // CAIRN_DISPATCH_FORCE_FAIL: bypass LLM, write FAILED record, return error
+  const forceFailVal = process.env['CAIRN_DISPATCH_FORCE_FAIL'];
+  if (forceFailVal === '1' || forceFailVal === 'true' || forceFailVal === 'yes') {
+    const { id: request_id } = createDispatchRequest(ws.db, {
+      nlIntent: nl_intent,
+      parsedIntent: null,
+      generatedPrompt: null,
+      targetAgent: target_agent ?? null,
+    });
+    failDispatchRequest(ws.db, request_id, 'forced fail via CAIRN_DISPATCH_FORCE_FAIL');
+    return {
+      ok: false,
+      error: 'dispatch forced to fail (CAIRN_DISPATCH_FORCE_FAIL)',
+      request_id,
+      status: 'FAILED',
+    };
+  }
+
   // 1. Load LLM config
   let config;
   try {
@@ -293,15 +323,30 @@ export async function toolDispatchRequest(ws: Workspace, args: DispatchRequestAr
   // 6. Resolve target agent + process count
   const { targetAgent, processCount } = resolveTargetAgent(ws, target_agent, agentChoice);
 
-  // 7. Apply 4 fallback rules
+  // 7. Compute recentRewindMs from scratchpad (agent-scoped key prevents cross-agent R6 crosstalk)
+  let recentRewindMs: number | null = null;
+  try {
+    const lastRewound = getScratch(ws.db, `_rewind_last_invoked/${ws.agentId}`);
+    if (typeof lastRewound === 'string' && lastRewound.length > 0) {
+      const ts = Date.parse(lastRewound);
+      if (!isNaN(ts)) {
+        recentRewindMs = Date.now() - ts;
+      }
+    }
+  } catch {
+    // fail-open: ignore read errors
+  }
+
+  // 8. Apply fallback rules (R1-R4, R6)
   const nlLower = nl_intent.toLowerCase();
   const { prompt: generatedPrompt, applied: fallbackRulesApplied } = applyFallbackRules(
     promptToAgent,
     nlLower,
     processCount,
+    recentRewindMs,
   );
 
-  // 8. Write dispatch request (PENDING)
+  // 9. Write dispatch request (PENDING)
   const { id } = createDispatchRequest(ws.db, {
     nlIntent: nl_intent,
     parsedIntent: parsedJson,
@@ -311,7 +356,7 @@ export async function toolDispatchRequest(ws: Workspace, args: DispatchRequestAr
   });
   requestId = id;
 
-  // 9. Build warnings
+  // 10. Build warnings
   const warnings: string[] = [];
   if (risks.length > 0) {
     warnings.push(...risks.map((r) => `[LLM risk] ${r}`));
