@@ -103,7 +103,7 @@ git push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" --tag
 ```
 packages/
 ├── daemon/         # P1 持久层（SQLite + 仓储层 + git-stash backend）
-└── mcp-server/     # W1 楔（7 个 MCP 工具，stdio）
+└── mcp-server/     # W1 楔→W4（17 个 MCP 工具，stdio）
 ```
 
 跨包 import 走 daemon 的 `dist/`（不是源码）：
@@ -159,7 +159,15 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 
 ## 当前阶段
 
-v0.1 13 周计划，**W2 周一**（2026-04-27）。
+v0.1 13 周计划，**W4 Phase 1-4 已完成**（2026-05-06）。
 - ✅ W1 楔技术雏形（`feat/storage-p1` 已合并 + tag `storage-p1`）
-- ⏳ 等用户在 Claude Code 里加 `.mcp.json` + dogfood
-- ⏳ 等 W1-T12 friction 反馈 → W2 修 bug
+- ✅ W4 Day 1-2：processes / conflicts / dispatch 三表 + 17 个 MCP 工具全部落地
+- ✅ Phase 1-4：auto SESSION_AGENT_ID / conflict.resolve / FORCE_FAIL hook / R6 规则 / pre-commit 写 DB / `cairn install` CLI
+
+## Phase 1-4 落地约定（新会话必读）
+
+- **SESSION_AGENT_ID 自动注入**：mcp-server 启动时自动生成并写入 `process.env.CAIRN_SESSION_AGENT_ID`（格式 `cairn-<sha1(host:cwd).slice(0,12)>`）。`process.register` / `heartbeat` / `status` / `checkpoint.create` 的 `agent_id` 参数均为可选，缺省取该值。**测试不应传 agent_id，除非在断言显式覆盖逻辑**。
+- **Migration 006 已落地**；下一个可用编号是 `007`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review。
+- **pre-commit hook 现在写 DB**（不再是纯只读）：staged paths 与 OPEN 冲突有重叠时，hook INSERT 新 `PENDING_REVIEW` 行。`CAIRN_DISPATCH_FORCE_FAIL=1` 可强制 dispatch 写 FAILED（demo hook）。
+- **`cairn install` CLI**：bin entry `cairn` 在 `packages/mcp-server`（`npm run build` 后生效）。写 `.mcp.json` + pre-commit hook + start-cairn-pet 脚本，三者幂等可重跑。非 npm-published，当前需 file-link（clone + build + 绝对路径）。
+- **兜底规则共 5 条**：R1 / R2 / R3 / R4 / R6；R4b / R5 推迟 v0.2。`applyFallbackRules` helper 有单元测试覆盖各规则中英关键词。

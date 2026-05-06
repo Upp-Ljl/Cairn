@@ -51,7 +51,7 @@ Cairn 是 daemon-centric 的协作内核。所有 agent 通过 MCP 工具与 dae
   │   │ (Claude Code)│◄────────────┤      Cairn mcp-server        │ │
   │   └──────────────┘             │      (Node.js 子进程)        │ │
   │                                │                              │ │
-  │   ┌──────────────┐  MCP stdio  │      8 个工具（已落地）      │ │
+  │   ┌──────────────┐  MCP stdio  │      17 个工具（已落地）     │ │
   │   │ Agent B      ├────────────►│    + N 个工具（v0.1 规划）   │ │
   │   │ (Cursor/等)  │◄────────────┤                              │ │
   │   └──────────────┘             └──────────┬───────────────────┘ │
@@ -148,7 +148,7 @@ packages/
 │
 └── mcp-server/                # MCP stdio server
     ├── src/
-    │   └── tools/             # 8 个工具（scratchpad × 4 / checkpoint × 2 / rewind × 2）
+    │   └── tools/             # 17 个工具（含 scratchpad×4 / checkpoint×2 / rewind×2 / process×4 / dispatch×2 / inspector×1 / conflict×3）
     └── tests/                 # 9 个测试（8 acceptance + 1 stdio smoke）
 ```
 
@@ -182,17 +182,20 @@ packages/
 引用 DESIGN_STORAGE.md §2.3 的选型理由（SQLite vs Postgres / 纯文件），不重复。
 本节补充 v2 定位带来的新表需求，以及与已落地 schema 的关系。
 
-### 4.2 已落地（migration 001-003）
+### 4.2 已落地（migration 001-006）
 
 | Migration | 表 / 内容 | 状态 |
 |---|---|---|
 | `001-init.ts` | `schema_migrations` / `lanes` / `ops` / `compensations` | ✅ 已落 |
 | `002-scratchpad.ts` | `scratchpad`（含 key / value / task_id / expires_at） | ✅ 已落 |
 | `003-checkpoints.ts` | `checkpoints`（含 task_id / git_head / snapshot_status） | ✅ 已落 |
+| `004-processes-conflicts.ts` | `processes` + `conflicts`（含冲突类型 / agent_a,b / paths_json / status） | ✅ 已落（W4 Day 1） |
+| `005-dispatch.ts` | `dispatch_requests`（含 nl_intent / parsed_intent / status CHECK） | ✅ 已落（W4 Day 2） |
+| `006-conflict-pending-review.ts` | `conflicts.status` 枚举扩展加 `PENDING_REVIEW`（pre-commit hook 写入） | ✅ 已落（Phase 3） |
 
-完整 DDL 见 DESIGN_STORAGE.md §4。
+下一个可用编号：`007`。完整 DDL 见 DESIGN_STORAGE.md §4。
 
-### 4.3 v0.1 四能力新增表（规划中）
+### 4.3 v0.1 四能力新增表（已落地，供参考）
 
 **processes（进程总线）**
 ```sql
@@ -258,7 +261,7 @@ CREATE TABLE dispatch_requests (
 
 ## 5. MCP 工具清单
 
-### 5.1 已落地 8 个工具（W1+W2）
+### 5.1 已落地 17 个工具（W1+W2 + Phase 1-4）
 
 | 工具 | 一句话语义 |
 |---|---|
@@ -273,29 +276,30 @@ CREATE TABLE dispatch_requests (
 
 **auto-checkpoint 机制**：`scratchpad.write` 和 `rewind.to` 在执行前各自落一个 `auto:before-*` 节点，保证操作可逆。这个机制已落地，无需额外配置。
 
-### 5.2 v0.1 规划工具（按四能力分组）
+### 5.2 已落地工具（W4 Phase 1-4，全部实施完毕）
 
-**冲突可见（W3-W5）**
-
-| 工具 | 语义 |
-|---|---|
-| `cairn.inspector.query(nl_query)` | 自然语言查询状态（Inspector 只读通道），内部走 LLM 翻译 + 确定性 SQL 检索 |
-| `cairn.conflict.list([since])` | 列出冲突历史，可按时间过滤 |
-
-**进程总线（W4-W6）**
+**冲突可见**
 
 | 工具 | 语义 |
 |---|---|
-| `cairn.process.register(agent_id, agent_type, capabilities)` | agent 注册自身到进程总线 |
-| `cairn.process.heartbeat(agent_id)` | 更新 last_heartbeat，daemon 以此判断 agent 存活状态 |
+| `cairn.inspector.query(nl_query)` | 自然语言查询状态（15 个确定性 SQL 模板，纯关键词匹配，不走 LLM） | ✅ 落地 |
+| `cairn.conflict.list([since])` | 列出冲突历史，可按时间过滤 | ✅ 落地 |
+| `cairn.conflict.resolve(conflict_id, resolution)` | 将 OPEN/PENDING_REVIEW 冲突标为 RESOLVED；Inspector panel 对应 Resolve 按钮 | ✅ 落地（Phase 2） |
+
+**进程总线**
+
+| 工具 | 语义 |
+|---|---|
+| `cairn.process.register([agent_id], agent_type, capabilities)` | agent 注册自身到进程总线；agent_id 默认由 SESSION_AGENT_ID 自动填充 |
+| `cairn.process.heartbeat([agent_id])` | 更新 last_heartbeat；agent_id 可省略 |
 | `cairn.process.list()` | 列出当前活跃 / IDLE 的 agent |
-| `cairn.process.status(agent_id)` | 查询指定 agent 状态 |
+| `cairn.process.status([agent_id])` | 查询指定 agent 状态；agent_id 可省略 |
 
-**需求可派（W5-W7）**
+**需求可派**
 
 | 工具 | 语义 |
 |---|---|
-| `cairn.dispatch.request(nl_intent)` | 提交派单请求（NL→意图解析→待确认），返回 request_id |
+| `cairn.dispatch.request(nl_intent)` | 提交派单请求（NL→意图解析→待确认），内置 5 条兜底规则（R1/R2/R3/R4/R6） |
 | `cairn.dispatch.confirm(request_id)` | 用户确认派单，触发 prompt 转发给目标 agent |
 
 **消息可达（无新工具，复用 scratchpad CRUD）**
@@ -304,7 +308,6 @@ CREATE TABLE dispatch_requests (
 
 ### 5.3 v0.2+ 候选工具（仅列名，不展开）
 
-- `cairn.conflict.resolve(conflict_id, resolution)` — 用户提交仲裁决定
 - `cairn.rewind.snapshot(agent_id)` — 对 agent 会话历史创建截断点（L3 粒度，v0.2）
 - `cairn.echo.diff(agent_id)` — 反汇总：对比 subagent 原文与主 agent 复述（v0.2）
 - `cairn.dispatch.cancel(request_id)` — 取消待确认的派单
@@ -688,6 +691,46 @@ LLM 不能完全依赖。W5-W7 plan 的 acceptance 必须含以下 4 条：
 
 ---
 
+### ADR-9：Auto SESSION_AGENT_ID + `cairn install` CLI + pre-commit 写 DB（Phase 1/3/4）
+
+#### 9a. Auto SESSION_AGENT_ID（Phase 1）
+
+**决策**：mcp-server 启动时自动计算 `cairn-<sha1(hostname:cwd).slice(0,12)>` 作为当前会话的 agent_id，挂到 `ws.agentId`，写入 `process.env.CAIRN_SESSION_AGENT_ID`。
+
+`cairn.process.register` / `heartbeat` / `status` 和 `cairn.checkpoint.create` 的 `agent_id` 参数变为可选，缺省时自动取 SESSION_AGENT_ID。MCP schema 不再标记 `agent_id` 为 required。
+
+```
+mcp-server 启动
+  → sha1(os.hostname() + ':' + process.cwd()).slice(0,12)
+  → CAIRN_SESSION_AGENT_ID = "cairn-<hash>"
+  → 所有工具的 agent_id 参数缺省时读此值
+```
+
+**测试约定**：测试不应传 `agent_id` 除非在断言显式覆盖行为；auto-inject 路径是默认路径。
+
+#### 9b. pre-commit hook 写 DB（Phase 3）
+
+**决策**：pre-commit hook 从只读查询升级为读写模式。当 staged paths 与近期 OPEN 跨 agent 冲突有重叠时，hook 额外 INSERT 一条新冲突行（`conflict_type='FILE_OVERLAP'`, `status='PENDING_REVIEW'`），触发桌面宠物切换到 review 动画。Migration 006 扩展 `conflicts.status` 枚举加入 `PENDING_REVIEW`。
+
+`CAIRN_DISPATCH_FORCE_FAIL=1` 环境变量可强制 `dispatch.request` 写入 FAILED 行（demo/测试 hook，不走 LLM）。
+
+#### 9c. `cairn install` CLI（Phase 4）
+
+**决策**：`packages/mcp-server` 新增 bin entry `cairn`（`npm run build` 后可用），提供 `cairn install` 子命令，在目标 repo 执行：
+
+```
+cairn install
+  → 写/合并 .mcp.json（cairn-wedge server 入口）
+  → 安装 git pre-commit hook
+      标记行：# cairn-pre-commit-v1
+      若已有非 cairn hook → 旁挂到 .cairn/ 目录，主 hook 调用两者
+  → 生成 start-cairn-pet.bat + .sh 启动脚本（保留已有文件）
+```
+
+**当前状态**：非 npm-published；需 file-link 安装（clone 后 `cd packages/mcp-server && npm install && npm run build`，然后用绝对路径调用 `node dist/index.js`）。`cairn install` 直接可运行，无需全局 install。
+
+---
+
 ## 8. 横切关注点
 
 ### 8.1 资源占用基线
@@ -760,7 +803,7 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 | `packages/daemon/src/index.ts` 是占位 | `packages/daemon/src/index.ts` | 真正的 daemon 主入口实现时覆盖 | v0.2 daemon 独立进程 |
 | migration 没有 down migration | `packages/daemon/src/storage/migrations/` | 无法回滚 schema 变更（见 DESIGN_STORAGE.md §11） | v0.2 评估是否需要 |
 | SQLite WAL 在 Windows 含中文 / 空格路径的行为未测 | `~/.cairn/cairn.db` | 潜在路径编码问题 | W3 dogfood 启动时集成测试覆盖 |
-| 8 个工具的并发安全性 | `packages/daemon/tests/` `packages/mcp-server/tests/` | W1+W2 单线程测试覆盖；v0.1 ICP 假设的并发度（N≤10）由 PoC-1（2026-04-29）覆盖，零失败 | N≥50 尾延迟天花板见 §10 v0.3 议题 |
+| 17 个工具的并发安全性 | `packages/daemon/tests/` `packages/mcp-server/tests/` | W1+W2 单线程测试覆盖；v0.1 ICP 假设的并发度（N≤10）由 PoC-1（2026-04-29）覆盖，零失败 | N≥50 尾延迟天花板见 §10 v0.3 议题 |
 | v0.1 没有 release packaging | 仓库根 | 用户需要手动 clone + build 安装 | v0.1 ship（W11-W12）前补 |
 | `processes` 表心跳 GC 未实现 | `packages/daemon/src/storage/repositories/` | DEAD 状态的 process 行会积累 | 进程总线实现时补 `gcDeadProcesses()` |
 | conflict 表无自动 GC | `packages/daemon/src/storage/repositories/` | RESOLVED / IGNORED 记录长期积累 | dogfood 数据决定 GC 策略（按天 / 按量） |

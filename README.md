@@ -17,8 +17,8 @@ Cairn fills that gap. It is not another agent. It does not write code. Think of 
 - **Cairn does not write code.** It coordinates agents that do.
 - **Three verbs: Dispatch / Rewind / Arbitrate.** These are the only things Cairn does.
 - **Four capabilities:** conflict visibility, reversible state, dispatchable intent, message reachability.
-- **Current status:** v0.1 wedge shipped — 8 MCP tools live, running in dogfood. PoC-1 and PoC-2 pre-implementation validations passed before any feature code was written.
-- **What's next:** W3 pre-implementation validation wrap-up, then W4–W7 four-capability v1 build phase.
+- **Current status:** v0.1 W4 complete — 17 MCP tools live (8 core + 9 four-capability), migration 001-006 landed, `cairn install` CLI ships a pre-commit hook + `.mcp.json` writer. Desktop pet (Electron, `packages/desktop-shell/`) is the ambient status UI.
+- **What's next:** W5–W7 integration and hardening, then W8–W12 release packaging and onboarding polish.
 
 ---
 
@@ -108,7 +108,7 @@ Subagents write their complete results to a shared scratchpad (`cairn.scratchpad
 
 ## What is in the box
 
-### 8 MCP tools (v0.1 wedge, W1+W2, fully shipped)
+### 17 MCP tools (v0.1, W1+W4, fully shipped)
 
 | Tool | Semantics |
 |---|---|
@@ -122,6 +122,8 @@ Subagents write their complete results to a shared scratchpad (`cairn.scratchpad
 | `cairn.rewind.preview(checkpoint_id, [paths])` | Preview what a rewind would change and what it would leave alone. Dry-run, no side effects. |
 
 The `task_id` field on scratchpad and checkpoint provides soft partitioning: all data from a given task shares the same `task_id`, making it filterable across tools. The daemon does not enforce or assign `task_id` values — the host agent generates them and passes them through.
+
+**W4 tools (conflict visibility + process bus + dispatch):** `cairn.process.register/heartbeat/list/status`, `cairn.conflict.list`, `cairn.conflict.resolve`, `cairn.inspector.query`, `cairn.dispatch.request`, `cairn.dispatch.confirm`. The `agent_id` parameter is optional on all process and checkpoint tools — the mcp-server auto-injects a stable `CAIRN_SESSION_AGENT_ID` (`cairn-<sha1(host:cwd).slice(0,12)>`) at startup.
 
 ### Pre-implementation validation (PoC-1 + PoC-2, both PASS)
 
@@ -183,7 +185,11 @@ Each agent calls Cairn tools via MCP stdio. The mcp-server validates parameters 
 
 ## Getting started (current dogfood phase)
 
-v0.1 has no release packaging. This is an early-access / dogfood build. You clone, build, and wire up `.mcp.json` manually.
+v0.1 is not yet npm-published. Install via file-link: clone, build, then run `cairn install` inside your target repo.
+
+![Cairn desktop pet ambient UI](assets/cairn-master-visual.png)
+
+The desktop pet (`packages/desktop-shell/`, Electron) shows ambient coordination status in the corner of your screen. It reflects live SQLite state: idle / running / review / waiting / failed animations map directly to schema queries (see `ARCHITECTURE.md §ADR-8` and `PRODUCT.md §8.2.1`).
 
 ### Prerequisites
 
@@ -202,15 +208,27 @@ cd packages/daemon
 npm install
 npm run build
 
-# Build the mcp-server
+# Build the mcp-server (also builds the cairn CLI bin)
 cd ../mcp-server
 npm install
 npm run build
 ```
 
-### Wire up Claude Code
+### Install into your target repo
 
-Add to your project's `.mcp.json` (or your global Claude Code MCP config):
+From inside your project directory (the repo you want Cairn to coordinate):
+
+```bash
+node <absolute-path-to-cairn>/packages/mcp-server/dist/cli.js install
+```
+
+This writes `.mcp.json` (cairn-wedge entry), installs a git pre-commit hook (marker `# cairn-pre-commit-v1`; sidecars to `.cairn/` if a non-cairn hook already exists), and generates `start-cairn-pet.bat` / `.sh` launchers. All three steps are idempotent and safe to re-run.
+
+Once npm-published, the install command will be `npx cairn install` from your target repo. Until then, use the absolute path above.
+
+### Wire up Claude Code manually (alternative)
+
+If you prefer not to use `cairn install`, add to your project's `.mcp.json`:
 
 ```json
 {
@@ -251,8 +269,8 @@ For full engineering conventions (commit style, test commands, monorepo structur
 ### Run tests
 
 ```bash
-cd packages/daemon && npm test        # 67 tests
-cd packages/mcp-server && npm test    # 9 tests (8 acceptance + 1 stdio smoke)
+cd packages/daemon && npm test        # 207+ tests (W4 Day 2 baseline)
+cd packages/mcp-server && npm test    # 132+ tests (W4 Day 2 baseline)
 ```
 
 ---
@@ -283,14 +301,14 @@ These are boundary definitions, not disclaimers. Any design or feature request t
 
 - W1+W2 complete: 8 MCP tools, SQLite persistence, git-stash checkpoint backend, task_id isolation
 - W2 complete: PoC-1 (SQLite concurrency) + PoC-2 (git hook latency) both PASS
-- W3: pre-implementation validation wrap-up (PoC-4 dogfood, D-1 research)
-- W4–W7: four-capability v1 build — conflict detection, process bus, Dispatch NL, Inspector query
-- W8–W10: integration, hardening, acceptance criteria verification
-- W11–W12: release packaging, onboarding polish
+- W4 complete: four-capability v1 — conflict detection (migration 004+006), process bus (4 tools), Dispatch NL (migration 005, 5 fallback rules), Inspector query (15 SQL templates), `cairn install` CLI, auto SESSION_AGENT_ID
+- W5–W7: integration and hardening
+- W8–W10: acceptance criteria verification
+- W11–W12: release packaging, onboarding polish (npm publish, `npx cairn install`)
 
 ### v0.2
 
-- **Floating Marker** — persistent ambient desktop UI (Tauri; right-corner float panel with three visibility modes). This is the primary v0.2 UX investment.
+- **Floating Marker** — persistent ambient desktop UI (Electron; right-corner float panel with three visibility modes). `packages/desktop-shell/` already scaffolded in v0.1. This is the primary v0.2 UX investment.
 - **Path (b): Task tool wrapper** — stronger CC subagent integration for message reachability
 - **Echo diff / reverse summary** — semantic diff between subagent original output and main agent restatement
 - **Inspector panel UI** — conflict history, checkpoint timeline, scratchpad browser
