@@ -221,5 +221,43 @@ describe('conflicts repo', () => {
       expect(fetched!.status).toBe('RESOLVED');
       expect(fetched!.resolution).toBe('resolved by user');
     });
+
+    it('TOCTOU guard: second resolveConflict on already-RESOLVED row returns null, first resolution unchanged', () => {
+      const c = recordConflict(db, {
+        conflictType: 'FILE_OVERLAP',
+        agentA: 'agent-race-a',
+        paths: ['src/shared.ts'],
+      });
+
+      // First caller wins
+      const first = resolveConflict(db, c.id, 'first-wins');
+      expect(first).not.toBeNull();
+      expect(first!.status).toBe('RESOLVED');
+      expect(first!.resolution).toBe('first-wins');
+
+      // Second caller (race) gets null — row already RESOLVED
+      const second = resolveConflict(db, c.id, 'second-attempt');
+      expect(second).toBeNull();
+
+      // Original resolution is unchanged
+      const persisted = getConflict(db, c.id);
+      expect(persisted!.resolution).toBe('first-wins');
+    });
+
+    it('TOCTOU guard: resolveConflict on IGNORED row returns null', () => {
+      const c = recordConflict(db, {
+        conflictType: 'FILE_OVERLAP',
+        agentA: 'agent-ignored',
+        paths: [],
+        status: 'IGNORED',
+      });
+
+      const result = resolveConflict(db, c.id, 'too late');
+      expect(result).toBeNull();
+
+      // Status remains IGNORED
+      const persisted = getConflict(db, c.id);
+      expect(persisted!.status).toBe('IGNORED');
+    });
   });
 });

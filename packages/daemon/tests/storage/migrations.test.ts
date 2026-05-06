@@ -366,3 +366,39 @@ describe('005-dispatch-requests schema', () => {
     }
   });
 });
+
+describe('006-conflicts-pending-review schema', () => {
+  it('allows PENDING_REVIEW as a valid conflicts.status', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO conflicts (id, detected_at, conflict_type, agent_a, paths_json, status)
+         VALUES ('pr1', 0, 'FILE_OVERLAP', 'agent-a', '[]', 'PENDING_REVIEW')`
+      ).run()
+    ).not.toThrow();
+  });
+
+  it('still rejects unknown status values after migration 006', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO conflicts (id, detected_at, conflict_type, agent_a, paths_json, status)
+         VALUES ('bad1', 0, 'FILE_OVERLAP', 'agent-a', '[]', 'NOT_A_STATUS')`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('preserves existing conflict rows through the rebuild', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    // A row inserted after migration 006 with OPEN status should still be readable
+    db.prepare(
+      `INSERT INTO conflicts (id, detected_at, conflict_type, agent_a, paths_json, status)
+       VALUES ('keep1', 100, 'STATE_CONFLICT', 'a1', '["x.ts"]', 'OPEN')`
+    ).run();
+    const row = db.prepare('SELECT status FROM conflicts WHERE id = ?').get('keep1') as { status: string };
+    expect(row.status).toBe('OPEN');
+  });
+});

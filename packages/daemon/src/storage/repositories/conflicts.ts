@@ -8,7 +8,7 @@ import { newId } from '../ids.js';
 export const CONFLICT_TYPES = ['FILE_OVERLAP', 'STATE_CONFLICT', 'INTENT_BOUNDARY'] as const;
 export type ConflictType = (typeof CONFLICT_TYPES)[number];
 
-export const CONFLICT_STATUSES = ['OPEN', 'RESOLVED', 'IGNORED'] as const;
+export const CONFLICT_STATUSES = ['OPEN', 'RESOLVED', 'IGNORED', 'PENDING_REVIEW'] as const;
 export type ConflictStatus = (typeof CONFLICT_STATUSES)[number];
 
 /** Raw row as stored in SQLite (paths_json is a JSON string). */
@@ -69,6 +69,8 @@ export interface RecordConflictInput {
   agentB?: string | null;
   paths: string[];
   summary?: string | null;
+  /** Override the initial status. Default: 'OPEN'. */
+  status?: ConflictStatus;
 }
 
 export interface ListConflictsOptions {
@@ -83,7 +85,8 @@ export interface ListConflictsOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Record a new conflict. Assigns a ULID id, sets detected_at = now(), status = 'OPEN'.
+ * Record a new conflict. Assigns a ULID id, sets detected_at = now().
+ * Default status is 'OPEN'; pass `status` to override (e.g. 'PENDING_REVIEW').
  */
 export function recordConflict(db: DB, input: RecordConflictInput): Conflict {
   const now = Date.now();
@@ -95,7 +98,7 @@ export function recordConflict(db: DB, input: RecordConflictInput): Conflict {
     agent_b: input.agentB ?? null,
     paths_json: JSON.stringify(input.paths),
     summary: input.summary ?? null,
-    status: 'OPEN',
+    status: input.status ?? 'OPEN',
     resolved_at: null,
     resolution: null,
   };
@@ -145,16 +148,19 @@ export function listConflicts(db: DB, opts?: ListConflictsOptions): Conflict[] {
 
 /**
  * Resolve a conflict: set status = 'RESOLVED', record resolution text and resolved_at.
- * Returns the updated Conflict, or null if not found.
+ * Returns the updated Conflict, or null if not found or already in a terminal state.
+ * The WHERE guard on status prevents TOCTOU races: a second concurrent caller gets null
+ * rather than silently overwriting the first caller's resolution.
  */
 export function resolveConflict(db: DB, id: string, resolution: string): Conflict | null {
   const now = Date.now();
-  db.prepare(`
+  const result = db.prepare(`
     UPDATE conflicts
        SET status = 'RESOLVED',
            resolution = ?,
            resolved_at = ?
-     WHERE id = ?
+     WHERE id = ? AND status NOT IN ('RESOLVED', 'IGNORED')
   `).run(resolution, now, id);
+  if (result.changes === 0) return null;
   return getConflict(db, id);
 }
