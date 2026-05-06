@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cairn Pet Preview</title>
+<style>
+  body { font-family: monospace; margin: 24px; background: #1a1a1a; color: #eee; }
+  /* Electron: override to fully transparent so pet floats on desktop */
+  html.electron-mode, body.electron-mode {
+    background: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    width: 100%;
+    height: 100%;
+  }
+  body.electron-mode #canvas-wrap {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+  body.electron-mode canvas { display: block; }
+  h1 { font-size: 1rem; margin: 0 0 12px; }
+  #status-line { margin-bottom: 8px; font-size: 0.9rem; color: #aaa; }
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .bg-btns { display: flex; gap: 6px; }
+  button[data-bg] {
+    padding: 4px 10px; border: 1px solid #555; background: #333; color: #eee;
+    cursor: pointer; font-family: monospace;
+  }
+  button[data-bg].active { border-color: #fff; background: #555; }
+  #debug-toggle {
+    padding: 4px 10px; border: 1px solid #555; background: #333; color: #aaa;
+    cursor: pointer; font-family: monospace; font-size: 0.8rem;
+  }
+  #canvas-wrap {
+    display: inline-block; padding: 16px; border: 1px solid #444;
+  }
+  .bg-white   { background: #ffffff; }
+  .bg-dark    { background: #2a2a2a; }
+  .bg-check   {
+    background-image:
+      linear-gradient(45deg, #999 25%, transparent 25%),
+      linear-gradient(-45deg, #999 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #999 75%),
+      linear-gradient(-45deg, transparent 75%, #999 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+    background-color: #ccc;
+  }
+  #debug-panel {
+    display: none; margin-top: 16px; padding: 12px; background: #111;
+    border: 1px solid #333; font-size: 0.8rem; white-space: pre; color: #8f8;
+    max-width: 480px; word-break: break-all; white-space: pre-wrap;
+  }
+  #debug-panel.visible { display: block; }
+  #manual-controls { display: none; align-items: center; gap: 8px; }
+  #manual-controls.visible { display: flex; }
+  select { background: #333; color: #eee; border: 1px solid #555; padding: 4px 8px; font-family: monospace; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
+</style>
+</head>
+<body>
+<h1>Cairn Desktop Pet — Live Preview</h1>
+<div id="status-line">connecting…</div>
+<div class="controls">
+  <div class="bg-btns">
+    <button data-bg="white">White</button>
+    <button data-bg="dark" class="active">Dark</button>
+    <button data-bg="check">Checker</button>
+  </div>
+  <button id="debug-toggle">debug</button>
+  <div id="manual-controls">
+    <label style="font-size:0.8rem;color:#777">manual:</label>
+    <select id="state-select"></select>
+  </div>
+</div>
+<div id="canvas-wrap" class="bg-dark">
+  <canvas id="display"></canvas>
+</div>
+<div id="debug-panel"></div>
+<script>
+  // Applied before preview.js so body class is set before paint
+  if (typeof window !== 'undefined' && window.cairn !== undefined) {
+    document.documentElement.classList.add('electron-mode');
+    document.body.classList.add('electron-mode');
+  }
+</script>
+<script src="preview.js"></script>
+</body>
+</html>

@@ -286,7 +286,7 @@ These are boundary definitions, not disclaimers. Any design or feature request t
 - W3: pre-implementation validation wrap-up (PoC-4 dogfood, D-1 research)
 - W4–W7: four-capability v1 build — conflict detection, process bus, Dispatch NL, Inspector query
 - W8–W10: integration, hardening, acceptance criteria verification
-- W11–W12: release packaging, onboarding polish, seed-user ship
+- W11–W12: release packaging, onboarding polish
 
 ### v0.2
 

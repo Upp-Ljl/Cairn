@@ -1,0 +1,19 @@
+{
+  "name": "@cairn/desktop-shell",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "main.cjs",
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "start:browser": "node state-server.js",
+    "postinstall": "npx prebuild-install --runtime electron --target 32.3.3 --arch x64 --platform win32 --module-dir node_modules/better-sqlite3 || true"
+  }
+}

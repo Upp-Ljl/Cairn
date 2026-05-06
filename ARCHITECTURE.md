@@ -158,7 +158,7 @@ packages/
 
 | 候选包 | 触发条件 | 说明 |
 |---|---|---|
-| `packages/desktop-shell/` | **v0.2 主要工作之一** | 悬浮标 + Inspector panel，Tauri 实施。与 daemon 通过本地 IPC 或共享 SQLite 文件通信。详 PRODUCT.md §8.2。 |
+| `packages/desktop-shell/` | **v0.1 已实施** | 悬浮标 + Inspector panel，Electron 实施。main process 直接 require better-sqlite3 读 ~/.cairn/cairn.db。详 PRODUCT.md §8.2。 |
 | `packages/conflict-engine/` | 冲突检测逻辑复杂度超过单文件可维护范围 | 冲突检测 + 诊断逻辑模块 |
 | `packages/dispatcher/` | Dispatch LLM 调用逻辑独立成服务 | NL 意图解析 + agent 选型 + prompt 生成 |
 | `packages/process-bus/` | 进程总线有专属 GC / 心跳超时逻辑 | agent 注册 / 心跳 / 状态查询 |
@@ -660,32 +660,31 @@ LLM 不能完全依赖。W5-W7 plan 的 acceptance 必须含以下 4 条：
 
 ---
 
-### ADR-8：悬浮标技术栈选 Tauri
+### ADR-8：悬浮标技术栈选 Electron（已从 Tauri 切换）
 
-**决策**：v0.2 桌面 UI 用 Tauri（Rust + WebView）实施，不选 Electron 或 Native+WebView。
+**决策**：v0.1 桌面 UI 用 Electron（Node + Chromium）实施，不选 Tauri 或 Native+WebView。
 
 **理由**：
 
-| 维度 | Tauri | Electron | Native+WebView |
+| 维度 | Electron | Tauri | Native+WebView |
 |---|---|---|---|
-| 体积 | ~5-10MB | ~80-150MB | ~3-5MB（每 OS 独立） |
-| 启动延迟 | < 200ms（典型） | ~1s（典型） | 最快（原生） |
-| 跨平台 | 一套代码（Rust + WebView） | 一套代码（Chromium） | macOS / Windows / Linux 各写一遍 |
-| Rust 成本 | 一次性学习曲线 | Node.js / JS，团队熟悉 | 各 OS 原生语言（Swift / C++ / GTK） |
+| 体积 | ~80-150MB | ~5-10MB | ~3-5MB（每 OS 独立） |
+| 工具链 | Node.js（整栈统一） | Rust + Node 双栈 | 各 OS 原生语言 |
+| 跨平台 | 一套代码（Chromium） | 一套代码（Rust + WebView） | macOS / Windows / Linux 各写一遍 |
+| SQLite 集成 | main process 直接 import better-sqlite3 | 需跨语言 IPC 桥接 | 各 OS 独立实现 |
 
-- 体积符合"安静常驻"调性：Tauri ~5-10MB vs Electron ~80-150MB
-- 启动 < 200ms，对"随时在屏幕角落"的悬浮标场景是硬要求
-- 跨平台：Tauri 与 Electron 持平；Native 需要每 OS 独立维护
-- 团队 Rust 成本是一次性投入，长期受益；退路是 Electron（接受体积代价）
+- 整栈 Node 化：daemon、mcp-server、SQLite 调用全在 Node 生态，Electron main process 即 Node，可直接内联查询逻辑，省去独立 state-server 进程
+- 工具链统一：避免引入 Rust（VS Build Tools ~5GB + Rust ~1.5GB + 跨语言 IPC，对 1 人 + AI 项目偏重）
+- 体积代价可接受：cairn 目标用户（开发者）已运行 Cursor / VS Code / Claude Desktop / Slack 等 Electron / Chromium 应用，再增 100MB 不构成感知噪声
 
 **后果**：
-- 与 daemon（Node + better-sqlite3）通过本地 IPC（Unix socket / Windows named pipe）或共享 SQLite 文件通信
-- daemon 实现不动；`packages/desktop-shell/` 是新加的独立进程
-- v0.2 实施前做 1 周 Tauri starter 原型，验证 IPC 方案可行性
+- Electron main process 直接 `require('better-sqlite3')` 读 `~/.cairn/cairn.db`，无独立 state-server 进程
+- `packages/desktop-shell/` 是新加的 Electron 应用，`preview.html`/`preview.js` 保留为 browser fallback
+- electron-builder 打包；native module rebuild 用 `electron-rebuild`
 
 **未决**：
-- IPC vs 共享 SQLite 哪个先用？取决于 v0.2 评估时 daemon 是否已升级为长跑独立进程（v0.1 是 library，mcp-server 直接 import dist/，无 daemon 独立进程）
-- 若团队评估 Rust 学习曲线超预期，退路：Electron（接受 80-150MB 体积，其余架构不变）
+- 打包尺寸优化（ASAR、按需 Chromium 裁剪）留 v0.3+
+- macOS 公证 / Windows 签名留正式发布时处理
 
 ---
 
@@ -783,7 +782,7 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 
 | 扩展 | 架构变化 |
 |---|---|
-| **桌面悬浮标 + Inspector panel UI** | Tauri 实施，新增 `packages/desktop-shell/` 包。Inspector NL 查询 / 冲突历史可视化 / checkpoint 时间线 / scratchpad 浏览。技术细节见 PRODUCT.md §8.2。 |
+| **桌面悬浮标 + Inspector panel UI** | Electron 实施，`packages/desktop-shell/` 包已落地（v0.1）。Inspector 展示 agents / conflicts / dispatches / lanes。技术细节见 PRODUCT.md §8.2。 |
 | 路径 (b) Task tool wrapper | 新增 per-agent 适配层（强 CC 耦合），需独立包 |
 | 反汇总（层 3）| `cairn.echo.diff` 新工具 + LLM 调用 + `echo/` key 读取逻辑 |
 | daemon 独立进程（IPC 通信）| mcp-server 改为通过 IPC 连接 daemon，不再直接 import dist/ |

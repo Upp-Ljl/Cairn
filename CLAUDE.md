@@ -162,4 +162,4 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 v0.1 13 周计划，**W2 周一**（2026-04-27）。
 - ✅ W1 楔技术雏形（`feat/storage-p1` 已合并 + tag `storage-p1`）
 - ⏳ 等用户在 Claude Code 里加 `.mcp.json` + dogfood
-- ⏳ 等 W1-T12 friction 反馈 → W2 修 bug → W2 末发种子用户
+- ⏳ 等 W1-T12 friction 反馈 → W2 修 bug
