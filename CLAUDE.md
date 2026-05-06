@@ -24,28 +24,40 @@ Token 文件（已 gitignored）：
 D:\lll\cairn\.cairn-push-token\token.txt
 ```
 
-push 命令（**必须带 `-c http.sslBackend=openssl`**，详见下条）：
+push 命令（**failed 时切 backend 重试**，详见下条）：
 
 ```bash
 cd D:/lll/cairn
 TOKEN=$(cat .cairn-push-token/token.txt | tr -d '[:space:]')
+# 默认先 openssl
 git -c http.sslBackend=openssl push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" main
 # 注意：每次输出都要 sed 把 TOKEN 替换成 <REDACTED>，不要泄露到日志
 ```
 
-### TLS 坑（2026-04-29 EOD 发现）
+### TLS 坑（2026-04-29 EOD 多次复现）
 
-git for Windows 默认 `http.sslBackend=schannel`（Windows 原生 SSL）和 GitHub 的 TLS 1.3 协商在这台机器上有 bug，push 会报：
+git push 偶发报：
 
 ```
 fatal: unable to access '...': TLS connect error:
 error:0A000126:SSL routines::unexpected eof while reading
 ```
 
-注意：curl 能连通 GitHub（HTTP 200），所以**不是网络问题**，是 git 的 TLS 实现问题。
+观察：curl 一直能连通 GitHub（HTTP 200），失败仅出现在 git push。`schannel`（git for Windows 默认）和 `openssl` 两个 backend **都会出现**这个错，但**会交替成功**——不是某一个 backend 锁死失败。
 
-**解法**：每次 push 加 `-c http.sslBackend=openssl`（git for Windows 自带 openssl 后端），单次生效，不污染 global config。
-**也可以**：`git config --global http.sslBackend openssl`（永久切换；但作者倾向单次显式）。
+**解法**：push 失败时切 backend 重试。建议这个顺序：
+
+```bash
+# 1) openssl
+git -c http.sslBackend=openssl push ... main
+# 2) 失败则 schannel
+git -c http.sslBackend=schannel push ... main
+# 3) 都失败则 sleep 5s 再从 1 重试
+```
+
+实测一次 EOD 工作流：4 次 push 中 1 次 openssl 通、3 次失败；schannel 1 次重试通。**换 backend 比死等同一 backend 重试更快**。
+
+根因未深究（可能 GitHub TLS session reuse / Windows 网络栈 MTU / EDR / 本地 anti-virus 扫描 SSL 流量）。如果未来稳定一边失败，再深挖。
 
 fetch 同理（如果本地 `origin/main` 引用没跟上）：
 
