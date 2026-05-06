@@ -429,6 +429,38 @@ L3~L6 粒度推迟到 v0.2，见 PRODUCT.md §5.2 粒度矩阵。
 
 **用户确认机制**：v0.1 走 CLI 交互（`cairn.dispatch.confirm` 工具调用 + 生成的 prompt 展示在 agent 的上下文里）。GUI 确认界面是 W6+ UI 设计的议题。
 
+**✓ v0.1 W4 Day 2 实施（2026-05-06）**：
+
+migration 005（`dispatch_requests` 表）已落地。Dispatch v1 端到端可跑：
+
+| 层 | 落地 |
+|---|---|
+| Schema | `dispatch_requests`：id ULID / nl_intent / parsed_intent JSON / context_keys JSON 数组 / generated_prompt / target_agent / status CHECK PENDING/CONFIRMED/REJECTED/FAILED / created_at / confirmed_at；2 个索引 |
+| Repo | `DispatchRequestRepo`：create / get / list（status/since/limit 过滤）/ confirm / reject / fail，状态机 PENDING → CONFIRMED/REJECTED/FAILED |
+| LLM 客户端 | `packages/daemon/src/dispatch/llm-client.ts`：`loadConfig` 4 级优先级（显式 path → env → ~/.cairn/config.json → dev fallback `.cairn-poc3-keys/keys.env`）；`completionWithRetry` mock/real 双路径，3 次重试指数 backoff，30s timeout；`completionStrictJson` 断言 object 结果；think 块和 markdown fence 自动剥离（复用 PoC-3 runner 验证逻辑） |
+| Mock 模式 | **默认 mode='mock'**——`CAIRN_LLM_MODE=real` 才走真实 API。stub JSON 结构与 PoC-3 system instruction 输出对齐。npm test 不依赖网络 |
+| MCP 工具 | `cairn.dispatch.request`（NL → 解析 + 检索 scratchpad + 选 agent + 应用层兜底 4 条 + 写 PENDING 行）+ `cairn.dispatch.confirm`（PENDING → CONFIRMED + 写 scratchpad `dispatch/{id}/prompt`） |
+| Inspector v1 | `cairn.inspector.query`：15 个确定性 SQL 模板（中英关键词），不走 LLM；活跃/已死 agent / 最近冲突 / open 冲突 / today 冲突 / path 冲突 / checkpoint by task / scratchpad / pending dispatch / confirmed dispatch / stats 摘要等 |
+
+**应用层兜底 4 条 acceptance（已 wire up，不依赖 LLM 判断）**：
+
+| ID | 触发关键词（中英） | 注入到 generated_prompt 的内容 |
+|---|---|---|
+| R1 不可逆操作 preview 强制 | rewind / 回滚 / 回退 / delete / 删除 / 清空 / drop / truncate / `rm ` | "[FALLBACK R1] 这是一个不可逆 / 删除操作。执行前必须先调用 cairn.rewind.preview 或等价 dry-run 命令展示影响范围给用户确认；用户明确确认后再执行实际操作。" |
+| R2 外部 API 知情同意 | external api / 外部 api / openai / anthropic / claude api / 上传 / 发送 / 云端 / send to / upload | "[FALLBACK R2] 此任务涉及外部 API / 数据离机。执行前先告知用户：(a) 数据将发送到 [具体 endpoint]，(b) API key / 凭证管理风险，(c) token 费用预估；用户明确同意后再执行。" |
+| R3 多 agent 路径重叠串行化 | processCount >= 2 时触发（v1 简化：不解析具体路径） | "[FALLBACK R3] 当前有 N 个活跃 agent，目标路径有重叠风险。建议串行：先让一个 agent 完成此任务，确认提交后再开始下一个；或先用 cairn.conflict.list 查看现有冲突。" |
+| R4 SQL 操作走 cairn 工具 | sqlite / sql / 数据库 / .db / drop table / alter table / vacuum | "[FALLBACK R4] 不要直接操作 SQLite 文件。所有数据库变更必须走 cairn 工具（cairn.scratchpad.* / cairn.checkpoint.* / cairn.rewind.* 等）；DDL 变更必须用 migration 而非 ALTER 现网。" |
+
+每条规则触发与否独立；可叠加。`applyFallbackRules(promptDraft, nlIntent, processCount, hasPathOverlap)` 是 dispatch.ts 内部 helper，被单元测试直接断言（不经 DB）。
+
+**v1 简化（必须知道）**：
+
+1. **R3 不解析具体文件路径**——只看活跃 agent 数 ≥ 2 就触发提示。要做精确"路径重叠"判断需要给 dispatch_requests 加 paths 字段或者从 nl_intent 用正则抽取（v0.2 候选）
+2. **target_agent 选择优先级**：用户显式指定 > LLM agentChoice 模糊匹配 processes 表 > processes 表第一条 > "default"
+3. **inspector.query 不走 LLM**——纯关键词字符串匹配 + 预定义 SQL；不能处理"复合查询"或"自然语言推理"。要走 LLM 是 v0.2 候选
+
+**测试**：daemon 207（W4 Day 2 +60 = A 31 + B 29），mcp-server 132（W4 Day 2 +68 = D 24 + C 44），总 339 PASS。端到端 acceptance：mock LLM → request → DB 写 PENDING → confirm → scratchpad 写 dispatch/{id}/prompt（验证链路完整）。
+
 ### 6.4 消息可达
 
 **为什么这一节存在**：消息可达的实现不是新工具，而是一个 key 命名约定 + 一个 prompt 引导模式。必须在架构文档里写清楚，否则每个 agent 用各自的命名，约定失效。产品边界见 PRODUCT.md §5.4 §9.3。
@@ -467,6 +499,16 @@ cairn.scratchpad.write(
 ```
 
 这个模板是 Cairn 的 onboarding 文档的核心内容，不是代码强制。
+
+**✓ v0.1 W4 Day 2 文档化（2026-05-06）**：
+
+完整协议（含中英双语模板 + key 命名规范 + 反例 + 主 agent 收尾流程 + v0.2 演进路径）落地到独立文档：
+
+→ **`docs/cairn-subagent-protocol.md`**
+
+这是新会话 / 新用户派 subagent 时的**唯一权威 prompt 模板源**。本节保留作为概念解释，**实际 paste 时从该文档复制**（避免文档间漂移）。
+
+key 命名规范在该文档 §2 已固化（含 `subagent/` `session/` `dispatch/` `conflict/` `echo/` 5 个标准前缀 + 反例清单 + 格式约束）。
 
 ---
 
@@ -564,6 +606,8 @@ LLM 不能完全依赖。W5-W7 plan 的 acceptance 必须含以下 4 条：
 4. **直接 SQL 操作一律走 cairn 工具路径**——LLM 可能完全失败输出 JSON（D.3 数据）
 
 详见 `docs/superpowers/plans/2026-04-29-poc-3-results.md`。
+
+**✓ W4 Day 2 实施验证（2026-05-06）**：4 条兜底规则全部 wire up 到 `cairn.dispatch.request` 工具，关键词触发不依赖 LLM。详见 §6.3 "v0.1 W4 Day 2 实施" 表格 + `packages/mcp-server/src/tools/dispatch.ts`。`applyFallbackRules` helper 单元测试覆盖各规则中英关键词。
 
 **v0.1 范围**：
 - 实现 OpenAI-compatible 接口适配器（一份代码跑所有 OpenAI-compatible provider）
@@ -781,7 +825,7 @@ v0.2 若有 Inspector GUI，考虑展示简单的事件时间线，不引入 Pro
 | ✓ PoC-1 | §6.1 §9（技术债） | MCP-call 边界 race window；SQLite 锁语义；并发 `checkpoint.create` 语义 | **已完成（2026-04-29）**：N=2/5/10 PASS，N=50 p99=449ms 记录为 v0.3 议题。详 `docs/superpowers/plans/2026-04-29-poc-1-results.md` |
 | ✓ PoC-2 | §6.1 | hook 端到端延迟 + fail-open 行为 | **已完成（2026-04-29）**：5/5 场景全 PASS，large p99=122ms（预算 1000ms），fail-open 验证。详 `docs/superpowers/plans/2026-04-29-poc-2-results.md` |
 | ✓ PoC-3 partial | §6.3 ADR-4 | Dispatch LLM 接口可移植性 + 默认 provider 选型 | **partial（2026-04-29）**：MiniMax-M2.7 整体均分 7.36/10 PASS，进 v0.1 推荐清单；Dispatch 走 LLM-driven (OpenAI-compat)；但 D 类 4.80 + 风险维度 5.70 触发应用层兜底要求 4 条（详 ADR-4 + `docs/superpowers/plans/2026-04-29-poc-3-results.md`）。第二 provider 接口可移植性命题待 user 拿到 key 后增量补跑 |
-| 🚧 PoC-4 | §6.4 | CC Task tool 实际调用 `cairn.scratchpad.write` 的频率；v0.1 是否需要"强制 reload"兜底 | dogfood 会话记录（每次 subagent 结束时的调用率统计） |
+| 🚧 PoC-4 | §6.4 | CC Task tool 实际调用 `cairn.scratchpad.write` 的频率；v0.1 是否需要"强制 reload"兜底 | **personal-build 决策 36 已砍大样本 dogfood**；改为自用阶段感知。Prompt 模板已在 `docs/cairn-subagent-protocol.md` v1 固化（中英双语 + 反例 + 5 段必填），后续若发现 prompt 失效率高再加兜底机制 |
 | 🚧 D-1 | ADR-6 | 非 MCP-aware agent（Cursor / Cline）接入路径调研 | 用户反馈 Cursor / Cline 接入需求的强度 |
 | 🚧 D-2 | §4.4 §8.1 §6.1（通知机制） | daemon 资源占用 baseline（idle / busy 两种状态 RAM / CPU）；通知形式；索引 / VACUUM 策略 | dogfood 阶段 1 周实测数据 |
 | 🚧 D-3 | ADR-4 | provider 间质量差距测量（MiniMax / DeepSeek / Qwen 等 vs Anthropic / OpenAI 在 Dispatch 任务上的均分对比） | PoC-3 多 provider 测试集结果 |

@@ -294,3 +294,75 @@ describe('004-processes-conflicts schema', () => {
     ).toThrow(/CHECK constraint failed/);
   });
 });
+
+describe('005-dispatch-requests schema', () => {
+  it('creates dispatch_requests table with correct columns and NOT NULL constraints', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(dispatch_requests)').all() as Array<{
+      name: string; pk: number; notnull: number;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'id', 'nl_intent', 'parsed_intent', 'context_keys',
+      'generated_prompt', 'target_agent', 'status', 'created_at', 'confirmed_at',
+    ]));
+    // id PK
+    expect(cols.find((c) => c.name === 'id')?.pk).toBe(1);
+    // NOT NULL columns
+    expect(cols.find((c) => c.name === 'nl_intent')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'status')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'created_at')?.notnull).toBe(1);
+    // nullable columns
+    expect(cols.find((c) => c.name === 'parsed_intent')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'context_keys')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'generated_prompt')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'target_agent')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'confirmed_at')?.notnull).toBe(0);
+  });
+
+  it('creates idx_dispatch_requests_status and idx_dispatch_requests_created_at indexes', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='dispatch_requests'")
+      .all() as { name: string }[];
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain('idx_dispatch_requests_status');
+    expect(names).toContain('idx_dispatch_requests_created_at');
+  });
+
+  it('migration 005 is idempotent (running twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 5")
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+
+  it('enforces dispatch_requests.status CHECK constraint (invalid status throws)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO dispatch_requests (id, nl_intent, status, created_at)
+         VALUES ('dr1', 'do something', 'INVALID_STATUS', 0)`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('allows all four valid status values', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    for (const [idx, status] of (['PENDING', 'CONFIRMED', 'REJECTED', 'FAILED'] as const).entries()) {
+      expect(() =>
+        db.prepare(
+          `INSERT INTO dispatch_requests (id, nl_intent, status, created_at)
+           VALUES (?, 'intent', ?, 0)`
+        ).run(`dr${idx}`, status)
+      ).not.toThrow();
+    }
+  });
+});

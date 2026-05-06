@@ -11,6 +11,8 @@ import { toolCreateCheckpoint, toolListCheckpoints } from './tools/checkpoint.js
 import { toolRewindPreview, toolRewindTo } from './tools/rewind.js';
 import { toolRegisterProcess, toolHeartbeat, toolListProcesses, toolGetProcess } from './tools/process.js';
 import { toolListConflicts } from './tools/conflict.js';
+import { toolInspectorQuery } from './tools/inspector.js';
+import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
 
 const ws = openWorkspace();
 
@@ -167,6 +169,58 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'cairn.inspector.query',
+    description: '自然语言查询 Cairn 状态（只读，走关键词 SQL 模板，不走 LLM）。支持 agents / conflicts / checkpoints / scratchpad / dispatch_requests / stats 等查询。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: '自然语言查询，如 "active agents"、"open conflicts"、"stats"、"recent dispatch requests" 等。',
+          minLength: 1,
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'cairn.dispatch.request',
+    description: '将自然语言意图路由给合适的 agent。调用 LLM 解析意图并生成执行指令，应用 4 条应用层兜底规则，写入 dispatch_requests（状态 PENDING）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nl_intent: {
+          type: 'string',
+          description: '自然语言任务意图描述（最少 5 个字符）',
+          minLength: 5,
+        },
+        task_id: {
+          type: 'string',
+          description: '可选任务 ID，用于聚合相关请求',
+        },
+        target_agent: {
+          type: 'string',
+          description: '可选：直接指定目标 agent_id（跳过 LLM 选型）',
+        },
+      },
+      required: ['nl_intent'],
+    },
+  },
+  {
+    name: 'cairn.dispatch.confirm',
+    description: '确认一个 PENDING 派单请求（PENDING → CONFIRMED），并将 generated_prompt 写入 scratchpad。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: {
+          type: 'string',
+          description: 'dispatch request 的 ULID id（来自 cairn.dispatch.request 返回值）',
+        },
+      },
+      required: ['request_id'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -189,7 +243,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.process.heartbeat': result = toolHeartbeat(ws, a); break;
     case 'cairn.process.list':      result = toolListProcesses(ws, a); break;
     case 'cairn.process.status':    result = toolGetProcess(ws, a); break;
-    case 'cairn.conflict.list':     result = toolListConflicts(ws, a); break;
+    case 'cairn.conflict.list':       result = toolListConflicts(ws, a); break;
+    case 'cairn.inspector.query':     result = toolInspectorQuery(ws, a); break;
+    case 'cairn.dispatch.request':    result = await toolDispatchRequest(ws, a); break;
+    case 'cairn.dispatch.confirm':    result = toolDispatchConfirm(ws, a); break;
     default: throw new Error(`unknown tool: ${name}`);
   }
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
