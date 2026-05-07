@@ -611,3 +611,124 @@ describe('008-dispatch-task-id schema', () => {
     expect(count.n).toBe(1);
   });
 });
+
+describe('009-blockers schema', () => {
+  it('creates blockers table with correct columns and NOT NULL constraints', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(blockers)').all() as Array<{
+      name: string; pk: number; notnull: number; type: string;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'blocker_id', 'task_id', 'question', 'context_keys',
+      'status', 'raised_by', 'raised_at',
+      'answer', 'answered_by', 'answered_at', 'metadata_json',
+    ]));
+    // blocker_id is PK
+    expect(cols.find((c) => c.name === 'blocker_id')?.pk).toBe(1);
+    // NOT NULL columns
+    expect(cols.find((c) => c.name === 'task_id')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'question')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'status')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'raised_at')?.notnull).toBe(1);
+    // nullable columns
+    expect(cols.find((c) => c.name === 'context_keys')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'raised_by')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'answer')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'answered_by')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'answered_at')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'metadata_json')?.notnull).toBe(0);
+    // raised_at is INTEGER
+    expect(cols.find((c) => c.name === 'raised_at')?.type).toBe('INTEGER');
+  });
+
+  it('creates idx_blockers_task and idx_blockers_status indexes', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='blockers'")
+      .all() as { name: string }[];
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain('idx_blockers_task');
+    expect(names).toContain('idx_blockers_status');
+  });
+
+  it('CHECK constraint accepts all 3 valid status values (OPEN, ANSWERED, SUPERSEDED)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('t-check', 'test', 'PENDING', 0, 0)`
+    ).run();
+    for (const [idx, status] of (['OPEN', 'ANSWERED', 'SUPERSEDED'] as const).entries()) {
+      expect(() =>
+        db.prepare(
+          `INSERT INTO blockers (blocker_id, task_id, question, status, raised_at)
+           VALUES (?, 't-check', 'Is this ok?', ?, 0)`
+        ).run(`b-check-${idx}`, status)
+      ).not.toThrow();
+    }
+  });
+
+  it('CHECK constraint rejects invalid status values', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('t-bad-status', 'test', 'PENDING', 0, 0)`
+    ).run();
+    expect(() =>
+      db.prepare(
+        `INSERT INTO blockers (blocker_id, task_id, question, status, raised_at)
+         VALUES ('b-bad', 't-bad-status', 'question?', 'INVALID_STATUS', 0)`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('CASCADE: deleting a task auto-deletes its blockers', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('t-cascade', 'test', 'PENDING', 0, 0)`
+    ).run();
+    db.prepare(
+      `INSERT INTO blockers (blocker_id, task_id, question, status, raised_at)
+       VALUES ('b-cascade-1', 't-cascade', 'Question A?', 'OPEN', 1000)`
+    ).run();
+    db.prepare(
+      `INSERT INTO blockers (blocker_id, task_id, question, status, raised_at)
+       VALUES ('b-cascade-2', 't-cascade', 'Question B?', 'OPEN', 2000)`
+    ).run();
+
+    const before = db.prepare('SELECT COUNT(*) AS n FROM blockers WHERE task_id = ?').get('t-cascade') as { n: number };
+    expect(before.n).toBe(2);
+
+    db.prepare('DELETE FROM tasks WHERE task_id = ?').run('t-cascade');
+
+    const after = db.prepare('SELECT COUNT(*) AS n FROM blockers WHERE task_id = ?').get('t-cascade') as { n: number };
+    expect(after.n).toBe(0);
+  });
+
+  it('FK enforcement: inserting a blocker with a nonexistent task_id throws', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO blockers (blocker_id, task_id, question, status, raised_at)
+         VALUES ('b-fk-fail', 'NONEXISTENT_TASK', 'Will this work?', 'OPEN', 0)`
+      ).run()
+    ).toThrow(/FOREIGN KEY constraint failed/);
+  });
+
+  it('migration 009 is idempotent (running ALL_MIGRATIONS twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 9')
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+});

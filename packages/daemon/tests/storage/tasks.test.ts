@@ -342,3 +342,87 @@ describe('FK constraint', () => {
     ).toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 2 BLOCKED-loop integration: updateTaskState through the repository
+// ---------------------------------------------------------------------------
+
+describe('updateTaskState — BLOCKED-loop transitions (Phase 2)', () => {
+  it('RUNNING → BLOCKED: state is BLOCKED and updated_at increases monotonically', () => {
+    const task = createTask(db, { intent: 'will be blocked' });
+
+    const t0 = task.updated_at;
+    const running = updateTaskState(db, task.task_id, 'RUNNING');
+    expect(running.state).toBe('RUNNING');
+    expect(running.updated_at).toBeGreaterThanOrEqual(t0);
+
+    const t1 = running.updated_at;
+    const blocked = updateTaskState(db, task.task_id, 'BLOCKED');
+    expect(blocked.state).toBe('BLOCKED');
+    // updated_at must not go backwards after each transition
+    expect(blocked.updated_at).toBeGreaterThanOrEqual(t1);
+  });
+
+  it('BLOCKED → READY_TO_RESUME: state is READY_TO_RESUME', () => {
+    const task = createTask(db, { intent: 'needs answer' });
+
+    // Reach BLOCKED via proper transitions
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'BLOCKED');
+
+    const resumed = updateTaskState(db, task.task_id, 'READY_TO_RESUME');
+    expect(resumed.state).toBe('READY_TO_RESUME');
+  });
+
+  it('READY_TO_RESUME → RUNNING: state is RUNNING (resume path)', () => {
+    const task = createTask(db, { intent: 'resume this' });
+
+    // Reach READY_TO_RESUME via transitions
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'BLOCKED');
+    updateTaskState(db, task.task_id, 'READY_TO_RESUME');
+
+    const running = updateTaskState(db, task.task_id, 'RUNNING');
+    expect(running.state).toBe('RUNNING');
+  });
+
+  it('BLOCKED → CANCELLED: state is CANCELLED (cancel from BLOCKED is legal)', () => {
+    const task = createTask(db, { intent: 'cancel while blocked' });
+
+    // Reach BLOCKED via proper transitions
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'BLOCKED');
+
+    const cancelled = updateTaskState(db, task.task_id, 'CANCELLED');
+    expect(cancelled.state).toBe('CANCELLED');
+  });
+
+  it('RUNNING → READY_TO_RESUME throws (must go through BLOCKED first)', () => {
+    const task = createTask(db, { intent: 'illegal shortcut' });
+
+    updateTaskState(db, task.task_id, 'RUNNING');
+
+    expect(() => updateTaskState(db, task.task_id, 'READY_TO_RESUME')).toThrow(
+      /Invalid task state transition/,
+    );
+
+    // Confirm state did NOT change
+    const after = getTask(db, task.task_id)!;
+    expect(after.state).toBe('RUNNING');
+  });
+
+  it('BLOCKED → BLOCKED throws (self-loop on BLOCKED is not a valid transition)', () => {
+    const task = createTask(db, { intent: 'double block attempt' });
+
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'BLOCKED');
+
+    expect(() => updateTaskState(db, task.task_id, 'BLOCKED')).toThrow(
+      /Invalid task state transition/,
+    );
+
+    // Confirm state is still BLOCKED
+    const after = getTask(db, task.task_id)!;
+    expect(after.state).toBe('BLOCKED');
+  });
+});
