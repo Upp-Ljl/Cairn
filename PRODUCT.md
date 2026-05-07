@@ -15,7 +15,7 @@ W5 引入的 **Task Capsule** 是 Cairn 的一个 OS primitive：durable multi-a
 
 > **Cairn is the host-level coordination kernel for multi-agent work. It gives agents and subagents durable shared state, conflict visibility, handoff packets, checkpoints, and outcome checks, so complex collaboration can survive failure, interruption, and handoff.**
 
-当前阶段：v0.1 W5 Phase 1+2 已交付（Task Capsule lifeline + BLOCKED-loop pause-and-resume，real MCP stdio 三 child 进程 dogfood 30/30 PASS），Phase 3（outcomes 验收）plan ready 待实施。
+当前阶段：v0.1 **W5 完整闭环已交付**——Task Capsule 现在是一等公民：可暂停、可接力、可验收、可回滚。任务可以在 session A 停下、过一晚、由 session B 接力，最后由 outcomes DSL 自动验收（tests_pass / file_exists / 等 7 原语，AND 语义，确定性评估）。Phase 3 dogfood 32/32 PASS through real MCP stdio across 3 sessions。**Cairn lets agents work longer because failure, interruption, and handoff are no longer fatal.**
 
 ---
 

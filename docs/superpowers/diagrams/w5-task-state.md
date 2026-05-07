@@ -1,6 +1,6 @@
 # Cairn Task Capsule — State Machine
 
-这是 Task Capsule 的规范状态图，首次引入于 W5 Phase 1，BLOCKED 闭环在 Phase 2 激活。图中展示的是任务从创建到终止的全部可能状态转换。**Phase 1+2 已激活 8 条 transition**（详见下方 legend）；Phase 3 将激活 WAITING_REVIEW 相关的 4 条 outcomes 验收 transition。本图作为产品契约的一部分，状态机源代码见 `packages/daemon/src/storage/tasks-state.ts` `VALID_TRANSITIONS`。
+这是 Task Capsule 的规范状态图，首次引入于 W5 Phase 1，BLOCKED 闭环在 Phase 2 激活，outcomes 验收闭环在 Phase 3 激活。**全部 12 条 transition 现已 active**。本图作为产品契约的一部分，状态机源代码见 `packages/daemon/src/storage/tasks-state.ts` `VALID_TRANSITIONS`。
 
 ```mermaid
 stateDiagram-v2
@@ -8,15 +8,15 @@ stateDiagram-v2
     PENDING --> RUNNING : task.start_attempt
     PENDING --> CANCELLED : task.cancel
     RUNNING --> BLOCKED : task.block
-    RUNNING --> WAITING_REVIEW : task.submit_for_review (Phase 3)
+    RUNNING --> WAITING_REVIEW : task.submit_for_review
     RUNNING --> CANCELLED : task.cancel
     RUNNING --> FAILED : (system)
     BLOCKED --> READY_TO_RESUME : task.answer
     BLOCKED --> CANCELLED : task.cancel
     READY_TO_RESUME --> RUNNING : task.start_attempt
-    WAITING_REVIEW --> DONE : outcomes.evaluate pass (Phase 3)
-    WAITING_REVIEW --> RUNNING : outcomes.evaluate fail (Phase 3)
-    WAITING_REVIEW --> FAILED : outcomes terminal fail (Phase 3)
+    WAITING_REVIEW --> DONE : outcomes.evaluate (PASS)
+    WAITING_REVIEW --> RUNNING : outcomes.evaluate (FAIL)
+    WAITING_REVIEW --> FAILED : outcomes.terminal_fail
     DONE --> [*]
     FAILED --> [*]
     CANCELLED --> [*]
@@ -37,14 +37,18 @@ stateDiagram-v2
 | **READY_TO_RESUME → RUNNING** | `cairn.task.start_attempt`（同一工具，从不同源状态进入） | **Phase 2** |
 | **RUNNING → FAILED** | `(system)` — 系统错误导致不可恢复失败（Phase 1+2 暂不主动写） | 备用 |
 
-### Phase 3 占位 transitions（仍未激活）
+### Phase 3 已激活的 transitions（4 条）
 
-以下 transition 在 `VALID_TRANSITIONS` 中已写好，guard 已就绪，但**还没有 MCP 工具触发**——Phase 3 加入后激活：
+| Transition | 触发动词 | 引入 Phase |
+|---|---|---|
+| **RUNNING → WAITING_REVIEW** | `cairn.task.submit_for_review`（LD-12 upsert：首次 INSERT outcome + 提交 criteria；retry 复用 outcome_id 重置 PENDING、criteria 冻结） | **Phase 3** |
+| **WAITING_REVIEW → DONE** | `cairn.outcomes.evaluate` 验收 PASS（LD-15 全 AND；LD-17 同步阻塞） | **Phase 3** |
+| **WAITING_REVIEW → RUNNING** | `cairn.outcomes.evaluate` 验收 FAIL — agent 修后再 submit_for_review 走 upsert 重置（P1.1 闭环） | **Phase 3** |
+| **WAITING_REVIEW → FAILED** | `cairn.outcomes.terminal_fail`（用户主动放弃；只允许从 PENDING outcome 终判，FAIL 状态下 task 已回 RUNNING，应走 cancel） | **Phase 3** |
 
-- **RUNNING → WAITING_REVIEW**：标注 `(Phase 3)`。Agent 通过 `cairn.task.submit_for_review` 声称完成，等待 outcomes 验收。
-- **WAITING_REVIEW → DONE**：标注 `(Phase 3)`。`cairn.outcomes.evaluate` 验收通过。
-- **WAITING_REVIEW → RUNNING**：标注 `(Phase 3)`。验收失败回到运行状态重试。
-- **WAITING_REVIEW → FAILED**：标注 `(Phase 3)`。验收终判失败。
+### 故意不存在的 transition：WAITING_REVIEW → CANCELLED（P1.2 锁）
+
+`VALID_TRANSITIONS['WAITING_REVIEW']` 是 `{DONE, RUNNING, FAILED}`，**不含** CANCELLED。LD-17 让 evaluate 同步阻塞，WAITING_REVIEW 实际只是 sub-second 中转态；任何"我想中途取消"的需求路径是：等 evaluate 返回（最长 60s/原语），task 落到 RUNNING（FAIL 或 TIMEOUT）或 DONE，然后从 RUNNING 调 `cancel`；evaluate 之前的 PENDING outcome 上则可以走 `terminal_fail`。
 
 ## 源码引用
 
