@@ -13,6 +13,7 @@ import { toolRegisterProcess, toolHeartbeat, toolListProcesses, toolGetProcess }
 import { toolListConflicts, toolResolveConflict } from './tools/conflict.js';
 import { toolInspectorQuery } from './tools/inspector.js';
 import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
+import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask } from './tools/task.js';
 
 const ws = openWorkspace();
 
@@ -236,6 +237,99 @@ const TOOLS = [
       required: ['request_id'],
     },
   },
+  {
+    name: 'cairn.task.create',
+    description: '创建一个新的 Task Capsule（初始状态 PENDING）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intent: {
+          type: 'string',
+          description: '任务意图描述（必填）',
+        },
+        parent_task_id: {
+          type: 'string',
+          description: '父任务 ID（可选，用于建立任务树）',
+        },
+        metadata: {
+          type: 'object',
+          description: '任意附加元数据（可选）',
+        },
+        created_by_agent_id: {
+          type: 'string',
+          description: '创建者 agent ID。省略时自动使用 SESSION_AGENT_ID。',
+        },
+      },
+      required: ['intent'],
+    },
+  },
+  {
+    name: 'cairn.task.get',
+    description: '按 task_id 获取 Task Capsule 详情。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'cairn.task.list',
+    description: '列出 Task Capsule，支持按 state / parent_task_id / limit 过滤。parent_task_id: null 表示只列根任务。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        state: {
+          oneOf: [
+            {
+              type: 'string',
+              enum: ['PENDING', 'RUNNING', 'BLOCKED', 'READY_TO_RESUME', 'WAITING_REVIEW', 'DONE', 'FAILED', 'CANCELLED'],
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['PENDING', 'RUNNING', 'BLOCKED', 'READY_TO_RESUME', 'WAITING_REVIEW', 'DONE', 'FAILED', 'CANCELLED'],
+              },
+            },
+          ],
+          description: '按状态过滤（单个或数组）',
+        },
+        parent_task_id: {
+          type: ['string', 'null'],
+          description: '按父任务 ID 过滤。传 null 表示只列根任务（parent_task_id IS NULL）。省略表示不过滤。',
+        },
+        limit: {
+          type: 'number',
+          description: '最多返回条数',
+        },
+      },
+    },
+  },
+  {
+    name: 'cairn.task.start_attempt',
+    description: '将任务从 PENDING（或 READY_TO_RESUME）转为 RUNNING，表示 agent 开始/接力执行。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'cairn.task.cancel',
+    description: '取消一个任务，原子写入 cancel_reason 和 cancelled_at 到 metadata。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        reason: { type: 'string', description: '取消原因（可选）' },
+      },
+      required: ['task_id'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -263,6 +357,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.inspector.query':     result = toolInspectorQuery(ws, a); break;
     case 'cairn.dispatch.request':    result = await toolDispatchRequest(ws, a); break;
     case 'cairn.dispatch.confirm':    result = toolDispatchConfirm(ws, a); break;
+    case 'cairn.task.create':         result = toolCreateTask(ws, a); break;
+    case 'cairn.task.get':            result = toolGetTask(ws, a); break;
+    case 'cairn.task.list':           result = toolListTasks(ws, a); break;
+    case 'cairn.task.start_attempt':  result = toolStartAttempt(ws, a); break;
+    case 'cairn.task.cancel':         result = toolCancelTask(ws, a); break;
     default: throw new Error(`unknown tool: ${name}`);
   }
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
