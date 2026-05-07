@@ -303,9 +303,11 @@ describe('005-dispatch-requests schema', () => {
       name: string; pk: number; notnull: number;
     }>;
     const colNames = new Set(cols.map((c) => c.name));
+    // task_id was added by migration 008
     expect(colNames).toEqual(new Set([
       'id', 'nl_intent', 'parsed_intent', 'context_keys',
       'generated_prompt', 'target_agent', 'status', 'created_at', 'confirmed_at',
+      'task_id',
     ]));
     // id PK
     expect(cols.find((c) => c.name === 'id')?.pk).toBe(1);
@@ -400,5 +402,212 @@ describe('006-conflicts-pending-review schema', () => {
     ).run();
     const row = db.prepare('SELECT status FROM conflicts WHERE id = ?').get('keep1') as { status: string };
     expect(row.status).toBe('OPEN');
+  });
+});
+
+describe('007-tasks schema', () => {
+  it('creates tasks table with correct columns and NOT NULL constraints', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(tasks)').all() as Array<{
+      name: string; pk: number; notnull: number; type: string;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'task_id', 'intent', 'state', 'parent_task_id',
+      'created_at', 'updated_at', 'created_by_agent_id', 'metadata_json',
+    ]));
+    // task_id is PK
+    expect(cols.find((c) => c.name === 'task_id')?.pk).toBe(1);
+    // NOT NULL columns
+    expect(cols.find((c) => c.name === 'intent')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'state')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'created_at')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'updated_at')?.notnull).toBe(1);
+    // nullable columns
+    expect(cols.find((c) => c.name === 'parent_task_id')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'created_by_agent_id')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'metadata_json')?.notnull).toBe(0);
+    // timestamp columns are INTEGER
+    expect(cols.find((c) => c.name === 'created_at')?.type).toBe('INTEGER');
+    expect(cols.find((c) => c.name === 'updated_at')?.type).toBe('INTEGER');
+  });
+
+  it('creates all three required indexes on tasks', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tasks'")
+      .all() as { name: string }[];
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain('idx_tasks_state');
+    expect(names).toContain('idx_tasks_parent');
+    expect(names).toContain('idx_tasks_created_at');
+  });
+
+  it('accepts all 8 valid state values', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const states = [
+      'PENDING', 'RUNNING', 'BLOCKED', 'READY_TO_RESUME',
+      'WAITING_REVIEW', 'DONE', 'FAILED', 'CANCELLED',
+    ] as const;
+    for (const [idx, state] of states.entries()) {
+      expect(() =>
+        db.prepare(
+          `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+           VALUES (?, 'test intent', ?, 0, 0)`
+        ).run(`t${idx}`, state)
+      ).not.toThrow();
+    }
+  });
+
+  it('rejects invalid state values (CHECK constraint)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+         VALUES ('tbad', 'test intent', 'NOT_A_STATE', 0, 0)`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('supports self-referential parent_task_id (tree structure)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('root', 'root task', 'PENDING', 1000, 1000)`
+    ).run();
+    expect(() =>
+      db.prepare(
+        `INSERT INTO tasks (task_id, intent, state, parent_task_id, created_at, updated_at)
+         VALUES ('child', 'child task', 'PENDING', 'root', 2000, 2000)`
+      ).run()
+    ).not.toThrow();
+    const child = db.prepare('SELECT parent_task_id FROM tasks WHERE task_id = ?').get('child') as { parent_task_id: string };
+    expect(child.parent_task_id).toBe('root');
+  });
+
+  it('migration 007 is idempotent (running ALL_MIGRATIONS twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 7')
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+});
+
+describe('008-dispatch-task-id schema', () => {
+  it('dispatch_requests has task_id column: TEXT, nullable', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(dispatch_requests)').all() as Array<{
+      name: string; type: string; notnull: number;
+    }>;
+    const taskIdCol = cols.find((c) => c.name === 'task_id');
+    expect(taskIdCol).toBeDefined();
+    expect(taskIdCol?.type).toBe('TEXT');
+    expect(taskIdCol?.notnull).toBe(0); // nullable
+  });
+
+  it('idx_dispatch_requests_task_id index exists', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='dispatch_requests'")
+      .all() as { name: string }[];
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain('idx_dispatch_requests_task_id');
+  });
+
+  it('inserting a row with task_id = NULL succeeds (legacy compat)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO dispatch_requests (id, nl_intent, status, created_at)
+         VALUES ('dr-null', 'legacy intent', 'PENDING', 0)`
+      ).run()
+    ).not.toThrow();
+    const row = db.prepare('SELECT task_id FROM dispatch_requests WHERE id = ?').get('dr-null') as { task_id: string | null };
+    expect(row.task_id).toBeNull();
+  });
+
+  it('inserting a row with a valid task_id succeeds and round-trips', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    // Create the referenced task first
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('task-001', 'test task', 'PENDING', 1000, 1000)`
+    ).run();
+    expect(() =>
+      db.prepare(
+        `INSERT INTO dispatch_requests (id, nl_intent, status, created_at, task_id)
+         VALUES ('dr-with-task', 'intent with task', 'PENDING', 0, 'task-001')`
+      ).run()
+    ).not.toThrow();
+    const row = db.prepare('SELECT task_id FROM dispatch_requests WHERE id = ?').get('dr-with-task') as { task_id: string | null };
+    expect(row.task_id).toBe('task-001');
+  });
+
+  // FK is enforced in SQLite 3.53.0 with better-sqlite3@^12.9.0 (foreign_keys = ON set in db.ts).
+  // ALTER TABLE ADD COLUMN ... REFERENCES tasks(task_id) ON DELETE SET NULL is accepted and enforced.
+  it('inserting with a nonexistent task_id throws (FK enforced in SQLite 3.53.0)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO dispatch_requests (id, nl_intent, status, created_at, task_id)
+         VALUES ('dr-bad-task', 'intent', 'PENDING', 0, 'NONEXISTENT_TASK')`
+      ).run()
+    ).toThrow(/FOREIGN KEY constraint failed/);
+  });
+
+  // Zero-regression assertions: scratchpad and checkpoints task_id columns must still exist
+  it('scratchpad.task_id column still exists after migration 008', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(scratchpad)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('task_id');
+  });
+
+  it('checkpoints.task_id column still exists after migration 008', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(checkpoints)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('task_id');
+  });
+
+  it('idx_scratchpad_task_id index still exists after migration 008', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='scratchpad'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('idx_scratchpad_task_id');
+  });
+
+  it('idx_checkpoints_task_id index still exists after migration 008', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='checkpoints'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('idx_checkpoints_task_id');
+  });
+
+  it('migration 008 is idempotent (running ALL_MIGRATIONS twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8')
+      .get() as { n: number };
+    expect(count.n).toBe(1);
   });
 });
