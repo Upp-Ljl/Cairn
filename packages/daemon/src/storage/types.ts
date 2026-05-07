@@ -97,3 +97,14 @@ export interface CheckpointRow {
   created_at: number;
   ready_at: number | null;
 }
+
+/**
+ * Outcome criterion as stored in the outcomes table. Daemon stays type-erased
+ * from the mcp-server DSL union: it knows there's a primitive name and some
+ * args, but does not validate the 7-primitive whitelist (that's the
+ * mcp-server DSL parser's job; see plan §5.2.1 P2.1 lock).
+ */
+export interface StoredOutcomeCriterion {
+  primitive: string;
+  args: unknown;
+}
