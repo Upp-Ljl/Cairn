@@ -177,8 +177,8 @@ Full reports: [`docs/superpowers/plans/2026-04-29-poc-1-results.md`](docs/superp
   │   │ (Agent A)    │◄────────────┤     cairn  mcp-server        │ │
   │   └──────────────┘             │     (Node.js subprocess)     │ │
   │                                │                              │ │
-  │   ┌──────────────┐  MCP stdio  │     8 tools (shipped)        │ │
-  │   │ Cursor / etc.├────────────►│   28 tools (W1+W4+W5)        │ │
+  │   ┌──────────────┐  MCP stdio  │   28 tools (W1+W4+W5)        │ │
+  │   │ Cursor / etc.├────────────►│   all shipped                │ │
   │   │ (Agent B)    │◄────────────┤                              │ │
   │   └──────────────┘             └──────────┬───────────────────┘ │
   │                                           │ function call        │
@@ -225,7 +225,7 @@ The desktop pet (`packages/desktop-shell/`, Electron) shows ambient coordination
 ### Build
 
 ```bash
-git clone https://github.com/Upp-renlab/Cairn.git
+git clone https://github.com/Upp-Ljl/Cairn.git
 cd Cairn
 
 # Build the daemon (output goes to packages/daemon/dist/)
@@ -244,7 +244,7 @@ npm run build
 From inside your project directory (the repo you want Cairn to coordinate):
 
 ```bash
-node <absolute-path-to-cairn>/packages/mcp-server/dist/cli.js install
+node <absolute-path-to-cairn>/packages/mcp-server/dist/cli/install.js
 ```
 
 This writes `.mcp.json` (cairn-wedge entry), installs a git pre-commit hook (marker `# cairn-pre-commit-v1`; sidecars to `.cairn/` if a non-cairn hook already exists), and generates `start-cairn-pet.bat` / `.sh` launchers. All three steps are idempotent and safe to re-run.
@@ -366,7 +366,7 @@ These are boundary definitions, not disclaimers. Any design or feature request t
 
 6. **Cairn does not do cross-machine collaboration (v0.1).** Local-first. All data stays on your machine. Cross-machine sync is v0.3+.
 
-7. **Cairn does not proxy your agents' external calls.** There is no HTTP proxy, no Recorder/Classifier/Reverter pipeline, no compensation engine for SaaS API side effects. That was a previous product direction (pre-v2) that was replaced by the current Agent OS positioning.
+7. **Cairn does not proxy your agents' external calls.** There is no HTTP proxy, no Recorder/Classifier/Reverter pipeline, no compensation engine for SaaS API side effects. That was a previous product direction (pre-v2) that was replaced by the current host-level coordination kernel positioning.
 
 ---
 

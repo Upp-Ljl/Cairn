@@ -201,7 +201,7 @@ v0.1 **W5 Phase 1+2+3 全部已交付**（2026-05-28，commit chain `cd20159..9e
 | 阶段 | 内容 | Commit / 状态 |
 |---|---|---|
 | W1 楔 | 持久层 + 8 MCP tools | `feat/storage-p1` 已合并 + tag `storage-p1` |
-| W4 Phase 1-4 | processes / conflicts / dispatch 三表 + 17 工具 + auto agent_id + R6 + `cairn install` CLI | 2026-05-06 done |
+| W4 Phase 1-4 | processes / conflicts / dispatch 三表 + 累计 17 工具（W1 楔 8 + W4 新增 9 个 process / conflict / inspector / dispatch）+ auto agent_id + R6 + `cairn install` CLI | 2026-05-06 done |
 | W5 Phase 1 | Task Capsule lifeline（tasks 表 + 5 task tools） | 2026-05-07~14 |
 | W5 Phase 2 | Blockers + resume_packet（blockers 表 + 3 task tools） | 2026-05-14~21 |
 | W5 Phase 3 | Outcomes DSL + review/retry/terminal_fail 闭环（outcomes 表 + 3 outcomes tools + DSL stack 7 原语） | 2026-05-22~28，dogfood 32/32 PASS |
