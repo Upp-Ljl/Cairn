@@ -20,7 +20,7 @@ Cairn 的三个动词：**Dispatch（派单）/ Rewind（回滚）/ Arbitrate（
 
 当前阶段：v0.1 楔已超额完成（8 个 MCP 工具上线），正在 dogfood。
 
-**W5 起，Cairn 进入"长程任务 OS"阶段**：每个长程任务建模为可暂停、可接力、可验收、可回滚的 Task Capsule。当前 Phase 1 已交付任务生命线骨架（`tasks` 表 + 5 个语义动词）；Phase 2 加 blockers + resume packet，Phase 3 加 outcomes 验收。最终 pitch：**Cairn lets agents work longer because failure, interruption, and handoff are no longer fatal.**
+**W5 起，Cairn 进入"长程任务 OS"阶段**：每个长程任务建模为可暂停、可接力、可验收、可回滚的 Task Capsule。**Phase 1+2 已交付：任务生命线 + 暂停接力闭环**——一个任务可以在 session A 停下、过一晚、在 session B 接力（已通过真实 MCP stdio 三 child 进程 dogfood 验证）。Phase 3 加 outcomes 验收（grader agent + tests_pass DSL）。最终 pitch：**Cairn lets agents work longer because failure, interruption, and handoff are no longer fatal.**
 
 ---
 
