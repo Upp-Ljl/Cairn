@@ -519,7 +519,7 @@ Phase 1 dogfood 证明了 task identity 跨进程存活。Phase 2 dogfood 证明
 
 - [ ] migration 009 落地，daemon 测试全绿（≥ 5 个 schema test，含 CASCADE 与 FK）
 - [ ] `repositories/blockers.ts` + 单测 ≥ 12 case 全绿（含 `recordBlocker` 与 `markAnswered` 各自的原子性测试 + multi-blocker 计数 ≥ 3 case）
-- [ ] `repositories/blockers.ts` 公开 API 恰好 5 个 named export（1 接口 `BlockerRow` + 4 verb：`recordBlocker` / `markAnswered` / `listBlockersByTask` / `getBlocker`）；任何 module-private helper（如 `transitionTaskInTx`）不导出（grep 验证）
+- [ ] `repositories/blockers.ts` 公开 API 恰好 6 个 named export（1 type alias `BlockerStatus` + 1 接口 `BlockerRow` + 4 verb：`recordBlocker` / `markAnswered` / `listBlockersByTask` / `getBlocker`）；任何 module-private helper（如 `transitionTaskInTx`）不导出（grep 验证）。`BlockerStatus` 单独导出是有意：把 CHECK 约束的 `'OPEN'|'ANSWERED'|'SUPERSEDED'` 三值绑到 TS 字面量类型，listBlockersByTask filter / 测试 / Phase 3 outcomes 评估器都靠它做类型安全。
 - [ ] **MCP 层** `tools/task.ts` 仅追加 3 个工具（block / answer / resume_packet）；`cairn.task.list_blockers` / `cairn.task.get_blocker` 不存在于 MCP tool list（grep 验证 LD-8）
 - [ ] `cairn.task.block` / `answer` / `resume_packet` 3 个 MCP 工具落地，acceptance test ≥ 12 case 全绿；现有 17 case 零退化
 - [ ] `update_state` / `set_blocker_status` / `list_blockers` / `get_blocker` 工具**不存在**于 MCP tool list（grep 验证）
