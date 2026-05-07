@@ -26,6 +26,25 @@ interface Template {
    * Returns { sql, params } ready to pass to better-sqlite3 .all().
    */
   buildQuery: (query: string) => { sql: string; params: unknown[] };
+  /**
+   * When true, rows with task_id IS NULL are annotated with _label: 'legacy_orphan'
+   * at response-serialization time. Read-side only — never written to the DB.
+   */
+  annotateTaskId?: boolean;
+}
+
+/**
+ * Annotate a row that originates from a task-aware table (scratchpad /
+ * dispatch_requests / checkpoints).  Rows with no task_id are legacy data
+ * that pre-date Task Capsule; they get a response-time label so callers can
+ * distinguish them from rows that were created with a real task.
+ *
+ * Pure function — does NOT modify the database.
+ */
+function annotateLegacy(row: Record<string, unknown>): Record<string, unknown> {
+  return row['task_id'] == null
+    ? { ...row, _label: 'legacy_orphan' }
+    : row;
 }
 
 /**
@@ -131,6 +150,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['checkpoints for task', 'task 的 checkpoint', 'task的checkpoint'],
     intent: 'list_checkpoints_for_task',
+    annotateTaskId: true,
     buildQuery: (query) => {
       const taskId = extractTaskId(query) ?? '';
       return {
@@ -142,6 +162,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['recent checkpoints', '最近 checkpoint', '最近checkpoint', 'latest checkpoints'],
     intent: 'list_recent_checkpoints',
+    annotateTaskId: true,
     buildQuery: () => ({
       sql: 'SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT 10',
       params: [],
@@ -153,6 +174,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['scratchpad for task', 'task 的 scratchpad'],
     intent: 'list_scratchpad_for_task',
+    annotateTaskId: true,
     buildQuery: (query) => {
       const taskId = extractTaskId(query) ?? '';
       return {
@@ -164,6 +186,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['scratchpad keys', 'scratchpad 列表', 'scratchpad列表', 'list scratchpad', 'all scratchpad'],
     intent: 'list_scratchpad_keys',
+    annotateTaskId: true,
     buildQuery: () => ({
       sql: 'SELECT key, task_id, expires_at, created_at, updated_at FROM scratchpad ORDER BY updated_at DESC LIMIT 100',
       params: [],
@@ -175,6 +198,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['pending dispatch', '待确认', 'pending requests'],
     intent: 'list_pending_dispatch',
+    annotateTaskId: true,
     buildQuery: () => ({
       sql: "SELECT * FROM dispatch_requests WHERE status = 'PENDING' ORDER BY created_at DESC LIMIT 100",
       params: [],
@@ -183,6 +207,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['confirmed dispatch', '已确认派单', 'confirmed requests'],
     intent: 'list_confirmed_dispatch',
+    annotateTaskId: true,
     buildQuery: () => ({
       sql: "SELECT * FROM dispatch_requests WHERE status = 'CONFIRMED' ORDER BY created_at DESC LIMIT 100",
       params: [],
@@ -191,6 +216,7 @@ const TEMPLATES: Template[] = [
   {
     keywords: ['recent dispatch requests', '最近的派单', '派单历史', 'dispatch history', 'recent dispatch'],
     intent: 'list_recent_dispatch',
+    annotateTaskId: true,
     buildQuery: () => ({
       sql: 'SELECT * FROM dispatch_requests ORDER BY created_at DESC LIMIT 10',
       params: [],
@@ -291,7 +317,12 @@ export function toolInspectorQuery(ws: Workspace, args: InspectorQueryArgs): Ins
   }
 
   const { sql, params } = match.template.buildQuery(q);
-  const results = runQuery(ws.db, sql, params);
+  const rawResults = runQuery(ws.db, sql, params);
+
+  // Apply legacy_orphan annotation for task-aware tables (read-side only).
+  const results = match.template.annotateTaskId
+    ? (rawResults as Record<string, unknown>[]).map(annotateLegacy)
+    : rawResults;
 
   return {
     matched: true,
