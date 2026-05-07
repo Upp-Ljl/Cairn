@@ -1,8 +1,8 @@
 # Cairn — 实现架构文档（ARCHITECTURE.md）
 
-> 版本：v0.1-draft
-> 日期：2026-04-29
-> 状态：四能力 v1 实施指南，部分内容含 🚧 PoC / 调研锚点待回填
+> 版本：v0.1（W5 Phase 3 闭环已交付，Phase 4 release polish 阶段）
+> 最近更新：2026-05-28
+> 状态：四能力 + Task Capsule + Outcomes DSL 全部实施完毕；本文为 v0.1 的实现层权威文档
 
 ---
 
@@ -40,49 +40,110 @@
 
 ## 1. 系统全景图
 
-Cairn 是 daemon-centric 的协作内核。所有 agent 通过 MCP 工具与 daemon 通信，daemon 是唯一写者，SQLite 是状态权威。
+Cairn 是 daemon-centric 的协作内核，**位于** Claude Code / Cursor / Aider / Cline / Claude Code Task subagents 这些 agent 工具**之下**——所有 agent 通过 MCP 工具与 daemon 通信，daemon 是唯一写者，SQLite 是状态权威。Cairn 不向上代理 agent 推理，不调度 lead-subagent，不替 agent 执行任务；它只是这些 agent 共享的 host-level coordination kernel。
 
 ```
   ┌─────────────────────────────────────────────────────────────────┐
   │                       用户机器（本地）                           │
   │                                                                  │
   │   ┌──────────────┐  MCP stdio  ┌──────────────────────────────┐ │
-  │   │ Agent A      ├────────────►│                              │ │
-  │   │ (Claude Code)│◄────────────┤      Cairn mcp-server        │ │
+  │   │ Claude Code  ├────────────►│                              │ │
+  │   │  + subagents │◄────────────┤      Cairn mcp-server        │ │
   │   └──────────────┘             │      (Node.js 子进程)        │ │
   │                                │                              │ │
-  │   ┌──────────────┐  MCP stdio  │      17 个工具（已落地）     │ │
-  │   │ Agent B      ├────────────►│    + N 个工具（v0.1 规划）   │ │
-  │   │ (Cursor/等)  │◄────────────┤                              │ │
+  │   ┌──────────────┐  MCP stdio  │   28 个工具（W1+W4+W5）      │ │
+  │   │ Cursor /     ├────────────►│   全部已落地                 │ │
+  │   │ Aider / Cline│◄────────────┤                              │ │
   │   └──────────────┘             └──────────┬───────────────────┘ │
-  │                                           │ 函数调用                │
-  │   ┌──────────────┐                        ▼                       │
-  │   │ 用户          │          ┌─────────────────────────────────┐   │
-  │   │ (CLI / 手动) │          │        Cairn daemon             │   │
-  │   └──────┬───────┘          │     packages/daemon/            │   │
-  │          │ MCP / CLI        │                                  │   │
-  │          │                  │  ┌──────────────────────────┐   │   │
-  │          └─────────────────►│  │  仓储层（repositories/） │   │   │
-  │                             │  │  scratchpad / checkpoint  │   │   │
-  │                             │  │  processes / conflicts    │   │   │
-  │                             │  └──────────┬───────────────┘   │   │
-  │                             │             │                    │   │
-  │                             │  ┌──────────▼───────────────┐   │   │
-  │                             │  │  SQLite（WAL 模式）       │   │   │
-  │                             │  │  ~/.cairn/cairn.db        │   │   │
-  │                             │  └──────────────────────────┘   │   │
-  │                             │                                  │   │
-  │                             │  ┌──────────────────────────┐   │   │
-  │                             │  │  git-stash backend        │   │   │
-  │                             │  │  snapshots/{ckpt_id}/     │   │   │
-  │                             │  └──────────────────────────┘   │   │
-  │                             └─────────────────────────────────┘   │
+  │                                           │ 函数调用            │
+  │   ┌──────────────┐                        ▼                     │
+  │   │ 用户          │          ┌─────────────────────────────────┐│
+  │   │ (CLI / 手动) │          │        Cairn daemon             ││
+  │   └──────┬───────┘          │     packages/daemon/            ││
+  │          │ MCP / CLI        │                                  ││
+  │          │                  │  ┌──────────────────────────┐   ││
+  │          └─────────────────►│  │  8 host-level state objs │   ││
+  │                             │  │  processes / tasks /     │   ││
+  │                             │  │  dispatch_requests /     │   ││
+  │                             │  │  scratchpad / checkpoints│   ││
+  │                             │  │  conflicts / blockers /  │   ││
+  │                             │  │  outcomes                │   ││
+  │                             │  └──────────┬───────────────┘   ││
+  │                             │             │                    ││
+  │                             │  ┌──────────▼───────────────┐   ││
+  │                             │  │  SQLite（WAL 模式）       │   ││
+  │                             │  │  ~/.cairn/cairn.db        │   ││
+  │                             │  │  10 migrations (001-010) │   ││
+  │                             │  └──────────────────────────┘   ││
+  │                             │                                  ││
+  │                             │  ┌──────────────────────────┐   ││
+  │                             │  │  git-stash backend        │   ││
+  │                             │  │  snapshots/{ckpt_id}/     │   ││
+  │                             │  └──────────────────────────┘   ││
+  │                             └─────────────────────────────────┘│
   └─────────────────────────────────────────────────────────────────┘
 ```
 
 **MCP 工具流向**：
 - agent 调用工具（如 `cairn.checkpoint.create`）→ mcp-server 解析参数并做基本校验 → 调用 daemon 仓储层函数 → 写入 SQLite / 触发 git 操作 → 返回结果给 agent。
 - 每一次 MCP 工具调用都是同步的（从 agent 视角），daemon 内部写操作包裹在事务里。
+- DSL 评估（`cairn.outcomes.evaluate`）也是同步阻塞调用（per W5 Phase 3 LD-17）：mcp-server 串行跑各 primitive、聚合 AND 后 record 结果，再返回。
+
+### 1.1 8 类 host-level state objects（v0.1 完整集）
+
+Cairn 不是一个 single-purpose daemon，它管理这 8 类持久状态对象，agent 通过 MCP 工具读写它们：
+
+| State object | Migration | 用途 | 读写工具命名空间 |
+|---|---|---|---|
+| `processes` | 004 | runner 在线状态 + capabilities + heartbeat | `cairn.process.*` |
+| `tasks` | 007 | durable multi-agent work items（state machine 12 transitions） | `cairn.task.*`（除 resume_packet/submit_for_review） |
+| `dispatch_requests` | 005 + 008 | 可审计派发请求 | `cairn.dispatch.*` |
+| `scratchpad` | 002 | 共享上下文 + subagent 原始结果 | `cairn.scratchpad.*` |
+| `checkpoints` | 003 | 可回滚状态锚点（PENDING → READY 两阶段） | `cairn.checkpoint.*` / `cairn.rewind.*` |
+| `conflicts` | 004 + 006 | MCP-call + commit-after 双层检测 | `cairn.conflict.*` |
+| `blockers` | 009 | 任务内等待答复（OPEN / ANSWERED / SUPERSEDED） | `cairn.task.block` / `cairn.task.answer`（不直接暴露 list/get） |
+| `outcomes` | 010 | 结果验收状态（UNIQUE(task_id)，PENDING / PASS / FAIL / TERMINAL_FAIL） | `cairn.task.submit_for_review` / `cairn.outcomes.evaluate` / `cairn.outcomes.terminal_fail`（不暴露 list/get，LD-8） |
+
+**`resume_packet` 是 read-only aggregate view**（`cairn.task.resume_packet` 工具按需聚合：task 行 + open/answered blockers + scratchpad keys + outcomes_criteria + audit summary），不是独立持久状态——它从上述 8 类对象组装而成，每次调用都重新计算。
+
+### 1.2 两条 state loops（W5 Phase 1+2+3 闭环）
+
+**Loop 1 — BLOCKED ↔ READY_TO_RESUME 接力**（W5 Phase 2）：
+
+```
+RUNNING ──block(question)──► BLOCKED ──answer(blocker_id)──► READY_TO_RESUME
+                                                                    │
+                                                                    ▼
+                                                               start_attempt
+                                                                    │
+                                                                    ▼
+                                                                RUNNING
+```
+
+agent A 在 RUNNING 状态遇到只能由用户回答的问题，调 `cairn.task.block(question)` 写 blocker 行 + 转 BLOCKED；agent A 进程可干净退出。任意时间后用户/另一 agent 调 `cairn.task.answer(blocker_id)` → READY_TO_RESUME。新 agent 通过 `cairn.task.resume_packet(task_id)` 拿到完整上下文（含已答 blocker），调 `cairn.task.start_attempt` 接力执行。
+
+**Loop 2 — RUNNING ↔ WAITING_REVIEW outcomes 验收**（W5 Phase 3）：
+
+```
+RUNNING ──submit_for_review(criteria)──► WAITING_REVIEW
+   ▲                                         │
+   │                                         │ outcomes.evaluate
+   │                                         ▼
+   │                              ┌──── PASS ──► DONE
+   └──── FAIL ◄──────evaluate─────┤
+                                  └──── terminal_fail(reason) ──► FAILED
+```
+
+agent 完成工作后调 `cairn.task.submit_for_review(task_id, criteria)` 提交确定性 DSL 验收 criteria（7 原语 AND 聚合，no LLM grader in v1）+ 转 WAITING_REVIEW。`cairn.outcomes.evaluate(outcome_id)` 同步跑 criteria 决定 PASS/FAIL：PASS → DONE；FAIL → 回 RUNNING（agent 修代码，再调 submit_for_review，criteria 冻结、outcome_id 不变）。`cairn.outcomes.terminal_fail(reason)` 是用户主动放弃路径 → FAILED。
+
+完整状态图见 `docs/superpowers/diagrams/w5-task-state.md`（12 条 transitions 全部 active；`WAITING_REVIEW → CANCELLED` 故意不存在，per Phase 3 P1.2 lock）。
+
+### 1.3 Cairn 不做的事（架构层面 veto 清单）
+
+- **不调度 lead-subagent**：Cairn 不决定哪个 agent 跑哪个任务、不分发 sub-task；那是 agent host（如 Claude Code Task tool）的职责。Cairn 只在用户主动调 `cairn.dispatch.request(nl_intent)` 时按 5 条 fallback rules 推荐目标 agent + 生成 prompt，等用户 confirm 后转发。
+- **不替 agent 写代码 / 改文件**：Cairn 工具不修改用户代码；连 `cairn install` CLI 写的 `.mcp.json` / pre-commit hook / start-cairn-pet 脚本都是限定的 boilerplate，不碰用户业务文件。
+- **不自动拆解任务**：Task Capsule (`tasks` 表) 是 agent / 用户主动调 `cairn.task.create(intent)` 创建的，Cairn 不会把一个 intent 自动展开成多个 child tasks。`parent_task_id` 字段允许手动构建 task tree，但没有自动拆解器。
+- **不替 agent 决策**：仲裁建议（conflict diagnosis）、dispatch agent 选型、outcomes verdict 都是 deterministic 数据 + 给用户/agent 看，最终由用户拍板（dispatch.confirm）或 deterministic DSL（outcomes.evaluate）决定，不是 LLM 替决。
 
 ---
 
@@ -130,29 +191,41 @@ daemon 启动时执行（顺序固定）：
 
 daemon 和 mcp-server 分包的理由：职责边界清晰——daemon 负责数据和状态，mcp-server 负责协议翻译和工具暴露。两者分开也方便独立测试（daemon 的 67 个单元测试不依赖 MCP 协议）。
 
-### 3.2 已落地（v0.1 楔，W1+W2）
+### 3.2 已落地（v0.1 W1 + W4 + W5 全部）
 
 ```
 packages/
-├── daemon/                    # 持久层 + 业务逻辑
+├── daemon/                    # 持久层 + 业务逻辑（411 tests / 29 test files）
 │   ├── src/
 │   │   ├── storage/
 │   │   │   ├── db.ts          # 数据库连接 + PRAGMA 初始化
-│   │   │   ├── migrations/    # 001-init / 002-scratchpad / 003-checkpoints
-│   │   │   └── repositories/  # scratchpad / checkpoints / lanes / ops / compensations
+│   │   │   ├── migrations/    # 001..010 全部已落（详见 §4.2）
+│   │   │   ├── repositories/  # scratchpad / checkpoints / lanes / ops / compensations
+│   │   │   │                   # / processes / conflicts / dispatch / tasks / blockers / outcomes
+│   │   │   ├── tasks-state.ts # 12-transition state machine（W5 Phase 1+2+3 全部 active）
+│   │   │   └── types.ts       # StoredOutcomeCriterion 类型擦除接口（P2.1 boundary lock）
 │   │   ├── snapshots/
 │   │   │   └── git-stash.ts   # git stash backend（capture / restore / affectedFiles）
-│   │   └── index.ts           # 占位（v0.2 实现真正的 daemon 主入口）
+│   │   ├── dispatch/          # NL intent parsing + 5 fallback rules（R1/R2/R3/R4/R6）
+│   │   └── index.ts           # 占位（独立 daemon 进程入口推迟 v0.2）
 │   ├── dist/                  # tsc 输出（含 .d.ts），供 mcp-server import
 │   └── tsconfig.json          # declaration: true
 │
-└── mcp-server/                # MCP stdio server
+└── mcp-server/                # MCP stdio server（329 tests + 1 skip / 17 test files）
     ├── src/
-    │   └── tools/             # 17 个工具（含 scratchpad×4 / checkpoint×2 / rewind×2 / process×4 / dispatch×2 / inspector×1 / conflict×3）
-    └── tests/                 # 9 个测试（8 acceptance + 1 stdio smoke）
+    │   ├── index.ts           # 28 工具的 schema + switch dispatch
+    │   ├── tools/             # 工具实现（task / outcomes / scratchpad / checkpoint /
+    │   │                       # rewind / process / conflict / dispatch / inspector）
+    │   ├── dsl/               # W5 Phase 3：parser / evaluator / spawn-utils /
+    │   │                       # path-utils / primitives / types
+    │   ├── resume-packet.ts   # read-only aggregate view 组装
+    │   ├── workspace.ts       # auto SESSION_AGENT_ID + ws.cwd / ws.db
+    │   └── cli/install.ts     # `cairn install` CLI
+    ├── scripts/               # W5 Phase 1/2/3 dogfood scripts（real MCP stdio）
+    └── tests/                 # 单测 + acceptance + dsl/ + stdio-smoke
 ```
 
-**跨包 import 规则**：mcp-server import daemon 走 `../../daemon/dist/`，不走源码。这是已知技术债（见 §9），等 monorepo 工具引入时统一。
+**跨包 import 规则**：mcp-server import daemon 走 `../../daemon/dist/`，不走源码。这是已知技术债（见 §9），等 monorepo 工具引入时统一。`packages/desktop-shell/` 也已存在（W4 落地的 Electron 悬浮标 ambient UI），通过 main process 直接 require better-sqlite3 读 `~/.cairn/cairn.db`。
 
 ### 3.3 v0.2 候选新包
 
@@ -182,18 +255,22 @@ packages/
 引用 DESIGN_STORAGE.md §2.3 的选型理由（SQLite vs Postgres / 纯文件），不重复。
 本节补充 v2 定位带来的新表需求，以及与已落地 schema 的关系。
 
-### 4.2 已落地（migration 001-006）
+### 4.2 已落地（migration 001-010）
 
 | Migration | 表 / 内容 | 状态 |
 |---|---|---|
-| `001-init.ts` | `schema_migrations` / `lanes` / `ops` / `compensations` | ✅ 已落 |
-| `002-scratchpad.ts` | `scratchpad`（含 key / value / task_id / expires_at） | ✅ 已落 |
-| `003-checkpoints.ts` | `checkpoints`（含 task_id / git_head / snapshot_status） | ✅ 已落 |
-| `004-processes-conflicts.ts` | `processes` + `conflicts`（含冲突类型 / agent_a,b / paths_json / status） | ✅ 已落（W4 Day 1） |
-| `005-dispatch.ts` | `dispatch_requests`（含 nl_intent / parsed_intent / status CHECK） | ✅ 已落（W4 Day 2） |
-| `006-conflict-pending-review.ts` | `conflicts.status` 枚举扩展加 `PENDING_REVIEW`（pre-commit hook 写入） | ✅ 已落（Phase 3） |
+| `001-init.ts` | `schema_migrations` / `lanes` / `ops` / `compensations` | ✅ W1 |
+| `002-scratchpad.ts` | `scratchpad`（含 key / value / task_id / expires_at） | ✅ W1 |
+| `003-checkpoints.ts` | `checkpoints`（含 task_id / git_head / snapshot_status） | ✅ W1 |
+| `004-processes-conflicts.ts` | `processes` + `conflicts`（含冲突类型 / agent_a,b / paths_json / status） | ✅ W4 Day 1 |
+| `005-dispatch.ts` | `dispatch_requests`（含 nl_intent / parsed_intent / status CHECK） | ✅ W4 Day 2 |
+| `006-conflict-pending-review.ts` | `conflicts.status` 枚举扩展加 `PENDING_REVIEW`（pre-commit hook 写入） | ✅ W4 Phase 3 |
+| `007-tasks.ts` | `tasks`（含 intent / state / parent_task_id / created_by_agent_id / metadata_json） | ✅ W5 Phase 1 |
+| `008-dispatch-task-id.ts` | `dispatch_requests.task_id` 列追加（任务级派发归属） | ✅ W5 Phase 1 |
+| `009-blockers.ts` | `blockers`（OPEN / ANSWERED / SUPERSEDED CHECK + FK CASCADE on tasks） | ✅ W5 Phase 2 |
+| `010-outcomes.ts` | `outcomes`（UNIQUE(task_id) + criteria_json frozen + 4-status CHECK） | ✅ W5 Phase 3 |
 
-下一个可用编号：`007`。完整 DDL 见 DESIGN_STORAGE.md §4。
+下一个可用编号：`011`。完整 DDL 见 DESIGN_STORAGE.md §4 + W5 Phase 1/2/3 plan 文件。
 
 ### 4.3 v0.1 四能力新增表（已落地，供参考）
 
