@@ -23,11 +23,10 @@ npm start
 
 The pet appears bottom-right of the primary screen. Click the pet to open the Inspector panel. The Inspector polls every 1s and shows active agents, open conflicts, recent dispatches, and active lanes.
 
-## Seed fake state for testing
+## Live demo against real DB
 
 ```bash
-node seed-fake-state.js conflict   # pet → review animation, Inspector gains a conflict row
-node seed-fake-state.js clear      # pet → idle, Inspector empties
+node dogfood-live-pet-demo.mjs     # 30s scripted: review → resolve → failed → jumping; auto-cleans `cairn-demo-` rows
 ```
 
 ## Browser preview fallback (debug)
