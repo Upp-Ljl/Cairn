@@ -27,7 +27,12 @@ import {
   toolCancelTask,
   toolBlockTask,
   toolAnswerBlocker,
+  toolSubmitForReview,
 } from '../../src/tools/task.js';
+import {
+  submitOutcomesForReview,
+  recordEvaluationResult,
+} from '../../../daemon/dist/storage/repositories/outcomes.js';
 
 describe('cairn.task.* — 5 semantic verb tools', () => {
   let cairnRoot: string;
@@ -427,5 +432,121 @@ describe('cairn.task.block + cairn.task.answer — Phase 2 acceptance', () => {
     const err = (r as { error: { code: string; blocker_id: string } }).error;
     expect(err.code).toBe('BLOCKER_ALREADY_ANSWERED');
     expect(err.blocker_id).toBe(b.blocker.blocker_id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3: cairn.task.submit_for_review acceptance tests
+// ---------------------------------------------------------------------------
+
+describe('cairn.task.submit_for_review — Phase 3 acceptance', () => {
+  let cairnRoot: string;
+  let ws: ReturnType<typeof import('../../src/workspace.js').openWorkspace>;
+
+  beforeEach(() => {
+    cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-task-p3-'));
+    ws = openWorkspace({ cairnRoot });
+  });
+
+  afterEach(() => {
+    ws.db.close();
+    rmSync(cairnRoot, { recursive: true, force: true });
+  });
+
+  const VALID_CRITERIA = [{ primitive: 'file_exists', args: { path: 'README.md' } }];
+
+  function makeRunningTask(intent = 'review task') {
+    const r = toolCreateTask(ws, { intent });
+    toolStartAttempt(ws, { task_id: r.task.task_id });
+    return r.task.task_id;
+  }
+
+  // (a) first-call happy
+  it('(a) first-call happy: RUNNING → submit_for_review with criteria → outcome PENDING + task WAITING_REVIEW', () => {
+    const task_id = makeRunningTask();
+    const r = toolSubmitForReview(ws, { task_id, criteria: VALID_CRITERIA });
+    expect('outcome' in r).toBe(true);
+    const ok = r as { outcome: { status: string; outcome_id: string }; task: { state: string } };
+    expect(ok.outcome.status).toBe('PENDING');
+    expect(ok.task.state).toBe('WAITING_REVIEW');
+    expect(typeof ok.outcome.outcome_id).toBe('string');
+  });
+
+  // (b) repeat-call without criteria after FAIL → outcome reset to PENDING, outcome_id stable
+  it('(b) repeat-call after FAIL: no criteria → outcome PENDING + outcome_id stable + task WAITING_REVIEW', () => {
+    const task_id = makeRunningTask();
+    // First submit
+    const first = toolSubmitForReview(ws, { task_id, criteria: VALID_CRITERIA }) as {
+      outcome: { outcome_id: string };
+    };
+    const firstOutcomeId = first.outcome.outcome_id;
+
+    // Record FAIL directly via daemon to set state FAIL + task back to RUNNING
+    recordEvaluationResult(ws.db, firstOutcomeId, { status: 'FAIL', summary: 'test fail' });
+
+    // Repeat submit without criteria
+    const r = toolSubmitForReview(ws, { task_id });
+    expect('outcome' in r).toBe(true);
+    const ok = r as { outcome: { status: string; outcome_id: string }; task: { state: string } };
+    expect(ok.outcome.status).toBe('PENDING');
+    expect(ok.outcome.outcome_id).toBe(firstOutcomeId); // same row, same id
+    expect(ok.task.state).toBe('WAITING_REVIEW');
+  });
+
+  // (c) repeat-call with conflicting criteria → CRITERIA_FROZEN
+  it('(c) repeat-call with different criteria → CRITERIA_FROZEN error', () => {
+    const task_id = makeRunningTask();
+    toolSubmitForReview(ws, { task_id, criteria: VALID_CRITERIA });
+
+    // Manually set task back to RUNNING so we can call submit again
+    ws.db.prepare(`UPDATE tasks SET state = 'RUNNING', updated_at = ? WHERE task_id = ?`).run(Date.now(), task_id);
+    // Also reset outcome status to FAIL so upsert path is taken
+    ws.db.prepare(`UPDATE outcomes SET status = 'FAIL', updated_at = ? WHERE task_id = ?`).run(Date.now(), task_id);
+
+    const differentCriteria = [{ primitive: 'file_exists', args: { path: 'OTHER.md' } }];
+    const r = toolSubmitForReview(ws, { task_id, criteria: differentCriteria });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string } }).error;
+    expect(err.code).toBe('CRITERIA_FROZEN');
+  });
+
+  // (d) first-call without criteria → EMPTY_CRITERIA
+  it('(d) first-call without criteria → EMPTY_CRITERIA error', () => {
+    const task_id = makeRunningTask();
+    const r = toolSubmitForReview(ws, { task_id }); // no criteria
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string } }).error;
+    expect(err.code).toBe('EMPTY_CRITERIA');
+  });
+
+  // (e) from PENDING (task hasn't started) → INVALID_STATE_TRANSITION
+  it('(e) from PENDING task → INVALID_STATE_TRANSITION error', () => {
+    const t = toolCreateTask(ws, { intent: 'not started' }); // stays PENDING
+    const r = toolSubmitForReview(ws, { task_id: t.task.task_id, criteria: VALID_CRITERIA });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string } }).error;
+    expect(err.code).toBe('INVALID_STATE_TRANSITION');
+  });
+
+  // (f) TASK_NOT_FOUND
+  it('(f) TASK_NOT_FOUND for unknown task_id', () => {
+    const r = toolSubmitForReview(ws, { task_id: 'nonexistent-task', criteria: VALID_CRITERIA });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string } }).error;
+    expect(err.code).toBe('TASK_NOT_FOUND');
+  });
+
+  // bonus: invalid DSL → INVALID_DSL with errors array
+  it('bonus: invalid DSL (unknown primitive) → INVALID_DSL with errors array', () => {
+    const task_id = makeRunningTask();
+    const r = toolSubmitForReview(ws, {
+      task_id,
+      criteria: [{ primitive: 'unknown_primitive', args: {} }],
+    });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string; errors?: string[] } }).error;
+    expect(err.code).toBe('INVALID_DSL');
+    expect(Array.isArray(err.errors)).toBe(true);
+    expect(err.errors!.length).toBeGreaterThan(0);
   });
 });

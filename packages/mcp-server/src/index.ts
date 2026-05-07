@@ -13,7 +13,8 @@ import { toolRegisterProcess, toolHeartbeat, toolListProcesses, toolGetProcess }
 import { toolListConflicts, toolResolveConflict } from './tools/conflict.js';
 import { toolInspectorQuery } from './tools/inspector.js';
 import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
-import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask, toolBlockTask, toolAnswerBlocker, toolResumePacket } from './tools/task.js';
+import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask, toolBlockTask, toolAnswerBlocker, toolResumePacket, toolSubmitForReview } from './tools/task.js';
+import { toolEvaluateOutcome, toolTerminalFailOutcome } from './tools/outcomes.js';
 
 const ws = openWorkspace();
 
@@ -201,6 +202,38 @@ const TOOLS = [
     },
   },
   {
+    name: 'cairn.outcomes.evaluate',
+    description: '同步评估 outcome（阻塞直到所有 DSL 原语跑完）。只接受 PENDING 状态的 outcome。FAIL 状态须先调 cairn.task.submit_for_review 重置。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outcome_id: {
+          type: 'string',
+          description: 'outcome 的 ULID id（来自 cairn.task.submit_for_review 返回值）',
+        },
+      },
+      required: ['outcome_id'],
+    },
+  },
+  {
+    name: 'cairn.outcomes.terminal_fail',
+    description: '终判一个 PENDING outcome 为 TERMINAL_FAIL，task 转 FAILED。用于用户主动放弃路径。FAIL 状态时应调 cairn.task.cancel 而非此工具。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outcome_id: {
+          type: 'string',
+          description: 'outcome 的 ULID id',
+        },
+        reason: {
+          type: 'string',
+          description: '终判原因（写入 evaluation_summary）',
+        },
+      },
+      required: ['outcome_id', 'reason'],
+    },
+  },
+  {
     name: 'cairn.dispatch.request',
     description: '将自然语言意图路由给合适的 agent。调用 LLM 解析意图并生成执行指令，应用 4 条应用层兜底规则，写入 dispatch_requests（状态 PENDING）。',
     inputSchema: {
@@ -319,6 +352,23 @@ const TOOLS = [
     },
   },
   {
+    name: 'cairn.task.submit_for_review',
+    description: '提交 task 验收（RUNNING → WAITING_REVIEW）并声明验收标准。首次调用必须传 criteria；重复调用省略 criteria 或传相同 criteria 以重置为 PENDING（upsert 语义，LD-12）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: {
+          type: 'string',
+          description: 'Task ID',
+        },
+        criteria: {
+          description: '验收标准 DSL 数组（JSON）。首次调用必传；重复调用省略或传相同值。',
+        },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
     name: 'cairn.task.cancel',
     description: '取消一个任务，原子写入 cancel_reason 和 cancelled_at 到 metadata。',
     inputSchema: {
@@ -397,12 +447,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.conflict.list':        result = toolListConflicts(ws, a); break;
     case 'cairn.conflict.resolve':     result = toolResolveConflict(ws, a); break;
     case 'cairn.inspector.query':     result = toolInspectorQuery(ws, a); break;
+    case 'cairn.outcomes.evaluate':      result = await toolEvaluateOutcome(ws, a); break;
+    case 'cairn.outcomes.terminal_fail': result = toolTerminalFailOutcome(ws, a); break;
     case 'cairn.dispatch.request':    result = await toolDispatchRequest(ws, a); break;
     case 'cairn.dispatch.confirm':    result = toolDispatchConfirm(ws, a); break;
     case 'cairn.task.create':         result = toolCreateTask(ws, a); break;
     case 'cairn.task.get':            result = toolGetTask(ws, a); break;
     case 'cairn.task.list':           result = toolListTasks(ws, a); break;
     case 'cairn.task.start_attempt':  result = toolStartAttempt(ws, a); break;
+    case 'cairn.task.submit_for_review': result = toolSubmitForReview(ws, a); break;
     case 'cairn.task.cancel':         result = toolCancelTask(ws, a); break;
     case 'cairn.task.block':          result = toolBlockTask(ws, a); break;
     case 'cairn.task.answer':         result = toolAnswerBlocker(ws, a); break;

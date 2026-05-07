@@ -379,3 +379,70 @@ export function toolResumePacket(
   }
   return { packet };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 imports + tool handler (append only)
+// ---------------------------------------------------------------------------
+
+import {
+  submitOutcomesForReview,
+} from '../../../daemon/dist/storage/repositories/outcomes.js';
+import type { OutcomeRow } from '../../../daemon/dist/storage/repositories/outcomes.js';
+import { parseCriteriaJSON } from '../dsl/parser.js';
+import type { OutcomePrimitive } from '../dsl/types.js';
+
+export interface SubmitForReviewArgs {
+  task_id: string;
+  criteria?: unknown;
+}
+
+/**
+ * cairn.task.submit_for_review
+ *
+ * Upsert outcome for a task and transition to WAITING_REVIEW (LD-12).
+ * First call: criteria required; inserts new outcome row.
+ * Repeat call: criteria frozen; omit or pass identical to reset outcome to PENDING.
+ */
+export function toolSubmitForReview(
+  ws: Workspace,
+  args: SubmitForReviewArgs,
+): { outcome: OutcomeRow; task: TaskRow } | { error: { code: string; message: string; errors?: string[] } } {
+  let parsedCriteria: OutcomePrimitive[] | undefined;
+
+  if (args.criteria !== undefined) {
+    const parsed = parseCriteriaJSON(args.criteria);
+    if (!parsed.ok) {
+      return { error: { code: 'INVALID_DSL', message: 'criteria failed parser validation', errors: parsed.errors } };
+    }
+    parsedCriteria = parsed.criteria;
+  }
+
+  // Pre-check: if task doesn't exist, surface TASK_NOT_FOUND before hitting FK constraint
+  const taskExists = ws.db.prepare('SELECT 1 FROM tasks WHERE task_id = ?').get(args.task_id);
+  if (taskExists === undefined) {
+    return { error: { code: 'TASK_NOT_FOUND', message: `TASK_NOT_FOUND: ${args.task_id}` } };
+  }
+
+  try {
+    const submitInput: Parameters<typeof submitOutcomesForReview>[1] = { task_id: args.task_id };
+    if (parsedCriteria !== undefined) {
+      submitInput.criteria = parsedCriteria;
+    }
+    return submitOutcomesForReview(ws.db, submitInput);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/TASK_NOT_FOUND/.test(msg)) {
+      return { error: { code: 'TASK_NOT_FOUND', message: msg } };
+    }
+    if (/Invalid task state transition/.test(msg)) {
+      return { error: { code: 'INVALID_STATE_TRANSITION', message: msg } };
+    }
+    if (/EMPTY_CRITERIA/.test(msg)) {
+      return { error: { code: 'EMPTY_CRITERIA', message: 'first call requires criteria; criteria must be a non-empty array' } };
+    }
+    if (/CRITERIA_FROZEN/.test(msg)) {
+      return { error: { code: 'CRITERIA_FROZEN', message: 'criteria cannot be changed after first submission; omit criteria or pass identical value' } };
+    }
+    throw err;
+  }
+}

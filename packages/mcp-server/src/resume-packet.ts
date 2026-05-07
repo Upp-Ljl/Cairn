@@ -13,6 +13,9 @@ import {
   listBlockersByTask,
 } from '../../daemon/dist/storage/repositories/blockers.js';
 import type { TaskState } from '../../daemon/dist/storage/tasks-state.js';
+import {
+  getOutcomeByTask,
+} from '../../daemon/dist/storage/repositories/outcomes.js';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -131,8 +134,9 @@ export function assembleResumePacket(db: DB, task_id: string): ResumePacket | nu
     .all(task_id) as ScratchpadKeyRow[];
   const scratchpad_keys = scratchpadRows.map((r) => r.key);
 
-  // Step 6: outcomes_criteria — always [] in Phase 2
-  const outcomes_criteria: Array<{ primitive: string; args: unknown[] }> = [];
+  // Step 6: outcomes_criteria — populated from outcomes table (Phase 3)
+  const outcome = getOutcomeByTask(db, task_id);
+  const outcomes_criteria = outcome ? (outcome.criteria as Array<{ primitive: string; args: unknown[] }>) : [];
 
   // Step 7: audit_trail_summary — deterministic markdown (no LLM)
   const audit_trail_summary = buildAuditTrail(db, task_id, task);

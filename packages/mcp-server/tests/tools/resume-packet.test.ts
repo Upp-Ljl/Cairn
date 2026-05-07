@@ -361,4 +361,78 @@ describe('assembleResumePacket + validateResumePacket', () => {
       );
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3 new cases (append — zero regression to cases 1-13)
+  // ---------------------------------------------------------------------------
+
+  it('14. task with outcome: outcomes_criteria has length 2 and structures match input', () => {
+    const task_id = insertTask('task with outcome');
+    // Set to RUNNING then insert outcome directly
+    setTaskState(task_id, 'RUNNING');
+    const criteria = [
+      { primitive: 'file_exists', args: { path: 'README.md' } },
+      { primitive: 'no_open_conflicts', args: {} },
+    ];
+    const outcome_id = `oc-${Date.now()}`;
+    const now = Date.now();
+    ws.db
+      .prepare(
+        `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, evaluated_at,
+         evaluation_summary, grader_agent_id, created_at, updated_at, metadata_json)
+         VALUES (?, ?, ?, 'PENDING', NULL, NULL, NULL, ?, ?, NULL)`,
+      )
+      .run(outcome_id, task_id, JSON.stringify(criteria), now, now);
+    // Also transition task to WAITING_REVIEW so state is consistent
+    setTaskState(task_id, 'WAITING_REVIEW');
+
+    const packet = assembleResumePacket(ws.db, task_id);
+    expect(packet!.outcomes_criteria).toHaveLength(2);
+    expect(packet!.outcomes_criteria[0]!.primitive).toBe('file_exists');
+    expect(packet!.outcomes_criteria[1]!.primitive).toBe('no_open_conflicts');
+  });
+
+  it('15. task with no outcome: outcomes_criteria is [] (Phase 2 behavior preserved)', () => {
+    const task_id = insertTask('no-outcome task');
+    const packet = assembleResumePacket(ws.db, task_id);
+    expect(packet!.outcomes_criteria).toEqual([]);
+  });
+
+  it('16. LD-9 read-only spy with outcome present: only SELECT statements issued', () => {
+    const task_id = insertTask('spy-with-outcome task');
+    setTaskState(task_id, 'WAITING_REVIEW');
+    const criteria = [{ primitive: 'file_exists', args: { path: 'X.txt' } }];
+    const outcome_id = `oc2-${Date.now()}`;
+    const now = Date.now();
+    ws.db
+      .prepare(
+        `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, evaluated_at,
+         evaluation_summary, grader_agent_id, created_at, updated_at, metadata_json)
+         VALUES (?, ?, ?, 'PENDING', NULL, NULL, NULL, ?, ?, NULL)`,
+      )
+      .run(outcome_id, task_id, JSON.stringify(criteria), now, now);
+
+    const preparedSqls: string[] = [];
+    const originalPrepare = ws.db.prepare.bind(ws.db);
+    const spy = vi.spyOn(ws.db, 'prepare').mockImplementation((sql: string) => {
+      preparedSqls.push(sql);
+      return originalPrepare(sql);
+    });
+
+    assembleResumePacket(ws.db, task_id);
+
+    spy.mockRestore();
+
+    expect(preparedSqls.length).toBeGreaterThan(0);
+
+    const violators = preparedSqls.filter(
+      (sql) => !sql.trim().match(/^SELECT/i),
+    );
+
+    if (violators.length > 0) {
+      throw new Error(
+        `LD-9 VIOLATED (with outcome): assembleResumePacket issued non-SELECT SQL:\n${violators.join('\n')}`,
+      );
+    }
+  });
 });
