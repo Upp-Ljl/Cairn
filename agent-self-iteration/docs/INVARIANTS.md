@@ -124,6 +124,36 @@ The MANIFEST contract (as parsed by the script):
 Renaming the `MANIFEST:` sentinel or removing the fallback safety net
 violates this invariant.
 
+## I12-bis — Mechanical safeguards may be tightened but never removed
+
+The driver `scripts/dual_agent_iter.sh` ships with these mechanical
+safeguards. Each of them MUST remain functional (raising the threshold or
+disabling by default is allowed; deleting the code path is forbidden):
+
+- **Diff budget** (`MAX_DIFF_LINES`, default 0=disabled): cumulative line
+  changes vs. iter-0 baseline. When exceeded, force-terminate with
+  `status: diff_budget_exceeded`.
+- **Stuck detector** (`STUCK_THRESHOLD`, default 3): N consecutive
+  iterations with unchanged WORK_DIR content → force-terminate with
+  `status: stuck`.
+- **Manifest validator** (`SAFETY_VALIDATE_MANIFEST`, default 1): a
+  one-shot validator pass after the profiler. Output is advisory
+  (`MANIFEST_WARNING` block); never blocks or rewrites the manifest.
+- **Reviewer council** (`REVIEWER_COUNCIL`, default 1): when ≥ 2,
+  reviewers run in parallel, all must agree on `improvements_exhausted`.
+- **Changed-files threading** (always on): the reviewer prompt MUST
+  contain the executor's `changed_files` list with an instruction to
+  read those files.
+- **Roleplay detection** (always on): pre/post executor WORK_DIR hash
+  comparison; mismatch with claimed `changed_files` logs a `ROLEPLAY:`
+  warning.
+- **Robust JSON extraction** (always on): `extract_json_after_sentinel`
+  must tolerate code fences and inline sentinels; `validate_verdict_shape`
+  must check for required keys.
+
+Removing any of these safeguards by automated /self-improve is forbidden.
+Tightening defaults (e.g. lowering `STUCK_THRESHOLD` to 2) is allowed.
+
 ## I12 — Signal output truncation must keep the failure tail
 
 Token-saving signal truncation in the script (`truncate_signal`) MUST

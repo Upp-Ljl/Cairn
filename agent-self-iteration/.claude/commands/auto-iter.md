@@ -86,13 +86,27 @@ purpose of picking SIGNAL_CMD.
 ## Configuration (env vars passed to the script)
 
 ```
-MAX_ITERATIONS  = 50    # safety cap. Normal exit is via reviewer's improvements_exhausted=true.
-QUIET_STREAK    = 2     # consecutive (verdict=pass AND improvements_exhausted=true) before stopping.
-MODEL           = claude-sonnet-4-6   # default; do not change unless user override forces it.
-PROFILE_MODEL   = (defaults to MODEL)  # the profiler runs once at iter 0; cheaper Haiku is fine.
-SKIP_PROFILE    = 0     # set to 1 only for tiny one-file projects where the profiler is overkill.
-MAX_SIGNAL_TAIL = 80    # tail-truncate signal output before passing to executor/reviewer.
+MAX_ITERATIONS           = 50    # safety cap. Normal exit is via improvements_exhausted=true.
+QUIET_STREAK             = 2     # consecutive pass+exhausted before stopping.
+MODEL                    = claude-sonnet-4-6   # executor + reviewer model.
+PROFILE_MODEL            = (defaults to MODEL) # one-shot profiler at iter 0.
+VALIDATOR_MODEL          = claude-haiku-4-5-20251001  # one-shot manifest validator.
+SKIP_PROFILE             = 0     # 1 = use generic 3-dim safety net.
+SAFETY_VALIDATE_MANIFEST = 1     # 1 = run Haiku second-opinion on manifest.
+REVIEWER_COUNCIL         = 1     # N parallel reviewers; all must agree to converge.
+MAX_DIFF_LINES           = 0     # 0 = disabled. >0 = cap cumulative diff lines.
+STUCK_THRESHOLD          = 3     # bail if N iters in a row leave content unchanged.
+MAX_SIGNAL_TAIL          = 80    # tail-truncate signal output passed to agents.
 ```
+
+**When to bump these knobs from defaults:**
+- Vague task / no real signal (e.g. "audit security") → set
+  `MAX_DIFF_LINES=500` and `REVIEWER_COUNCIL=2` so a single confabulating
+  reviewer can't declare premature exhaustion.
+- Production-critical work → set `REVIEWER_COUNCIL=3` (3-of-3 unanimity).
+- Tiny single-file fix → `SKIP_PROFILE=1` saves the iter-0 round-trip.
+- Already exited as `stuck` once but you want more time → raise
+  `STUCK_THRESHOLD` to 5.
 
 The loop's goal is **"no fault remains"**, not "tests pass once". Tests-pass
 is a prerequisite, not the exit condition. The exit condition is the Reviewer
@@ -114,7 +128,12 @@ invocation. Recognized keys:
 - `quiet` -> `QUIET_STREAK`
 - `model` -> `MODEL`
 - `profile-model` -> `PROFILE_MODEL`
-- `skip-profile` -> `SKIP_PROFILE` (set to `1` to use generic 3-dim safety net)
+- `validator-model` -> `VALIDATOR_MODEL`
+- `skip-profile` -> `SKIP_PROFILE`
+- `validate-manifest` -> `SAFETY_VALIDATE_MANIFEST` (set to `0` to disable)
+- `council` -> `REVIEWER_COUNCIL`
+- `diff-budget` -> `MAX_DIFF_LINES`
+- `stuck-threshold` -> `STUCK_THRESHOLD`
 - `signal-tail` -> `MAX_SIGNAL_TAIL`
 
 Example: `/auto-iter examples/foo | use TASK.md (max-iter=3, quiet=1, skip-profile=1)`
@@ -173,6 +192,10 @@ summary:
 
 - **Status:** EXHAUSTED (script status `exhausted`, exit 0) /
   MAX_ITER_REACHED (script status `max_iter_reached`) /
+  DIFF_BUDGET_EXCEEDED (script status `diff_budget_exceeded` — cumulative
+    diff exceeded `MAX_DIFF_LINES`; surface the cap and the actual count) /
+  STUCK (script status `stuck` — `STUCK_THRESHOLD` consecutive iters left
+    content unchanged) /
   RED_AT_EXIT (script exit 1 — signals never went green) /
   ERROR (script returned a top-level `{"error":...}`)
 - **Manifest dims:** from `manifest_dims` in the summary JSON. Optionally

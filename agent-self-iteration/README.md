@@ -122,23 +122,37 @@ edits files inside it and runs the signal command from inside it.
 | `QUIET_STREAK` | `2` | Consecutive `pass + improvements_exhausted=true` verdicts required to exit. Lower = more aggressive exit, higher = more skeptical. |
 | `MODEL` | `claude-sonnet-4-6` | Claude model for executor and reviewer. |
 | `PROFILE_MODEL` | (same as `MODEL`) | Model for the one-shot profiler. Cheaper Haiku is usually fine. |
-| `SKIP_PROFILE` | `0` | Set to `1` to skip the profiler and use a generic 3-dim safety-net manifest. Useful for tiny single-file projects. |
-| `MAX_SIGNAL_TAIL` | `80` | Truncate red signal output to the last N lines before passing to executor/reviewer. Green signals collapse to `EXIT=0`. |
+| `VALIDATOR_MODEL` | `claude-haiku-4-5-20251001` | Model for the manifest second-opinion validator (one-shot, cheap). |
+| `SKIP_PROFILE` | `0` | Set to `1` to skip the profiler and use a generic 3-dim safety-net manifest. |
+| `SAFETY_VALIDATE_MANIFEST` | `1` | If `1`, run a Haiku second-opinion on the profiler's manifest. If validator says `warn`, a `MANIFEST_WARNING` block is threaded into every executor and reviewer prompt thereafter. |
+| `REVIEWER_COUNCIL` | `1` | Number of parallel reviewers. With `N>1`, all N must independently agree on `verdict=pass` AND `improvements_exhausted=true` before the loop exits. Useful on no-signal projects where one reviewer can confabulate exhaustion. |
+| `MAX_DIFF_LINES` | `0` | Cumulative line-change cap across all iterations. `0` = disabled. When set (e.g. `500`), the loop force-terminates with `status: diff_budget_exceeded` once exceeded — protects against runaway "let me rewrite the whole codebase" behavior. |
+| `STUCK_THRESHOLD` | `3` | Bail out with `status: stuck` after this many consecutive iterations leave WORK_DIR content unchanged. Prevents reviewer-keeps-finding-nits-but-executor-can't-or-won't loops. |
+| `MAX_SIGNAL_TAIL` | `80` | Truncate red signal output to the last N lines. Green signals collapse to `EXIT=0`. |
 | `LOG_FILE` | stderr | Append per-iteration trace here. |
-| `PROMPT_DIR` | tmp dir | Where to drop prompt files (and `manifest.json`) for debugging. |
-| `PROJECT_ROOT` | script's parent's parent | Where `.claude/agents/{profiler,executor,reviewer}.md` live. |
+| `PROMPT_DIR` | tmp dir | Where to drop prompt files (and `manifest.json`, `baseline/` snapshot, council verdicts) for debugging. |
+| `PROJECT_ROOT` | script's parent's parent | Where `.claude/agents/{profiler,validator,executor,reviewer}.md` live. |
 
 ### Output
 
 stdout: a single JSON summary line on completion:
 
 ```json
-{"status":"exhausted","iterations":3,"final_signal_exit":0,"duration_s":487,"manifest_dims":5}
+{"status":"exhausted","iterations":3,"final_signal_exit":0,"duration_s":487,"manifest_dims":5,"manifest_validation":"ok","diff_lines":47}
 ```
 
+Status values:
+- `exhausted` — reviewer (council) said `improvements_exhausted: true` for `QUIET_STREAK` consecutive iters.
+- `max_iter_reached` — hit `MAX_ITER` without converging.
+- `diff_budget_exceeded` — `MAX_DIFF_LINES` exceeded; loop force-terminated.
+- `stuck` — `STUCK_THRESHOLD` consecutive iters left WORK_DIR content unchanged; loop force-terminated.
+
 `manifest_dims` is how many audit dimensions the profiler derived (or `3`
-when `SKIP_PROFILE=1`). Inspect the actual dimensions in
-`<PROMPT_DIR>/manifest.json`.
+when `SKIP_PROFILE=1`). `manifest_validation` is `ok`/`warn`/`skipped`
+from the validator second-opinion. `diff_lines` is the cumulative
+line-change count vs. iteration-0 baseline. Inspect the actual dimensions
+in `<PROMPT_DIR>/manifest.json` and council verdicts in
+`<PROMPT_DIR>/iter<N>_council/`.
 
 Exit code: 0 if `final_signal_exit == 0`, else 1.
 
@@ -289,6 +303,34 @@ a production fix-it run. Real `/auto-iter` use defaults to looser caps
 
 Each run produces a `.regression-runs/<timestamp>/` directory with one log
 file per target.
+
+## Mechanical safeguards (W1–W7 hardenings)
+
+The loop ships with seven independent guardrails so it stays predictable
+even on vague tasks, large repos, or projects without a strong test signal:
+
+| Safeguard | Knob | What it catches |
+|---|---|---|
+| **Diff budget** | `MAX_DIFF_LINES` | runaway "let me rewrite everything" — caps cumulative diff lines and bails with `status: diff_budget_exceeded` |
+| **Reviewer council** | `REVIEWER_COUNCIL` | single-reviewer confabulation — N parallel reviewers must independently agree before declaring exhaustion |
+| **Manifest validator** | `SAFETY_VALIDATE_MANIFEST` | bad iter-0 manifest poisoning the entire run — Haiku second-opinion threads `MANIFEST_WARNING` into later prompts when concerns surface |
+| **Stuck detector** | `STUCK_THRESHOLD` | reviewer-keeps-finding-nits-but-executor-stuck — bails with `status: stuck` when WORK_DIR content unchanged for N consecutive iters |
+| **Changed-files threading** | (always on) | reviewer ignoring scope on big repos — executor's `changed_files` list is now explicitly passed in the reviewer prompt with "read AT LEAST these" |
+| **Robust JSON parsing** | (always on) | code-fenced or indented sentinels — `extract_json_after_sentinel` tolerates fences and inline placement; `validate_verdict_shape` falls back gracefully |
+| **Roleplay detection** | (always on) | claimed_changes ≠ reality — pre/post executor hash of WORK_DIR; logs `# ROLEPLAY:` when claim diverges from actual edits |
+
+For a vague-scope or no-signal run, the recommended combination is:
+
+```bash
+MAX_DIFF_LINES=500 \
+REVIEWER_COUNCIL=2 \
+SIGNAL_CMD=':' \
+bash scripts/dual_agent_iter.sh ~/some-project
+```
+
+This gives you a hard ceiling on edits, a 2-of-2 reviewer agreement
+requirement before exit, and a no-op signal that lets the reviewer drive
+the loop entirely (with the budget + council preventing collapse).
 
 ## Self-improvement (`/self-improve` meta-loop)
 

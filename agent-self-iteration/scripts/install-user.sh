@@ -5,6 +5,7 @@
 #
 # What's installed (with `auto-iter-` prefix to avoid namespace collisions):
 #   ~/.claude/agents/auto-iter-profiler.md
+#   ~/.claude/agents/auto-iter-validator.md
 #   ~/.claude/agents/auto-iter-executor.md
 #   ~/.claude/agents/auto-iter-reviewer.md
 #   ~/.claude/commands/auto-iter.md
@@ -29,6 +30,7 @@ USER_COMMANDS="$HOME/.claude/commands"
 # (source path → destination basename) for each artifact installed.
 ARTIFACTS=(
   "$ROOT/.claude/agents/profiler.md|$USER_AGENTS/auto-iter-profiler.md"
+  "$ROOT/.claude/agents/validator.md|$USER_AGENTS/auto-iter-validator.md"
   "$ROOT/.claude/agents/executor.md|$USER_AGENTS/auto-iter-executor.md"
   "$ROOT/.claude/agents/reviewer.md|$USER_AGENTS/auto-iter-reviewer.md"
   "$ROOT/.claude/commands/auto-iter.md|$USER_COMMANDS/auto-iter.md"
