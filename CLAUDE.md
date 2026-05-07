@@ -4,7 +4,8 @@
 
 ## 项目坐标
 
-- **仓库**：https://github.com/Upp-renlab/Cairn （**注意大小写**：`Cairn`，不是 `cairn`）
+- **仓库（origin，主）**：https://github.com/Upp-Ljl/Cairn （**注意大小写**：`Cairn`，不是 `cairn`）
+- **mirror（legacy）**：https://github.com/Upp-renlab/Cairn — W4 之前的旧 owner，保留作镜像
 - **本地路径**：`D:\lll\cairn`
 - **主分支**：`main`
 - **设计文档**：`PRODUCT.md`（产品定义）、`DESIGN_STORAGE.md`（持久层）
@@ -13,25 +14,42 @@
 
 ## 推送（push）必读
 
-### 当前可工作的方式
+### 当前布局（2026-05-07 起）
 
-仓库 owner 是 `Upp-renlab`。Git Credential Manager（GCM）默认缓存的账号可能是 `Upp-Ljl`，**该账号没有 cairn 仓库的写权限**，GitHub 会用 `Repository not found` 掩盖鉴权失败。
+origin 已切到 Upp-Ljl/Cairn——与 commit author 同账号，不再有 push 身份不一致问题。Upp-renlab/Cairn 改名 `mirror` 保留。
 
-唯一稳定的 push 方式：**用 PAT token 直接拼到 URL 里**。
+```
+git remote -v
+# origin   https://github.com/Upp-Ljl/Cairn.git    （主，写）
+# mirror   https://github.com/Upp-renlab/Cairn.git （旧 owner，保留）
+```
+
+### 两条 push 路径
+
+**A. 用户自己跑（推荐，简单）**
+
+GCM 已缓存 Upp-Ljl 凭证。用户在自己终端跑 `git push origin main`（或在 Claude Code 里用 `!` 前缀），凭证直接走 GCM，不弹窗。Claude Code 自己跑裸 push **不行**——无 TTY，GCM 弹窗会卡住。
+
+**B. PAT URL 直拼（脚本场景）**
 
 Token 文件（已 gitignored）：
 ```
-D:\lll\cairn\.cairn-push-token\token.txt
+D:\lll\cairn\.cairn-push-token\ljl-token.txt   # Upp-Ljl 的 PAT，对应当前 origin
+D:\lll\cairn\.cairn-push-token\token.txt       # Upp-renlab 的旧 PAT，留着 push mirror 用
 ```
 
 push 命令（**failed 时切 backend 重试**，详见下条）：
 
 ```bash
 cd D:/lll/cairn
-TOKEN=$(cat .cairn-push-token/token.txt | tr -d '[:space:]')
+TOKEN=$(cat .cairn-push-token/ljl-token.txt | tr -d '[:space:]')
 # 默认先 openssl
-git -c http.sslBackend=openssl push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" main
+git -c http.sslBackend=openssl push "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" main
 # 注意：每次输出都要 sed 把 TOKEN 替换成 <REDACTED>，不要泄露到日志
+
+# 推 mirror（用旧 token）
+TOKEN_MIRROR=$(cat .cairn-push-token/token.txt | tr -d '[:space:]')
+git push "https://x-access-token:${TOKEN_MIRROR}@github.com/Upp-renlab/Cairn.git" main
 ```
 
 ### TLS 坑（2026-04-29 EOD 多次复现）
@@ -62,30 +80,31 @@ git -c http.sslBackend=schannel push ... main
 fetch 同理（如果本地 `origin/main` 引用没跟上）：
 
 ```bash
-git fetch "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" main:refs/remotes/origin/main
+TOKEN=$(cat .cairn-push-token/ljl-token.txt | tr -d '[:space:]')
+git fetch "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" main:refs/remotes/origin/main
 ```
 
-### 不要用的方式
+### 不要用的方式（Claude Code 上下文）
 
-- `git push origin main`（裸） — 触发 GCM，弹凭证 UI，但 Claude Code 无 TTY，会卡住或报 `/dev/tty: No such device`
+- `git push origin main`（裸，从 Claude Code 跑） — 触发 GCM 弹窗 → 无 TTY，会卡住或报 `/dev/tty: No such device`。**用户自己终端跑没问题**，Claude Code 跑不行
 - `GIT_TERMINAL_PROMPT=0 git push origin main` — 报 `terminal prompts disabled`，无凭证
 - `Authorization: Bearer ${TOKEN}` extraheader — GitHub HTTPS 不接受 Bearer，必须用 `x-access-token:TOKEN@host` URL 形式
 - `gh` CLI — 这台机器没装
 
 ### 如果 token 失效
 
-1. 去 GitHub Settings → Developer settings → Personal access tokens 撤销旧的
+1. 去 GitHub Settings（**用 Upp-Ljl 账号登录**）→ Developer settings → Personal access tokens 撤销旧的
 2. 新建一个，scope 给 `repo`（write）
-3. 写入 `.cairn-push-token/token.txt`（**不要 commit**，已被 .gitignore）
-4. 或者让用户在自己终端跑 `git push origin main` — GCM 会弹浏览器，登录 `Upp-renlab` 账号，之后 GCM 缓存的就对了
+3. 写入 `.cairn-push-token/ljl-token.txt`（**不要 commit**，已被 .gitignore）
+4. 或者让用户在自己终端跑 `git push origin main` — GCM 缓存 Upp-Ljl 凭证就够，不需要 PAT
 
 ### Tag 推送
 
 Tag 不会跟着 `git push origin main` 走，要单独推：
 
 ```bash
-TOKEN=$(cat .cairn-push-token/token.txt | tr -d '[:space:]')
-git push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" --tags
+TOKEN=$(cat .cairn-push-token/ljl-token.txt | tr -d '[:space:]')
+git push "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" --tags
 ```
 
 已有的 tag：`storage-p1`（P1 持久层完成节点）
@@ -96,7 +115,7 @@ git push "https://x-access-token:${TOKEN}@github.com/Upp-renlab/Cairn.git" --tag
 - **Node**：v24.14.0
 - **路径风格**：bash 用 `/`，Windows 工具吃 `\`，Read/Write 工具用绝对 Windows 路径（`D:\lll\cairn\...`）
 - **better-sqlite3**：必须 `^12.9.0` 或更新，11.x 没有 Node 24 prebuilds，会触发 node-gyp（Windows 上多半没装 VS C++ 工具链）
-- **commit author**：`Upp-Ljl <2226957164@qq.com>`（不是 `Upp-renlab`，与 push 身份不一致 — 见上）
+- **commit author**：`Upp-Ljl <2226957164@qq.com>` —— 自 2026-05-07 起 origin 也是 Upp-Ljl，身份统一
 
 ## monorepo 结构
 
