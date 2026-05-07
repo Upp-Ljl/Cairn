@@ -426,3 +426,84 @@ describe('updateTaskState — BLOCKED-loop transitions (Phase 2)', () => {
     expect(after.state).toBe('BLOCKED');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 3 WAITING_REVIEW transitions: updateTaskState integration
+// ---------------------------------------------------------------------------
+
+describe('updateTaskState — Phase 3 WAITING_REVIEW transitions', () => {
+  it('happy 1: RUNNING → WAITING_REVIEW persists and round-trips', () => {
+    const task = createTask(db, { intent: 'submit for review' });
+    updateTaskState(db, task.task_id, 'RUNNING');
+
+    const result = updateTaskState(db, task.task_id, 'WAITING_REVIEW');
+    expect(result.state).toBe('WAITING_REVIEW');
+
+    const fetched = getTask(db, task.task_id)!;
+    expect(fetched.state).toBe('WAITING_REVIEW');
+  });
+
+  it('happy 2: WAITING_REVIEW → DONE (full path: PENDING → RUNNING → WAITING_REVIEW → DONE)', () => {
+    const task = createTask(db, { intent: 'full review cycle' });
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'WAITING_REVIEW');
+
+    const done = updateTaskState(db, task.task_id, 'DONE');
+    expect(done.state).toBe('DONE');
+
+    const fetched = getTask(db, task.task_id)!;
+    expect(fetched.state).toBe('DONE');
+  });
+
+  it('happy 3: WAITING_REVIEW → RUNNING (validation-fail retry path)', () => {
+    const task = createTask(db, { intent: 'retry after review rejection' });
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'WAITING_REVIEW');
+
+    const running = updateTaskState(db, task.task_id, 'RUNNING');
+    expect(running.state).toBe('RUNNING');
+
+    const fetched = getTask(db, task.task_id)!;
+    expect(fetched.state).toBe('RUNNING');
+  });
+
+  it('happy 4: WAITING_REVIEW → FAILED (terminal-fail path)', () => {
+    const task = createTask(db, { intent: 'fail during review' });
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'WAITING_REVIEW');
+
+    const failed = updateTaskState(db, task.task_id, 'FAILED');
+    expect(failed.state).toBe('FAILED');
+
+    const fetched = getTask(db, task.task_id)!;
+    expect(fetched.state).toBe('FAILED');
+  });
+
+  // P1.2 lock: CANCELLED is intentionally absent from WAITING_REVIEW's valid set.
+  // If this test fails (no throw), the source disagrees with the plan — stop and report.
+  it('rejection 1: WAITING_REVIEW → CANCELLED throws (P1.2 lock)', () => {
+    const task = createTask(db, { intent: 'attempt cancel from review' });
+    updateTaskState(db, task.task_id, 'RUNNING');
+    updateTaskState(db, task.task_id, 'WAITING_REVIEW');
+
+    expect(() => updateTaskState(db, task.task_id, 'CANCELLED')).toThrow(
+      /Invalid task state transition/,
+    );
+
+    // State must remain WAITING_REVIEW
+    const after = getTask(db, task.task_id)!;
+    expect(after.state).toBe('WAITING_REVIEW');
+  });
+
+  it('rejection 2: PENDING → WAITING_REVIEW throws (must go through RUNNING first)', () => {
+    const task = createTask(db, { intent: 'shortcut to review' });
+
+    expect(() => updateTaskState(db, task.task_id, 'WAITING_REVIEW')).toThrow(
+      /Invalid task state transition/,
+    );
+
+    // State must remain PENDING
+    const after = getTask(db, task.task_id)!;
+    expect(after.state).toBe('PENDING');
+  });
+});

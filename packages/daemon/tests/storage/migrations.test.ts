@@ -732,3 +732,134 @@ describe('009-blockers schema', () => {
     expect(count.n).toBe(1);
   });
 });
+
+describe('010-outcomes schema', () => {
+  it('creates outcomes table with all 11 columns and correct NOT NULL / type constraints', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(outcomes)').all() as Array<{
+      name: string; pk: number; notnull: number; type: string;
+    }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    expect(colNames).toEqual(new Set([
+      'outcome_id', 'task_id', 'criteria_json', 'status',
+      'evaluated_at', 'evaluation_summary', 'grader_agent_id',
+      'created_at', 'updated_at', 'metadata_json',
+    ]));
+    // outcome_id is PK
+    expect(cols.find((c) => c.name === 'outcome_id')?.pk).toBe(1);
+    // NOT NULL columns
+    expect(cols.find((c) => c.name === 'task_id')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'criteria_json')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'status')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'created_at')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'updated_at')?.notnull).toBe(1);
+    // nullable columns
+    expect(cols.find((c) => c.name === 'evaluated_at')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'evaluation_summary')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'grader_agent_id')?.notnull).toBe(0);
+    expect(cols.find((c) => c.name === 'metadata_json')?.notnull).toBe(0);
+    // timestamp columns are INTEGER
+    expect(cols.find((c) => c.name === 'created_at')?.type).toBe('INTEGER');
+    expect(cols.find((c) => c.name === 'updated_at')?.type).toBe('INTEGER');
+  });
+
+  it('idx_outcomes_status index exists', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='outcomes'")
+      .all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain('idx_outcomes_status');
+  });
+
+  it('CHECK accepts all 4 valid status values (PENDING, PASS, FAIL, TERMINAL_FAIL)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    for (const [idx, status] of (['PENDING', 'PASS', 'FAIL', 'TERMINAL_FAIL'] as const).entries()) {
+      db.prepare(
+        `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+         VALUES (?, 'test intent', 'PENDING', 0, 0)`
+      ).run(`t-check-${idx}`);
+      expect(() =>
+        db.prepare(
+          `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, created_at, updated_at)
+           VALUES (?, ?, '[]', ?, 0, 0)`
+        ).run(`o-check-${idx}`, `t-check-${idx}`, status)
+      ).not.toThrow();
+    }
+  });
+
+  it('CHECK rejects an invalid status value', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('t-bad-status', 'test', 'PENDING', 0, 0)`
+    ).run();
+    expect(() =>
+      db.prepare(
+        `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, created_at, updated_at)
+         VALUES ('o-bad', 't-bad-status', '[]', 'INVALID', 0, 0)`
+      ).run()
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('UNIQUE(task_id): inserting a second outcome for the same task throws', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('t-unique', 'test', 'PENDING', 0, 0)`
+    ).run();
+    db.prepare(
+      `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, created_at, updated_at)
+       VALUES ('o-unique-1', 't-unique', '[]', 'PENDING', 0, 0)`
+    ).run();
+    expect(() =>
+      db.prepare(
+        `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, created_at, updated_at)
+         VALUES ('o-unique-2', 't-unique', '[]', 'PASS', 0, 0)`
+      ).run()
+    ).toThrow(/UNIQUE constraint failed/);
+  });
+
+  it('CASCADE: deleting a task auto-deletes its outcome', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO tasks (task_id, intent, state, created_at, updated_at)
+       VALUES ('t-cascade', 'test', 'PENDING', 0, 0)`
+    ).run();
+    db.prepare(
+      `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, created_at, updated_at)
+       VALUES ('o-cascade', 't-cascade', '[]', 'PENDING', 0, 0)`
+    ).run();
+
+    db.prepare('DELETE FROM tasks WHERE task_id = ?').run('t-cascade');
+
+    const after = db.prepare('SELECT COUNT(*) AS n FROM outcomes WHERE task_id = ?').get('t-cascade') as { n: number };
+    expect(after.n).toBe(0);
+  });
+
+  it('FK enforcement: inserting an outcome with a nonexistent task_id throws', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    expect(() =>
+      db.prepare(
+        `INSERT INTO outcomes (outcome_id, task_id, criteria_json, status, created_at, updated_at)
+         VALUES ('o-fk-fail', 'NOT_A_TASK', '[]', 'PENDING', 0, 0)`
+      ).run()
+    ).toThrow(/FOREIGN KEY constraint failed/);
+  });
+
+  it('migration 010 is idempotent (running ALL_MIGRATIONS twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 10')
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+});

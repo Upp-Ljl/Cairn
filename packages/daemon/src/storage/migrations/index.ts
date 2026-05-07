@@ -7,6 +7,7 @@ import { migration006ConflictsPendingReview } from './006-conflicts-pending-revi
 import { migration007Tasks } from './007-tasks.js';
 import { migration008DispatchTaskId } from './008-dispatch-task-id.js';
 import { migration009Blockers } from './009-blockers.js';
+import { migration010Outcomes } from './010-outcomes.js';
 import type { Migration } from './runner.js';
 
 export const ALL_MIGRATIONS: Migration[] = [
@@ -19,4 +20,5 @@ export const ALL_MIGRATIONS: Migration[] = [
   migration007Tasks,
   migration008DispatchTaskId,
   migration009Blockers,
+  migration010Outcomes,
 ];
