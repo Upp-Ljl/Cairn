@@ -1,14 +1,18 @@
 /**
- * cairn.task.* — 5 semantic verb tools for Task Capsule lifecycle (W5 Phase 1)
+ * cairn.task.* — 8 semantic verb tools for Task Capsule lifecycle (W5 Phase 1+2)
  *
  * Tools exposed:
- *   cairn.task.create       — create a PENDING task
- *   cairn.task.get          — fetch a task by id
- *   cairn.task.list         — list tasks with optional filters
- *   cairn.task.start_attempt — PENDING/READY_TO_RESUME → RUNNING
- *   cairn.task.cancel        — → CANCELLED (atomically writes reason to metadata)
+ *   cairn.task.create        — create a PENDING task
+ *   cairn.task.get           — fetch a task by id
+ *   cairn.task.list          — list tasks with optional filters
+ *   cairn.task.start_attempt  — PENDING/READY_TO_RESUME → RUNNING
+ *   cairn.task.cancel         — → CANCELLED (atomically writes reason to metadata)
+ *   cairn.task.block          — RUNNING → BLOCKED (records a blocker)
+ *   cairn.task.answer         — answers a blocker; advances task to READY_TO_RESUME iff all answered
+ *   cairn.task.resume_packet  — read-only structured handoff artifact
  *
  * NOT exposed: any free-state-write API (cairn.task.update_state is forbidden).
+ * NOT exposed: cairn.task.list_blockers / cairn.task.get_blocker (LD-8).
  * Cancel always calls the repo verb `cancelTask`, not `updateTaskState`.
  */
 
@@ -20,8 +24,14 @@ import {
   cancelTask,
 } from '../../../daemon/dist/storage/repositories/tasks.js';
 import type { TaskRow } from '../../../daemon/dist/storage/repositories/tasks.js';
+import {
+  recordBlocker,
+  markAnswered,
+} from '../../../daemon/dist/storage/repositories/blockers.js';
+import type { BlockerRow } from '../../../daemon/dist/storage/repositories/blockers.js';
 import type { TaskState } from '../../../daemon/dist/storage/tasks-state.js';
 import type { Workspace } from '../workspace.js';
+import { assembleResumePacket, type ResumePacket } from '../resume-packet.js';
 
 // ---------------------------------------------------------------------------
 // Arg types
@@ -203,4 +213,169 @@ export function toolCancelTask(ws: Workspace, args: CancelTaskArgs) {
     }
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 arg types
+// ---------------------------------------------------------------------------
+
+export interface BlockTaskArgs {
+  task_id: string;
+  question: string;
+  context_keys?: string[];
+  raised_by?: string;
+}
+
+export interface AnswerBlockerArgs {
+  blocker_id: string;
+  answer: string;
+  answered_by?: string;
+}
+
+export interface ResumePacketArgs {
+  task_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 additional error helpers
+// ---------------------------------------------------------------------------
+
+function blockerNotFoundError(blocker_id: string) {
+  return {
+    error: {
+      code: 'BLOCKER_NOT_FOUND' as const,
+      blocker_id,
+      message: `blocker not found: ${blocker_id}`,
+    },
+  };
+}
+
+function blockerAlreadyAnsweredError(blocker_id: string) {
+  return {
+    error: {
+      code: 'BLOCKER_ALREADY_ANSWERED' as const,
+      blocker_id,
+      message: `blocker already answered: ${blocker_id}`,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 tool handlers (append only — do NOT modify Phase 1 handlers above)
+// ---------------------------------------------------------------------------
+
+/**
+ * cairn.task.block
+ *
+ * Transitions a RUNNING task to BLOCKED and records a blocker in a single
+ * atomic transaction. Returns { blocker: BlockerRow; task: TaskRow } on
+ * success, or a structured error object on failure.
+ *
+ * SESSION_AGENT_ID injection: raised_by defaults to ws.agentId when omitted.
+ */
+export function toolBlockTask(
+  ws: Workspace,
+  args: BlockTaskArgs,
+): { blocker: BlockerRow; task: TaskRow } | { error: { code: string; [k: string]: unknown } } {
+  // Resolve raised_by — fallback to ws.agentId (SESSION_AGENT_ID)
+  const raised_by =
+    args.raised_by != null && args.raised_by !== ''
+      ? args.raised_by
+      : ws.agentId;
+
+  try {
+    const recordInput: Parameters<typeof recordBlocker>[1] = {
+      task_id: args.task_id,
+      question: args.question,
+      raised_by,
+    };
+    if (args.context_keys !== undefined) {
+      recordInput.context_keys = args.context_keys;
+    }
+    const result = recordBlocker(ws.db, recordInput);
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+
+    if (msg.startsWith('TASK_NOT_FOUND:')) {
+      return taskNotFoundError(args.task_id);
+    }
+
+    // "Invalid task state transition: FROM -> BLOCKED"
+    const transMatch = /^Invalid task state transition: (\w+) -> (\w+)$/.exec(msg);
+    if (transMatch) {
+      const from = transMatch[1] as TaskState;
+      const to = transMatch[2] as TaskState;
+      return invalidTransitionError(from, to, msg);
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * cairn.task.answer
+ *
+ * Marks a blocker as ANSWERED. If all blockers for the task are now answered,
+ * advances task state to READY_TO_RESUME. Returns { blocker, task } on
+ * success, or a structured error object.
+ *
+ * SESSION_AGENT_ID injection: answered_by defaults to ws.agentId when omitted.
+ */
+export function toolAnswerBlocker(
+  ws: Workspace,
+  args: AnswerBlockerArgs,
+): { blocker: BlockerRow; task: TaskRow } | { error: { code: string; [k: string]: unknown } } {
+  // Resolve answered_by — fallback to ws.agentId (SESSION_AGENT_ID)
+  const answered_by =
+    args.answered_by != null && args.answered_by !== ''
+      ? args.answered_by
+      : ws.agentId;
+
+  try {
+    const result = markAnswered(ws.db, args.blocker_id, {
+      answer: args.answer,
+      answered_by,
+    });
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+
+    if (msg.startsWith('BLOCKER_NOT_FOUND:')) {
+      return blockerNotFoundError(args.blocker_id);
+    }
+    if (msg.startsWith('BLOCKER_ALREADY_ANSWERED:')) {
+      return blockerAlreadyAnsweredError(args.blocker_id);
+    }
+
+    // "Invalid task state transition: FROM -> TO" (shouldn't surface normally
+    // but translate defensively)
+    const transMatch = /^Invalid task state transition: (\w+) -> (\w+)$/.exec(msg);
+    if (transMatch) {
+      const from = transMatch[1] as TaskState;
+      const to = transMatch[2] as TaskState;
+      return invalidTransitionError(from, to, msg);
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * cairn.task.resume_packet
+ *
+ * Read-only structured handoff artifact. Assembles the packet from DB every
+ * call; no state mutations (LD-9).
+ *
+ * Returns { packet: ResumePacket } or { error: { code: 'TASK_NOT_FOUND', ... } }.
+ */
+export function toolResumePacket(
+  ws: Workspace,
+  args: ResumePacketArgs,
+): { packet: ResumePacket } | { error: { code: string; [k: string]: unknown } } {
+  const packet = assembleResumePacket(ws.db, args.task_id);
+  if (packet === null) {
+    return taskNotFoundError(args.task_id);
+  }
+  return { packet };
 }

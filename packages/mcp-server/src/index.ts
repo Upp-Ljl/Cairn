@@ -13,7 +13,7 @@ import { toolRegisterProcess, toolHeartbeat, toolListProcesses, toolGetProcess }
 import { toolListConflicts, toolResolveConflict } from './tools/conflict.js';
 import { toolInspectorQuery } from './tools/inspector.js';
 import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
-import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask } from './tools/task.js';
+import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask, toolBlockTask, toolAnswerBlocker, toolResumePacket } from './tools/task.js';
 
 const ws = openWorkspace();
 
@@ -330,6 +330,48 @@ const TOOLS = [
       required: ['task_id'],
     },
   },
+  {
+    name: 'cairn.task.answer',
+    description: '回答一个 blocker。当该 task 所有 blocker 均已回答时，task 自动升级到 READY_TO_RESUME。answered_by 省略时使用 SESSION_AGENT_ID。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blocker_id: { type: 'string', description: 'Blocker ID（来自 cairn.task.block 或 resume_packet 返回值）' },
+        answer: { type: 'string', description: '对 blocker 问题的回答' },
+        answered_by: { type: 'string', description: '回答者 agent_id 或 "user"。省略时自动使用 SESSION_AGENT_ID。' },
+      },
+      required: ['blocker_id', 'answer'],
+    },
+  },
+  {
+    name: 'cairn.task.block',
+    description: '将 RUNNING 任务转为 BLOCKED 并记录一个 blocker。raised_by 省略时使用 SESSION_AGENT_ID。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        question: { type: 'string', description: 'blocker 的问题描述' },
+        context_keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '相关 scratchpad key 列表（可选）',
+        },
+        raised_by: { type: 'string', description: '提出 blocker 的 agent_id。省略时自动使用 SESSION_AGENT_ID。' },
+      },
+      required: ['task_id', 'question'],
+    },
+  },
+  {
+    name: 'cairn.task.resume_packet',
+    description: '生成结构化接力 packet（只读）。包含 task 状态、open/answered blockers、scratchpad keys、最近 checkpoint sha 和 audit trail。不修改任何状态。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+      },
+      required: ['task_id'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -362,6 +404,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.task.list':           result = toolListTasks(ws, a); break;
     case 'cairn.task.start_attempt':  result = toolStartAttempt(ws, a); break;
     case 'cairn.task.cancel':         result = toolCancelTask(ws, a); break;
+    case 'cairn.task.block':          result = toolBlockTask(ws, a); break;
+    case 'cairn.task.answer':         result = toolAnswerBlocker(ws, a); break;
+    case 'cairn.task.resume_packet':  result = toolResumePacket(ws, a); break;
     default: throw new Error(`unknown tool: ${name}`);
   }
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };

@@ -25,6 +25,8 @@ import {
   toolListTasks,
   toolStartAttempt,
   toolCancelTask,
+  toolBlockTask,
+  toolAnswerBlocker,
 } from '../../src/tools/task.js';
 
 describe('cairn.task.* — 5 semantic verb tools', () => {
@@ -247,5 +249,183 @@ describe('cairn.task.* — 5 semantic verb tools', () => {
 
     const g = toolGetTask(ws, { task_id: r.task.task_id });
     expect(g.task!.metadata).toEqual({ foo: 'bar', num: 42 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: cairn.task.block + cairn.task.answer acceptance tests
+// ---------------------------------------------------------------------------
+
+describe('cairn.task.block + cairn.task.answer — Phase 2 acceptance', () => {
+  let cairnRoot: string;
+  let ws: Workspace;
+
+  beforeEach(() => {
+    cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-task-p2-'));
+    ws = openWorkspace({ cairnRoot });
+  });
+
+  afterEach(() => {
+    ws.db.close();
+    rmSync(cairnRoot, { recursive: true, force: true });
+  });
+
+  // Helper: create RUNNING task
+  function makeRunningTask(intent = 'running task') {
+    const r = toolCreateTask(ws, { intent });
+    toolStartAttempt(ws, { task_id: r.task.task_id });
+    return r.task.task_id;
+  }
+
+  // ---------------------------------------------------------------------------
+  // cairn.task.block
+  // ---------------------------------------------------------------------------
+
+  it('block happy: RUNNING task → block → task.state=BLOCKED, blocker.status=OPEN', () => {
+    const task_id = makeRunningTask();
+    const r = toolBlockTask(ws, { task_id, question: 'Should we keep the old API?' });
+    expect('blocker' in r).toBe(true);
+    const ok = r as { blocker: { status: string; blocker_id: string }; task: { state: string } };
+    expect(ok.blocker.status).toBe('OPEN');
+    expect(ok.task.state).toBe('BLOCKED');
+    expect(typeof ok.blocker.blocker_id).toBe('string');
+  });
+
+  it('block from PENDING → INVALID_STATE_TRANSITION error with from=PENDING, to=BLOCKED', () => {
+    const t = toolCreateTask(ws, { intent: 'pending task' }); // stays PENDING
+    const r = toolBlockTask(ws, { task_id: t.task.task_id, question: 'Can I block?' });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string; from: string; to: string } }).error;
+    expect(err.code).toBe('INVALID_STATE_TRANSITION');
+    expect(err.from).toBe('PENDING');
+    expect(err.to).toBe('BLOCKED');
+  });
+
+  it('block on nonexistent task_id → TASK_NOT_FOUND', () => {
+    const r = toolBlockTask(ws, { task_id: 'ghost-task', question: 'will fail' });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string; task_id: string } }).error;
+    expect(err.code).toBe('TASK_NOT_FOUND');
+    expect(err.task_id).toBe('ghost-task');
+  });
+
+  it('block raised_by defaults to ws.agentId when omitted', () => {
+    const task_id = makeRunningTask();
+    const r = toolBlockTask(ws, { task_id, question: 'Agent ID injection test' });
+    expect('blocker' in r).toBe(true);
+    const ok = r as { blocker: { raised_by: string } };
+    expect(ok.blocker.raised_by).toBe(ws.agentId);
+  });
+
+  // ---------------------------------------------------------------------------
+  // cairn.task.answer — single blocker
+  // ---------------------------------------------------------------------------
+
+  it('answer single happy: 1 OPEN blocker → answer → blocker.ANSWERED, task.READY_TO_RESUME', () => {
+    const task_id = makeRunningTask();
+    const blockResult = toolBlockTask(ws, { task_id, question: 'Keep old sync API?' }) as {
+      blocker: { blocker_id: string };
+    };
+    const blocker_id = blockResult.blocker.blocker_id;
+
+    const r = toolAnswerBlocker(ws, { blocker_id, answer: 'Yes, keep with deprecation notice' });
+    expect('blocker' in r).toBe(true);
+    const ok = r as { blocker: { status: string; answer: string }; task: { state: string } };
+    expect(ok.blocker.status).toBe('ANSWERED');
+    expect(ok.blocker.answer).toBe('Yes, keep with deprecation notice');
+    expect(ok.task.state).toBe('READY_TO_RESUME');
+  });
+
+  it('answer answered_by defaults to ws.agentId when omitted', () => {
+    const task_id = makeRunningTask();
+    const blockResult = toolBlockTask(ws, { task_id, question: 'Who answers?' }) as {
+      blocker: { blocker_id: string };
+    };
+    const r = toolAnswerBlocker(ws, { blocker_id: blockResult.blocker.blocker_id, answer: 'Me' });
+    expect('blocker' in r).toBe(true);
+    const ok = r as { blocker: { answered_by: string } };
+    expect(ok.blocker.answered_by).toBe(ws.agentId);
+  });
+
+  // ---------------------------------------------------------------------------
+  // cairn.task.answer — multi-blocker counting (LD-7)
+  // ---------------------------------------------------------------------------
+
+  it('answer 1 of 2 blockers: task remains BLOCKED, first blocker is ANSWERED', () => {
+    const task_id = makeRunningTask('multi-blocker task');
+
+    // block() transitions task RUNNING → BLOCKED and inserts first blocker
+    const b1 = toolBlockTask(ws, { task_id, question: 'Question 1' }) as {
+      blocker: { blocker_id: string };
+    };
+
+    // Insert second blocker via raw SQL (task is already BLOCKED; we bypass the
+    // transition guard deliberately, as we are testing markAnswered's counting logic,
+    // not recordBlocker's transition guard). Use a deterministic string as blocker_id.
+    const b2Id = `test-blocker-multi-1-${Date.now()}`;
+    ws.db
+      .prepare(
+        `INSERT INTO blockers (blocker_id, task_id, question, context_keys, status, raised_by, raised_at, answer, answered_by, answered_at, metadata_json)
+         VALUES (?, ?, 'Question 2', NULL, 'OPEN', NULL, ?, NULL, NULL, NULL, NULL)`,
+      )
+      .run(b2Id, task_id, Date.now());
+
+    // Answer first blocker — task should remain BLOCKED (still 1 OPEN)
+    const r = toolAnswerBlocker(ws, { blocker_id: b1.blocker.blocker_id, answer: 'Answer 1' });
+    expect('blocker' in r).toBe(true);
+    const ok = r as { blocker: { status: string }; task: { state: string } };
+    expect(ok.blocker.status).toBe('ANSWERED');
+    expect(ok.task.state).toBe('BLOCKED'); // still blocked — 1 OPEN remains
+  });
+
+  it('answer 2 of 2 blockers: after all answered, task → READY_TO_RESUME', () => {
+    const task_id = makeRunningTask('multi-blocker finish');
+
+    const b1 = toolBlockTask(ws, { task_id, question: 'Q1' }) as {
+      blocker: { blocker_id: string };
+    };
+
+    const b2Id = `test-blocker-multi-2-${Date.now()}`;
+    ws.db
+      .prepare(
+        `INSERT INTO blockers (blocker_id, task_id, question, context_keys, status, raised_by, raised_at, answer, answered_by, answered_at, metadata_json)
+         VALUES (?, ?, 'Q2', NULL, 'OPEN', NULL, ?, NULL, NULL, NULL, NULL)`,
+      )
+      .run(b2Id, task_id, Date.now() + 1);
+
+    // Answer b1 → still BLOCKED (b2 still OPEN)
+    toolAnswerBlocker(ws, { blocker_id: b1.blocker.blocker_id, answer: 'A1' });
+
+    // Answer b2 → READY_TO_RESUME (all answered)
+    const r2 = toolAnswerBlocker(ws, { blocker_id: b2Id, answer: 'A2' });
+    expect('blocker' in r2).toBe(true);
+    const ok2 = r2 as { task: { state: string } };
+    expect(ok2.task.state).toBe('READY_TO_RESUME');
+  });
+
+  // ---------------------------------------------------------------------------
+  // cairn.task.answer — error cases
+  // ---------------------------------------------------------------------------
+
+  it('answer on nonexistent blocker_id → BLOCKER_NOT_FOUND', () => {
+    const r = toolAnswerBlocker(ws, { blocker_id: 'ghost-blocker', answer: 'nope' });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string; blocker_id: string } }).error;
+    expect(err.code).toBe('BLOCKER_NOT_FOUND');
+    expect(err.blocker_id).toBe('ghost-blocker');
+  });
+
+  it('answer on already-answered blocker → BLOCKER_ALREADY_ANSWERED', () => {
+    const task_id = makeRunningTask();
+    const b = toolBlockTask(ws, { task_id, question: 'Double answer?' }) as {
+      blocker: { blocker_id: string };
+    };
+    toolAnswerBlocker(ws, { blocker_id: b.blocker.blocker_id, answer: 'first answer' });
+
+    const r = toolAnswerBlocker(ws, { blocker_id: b.blocker.blocker_id, answer: 'second answer' });
+    expect('error' in r).toBe(true);
+    const err = (r as { error: { code: string; blocker_id: string } }).error;
+    expect(err.code).toBe('BLOCKER_ALREADY_ANSWERED');
+    expect(err.blocker_id).toBe(b.blocker.blocker_id);
   });
 });
