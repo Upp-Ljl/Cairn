@@ -370,19 +370,43 @@ Cairn **拿不到**主 agent 的 context window 内部状态——那是 host LL
 
 ## 6. 功能范围
 
-### 6.1 v0.1 MUST（已落地 + 待加）
+### 6.1 v0.1 MUST（全部已落地）
+
+W5 Phase 3 闭环结束（2026-05-28）后，v0.1 MUST 范围全部交付。下表按"能力 vs 实现 phase"组织；具体 MCP 工具清单见 §17 + ARCHITECTURE.md §5。
 
 | 编号 | 能力 | 对应用户故事 | 状态 |
 |---|---|---|---|
-| F-1 | scratchpad CRUD（write / read / list / delete） | US-S, US-I | 已落地（W1） |
-| F-2 | checkpoint create / list | US-R | 已落地（W1） |
-| F-3 | rewind.to（文件 + git，含 paths 参数） | US-R | 已落地（W1） |
-| F-4 | rewind.preview（改动预览） | US-R | 已落地（W1） |
-| F-5 | task_id 多任务隔离（scratchpad / checkpoint 按 task 分片） | US-S | 已落地（W2） |
-| F-6 | 冲突检测基础版（同文件写入时间戳对比） | US-A | 待加（W3-W5） |
-| F-7 | Inspector NL 查询接口（活跃 agent / 文件历史 / 冲突日志） | US-I | 待加（W3-W5） |
-| F-8 | 进程总线基础版（agent 注册 / 心跳 / 状态查询） | US-A, US-I | 待加（W4-W6） |
-| F-9 | Dispatch 基础版（NL→历史检索→用户确认→转发） | US-D | 待加（W5-W7） |
+| F-1 | scratchpad CRUD（write / read / list / delete） | US-S, US-I | ✅ W1 |
+| F-2 | checkpoint create / list（两阶段提交 + git-stash backend） | US-R | ✅ W1 |
+| F-3 | rewind.to（文件 + git，含 paths 参数；auto-checkpoint 兜底） | US-R | ✅ W1 |
+| F-4 | rewind.preview（会变 / 不变两清单 dry-run） | US-R | ✅ W1 |
+| F-5 | task_id 多任务隔离（scratchpad / checkpoint / outcomes 按 task 分片） | US-S | ✅ W1+W5 |
+| F-6 | 冲突检测基础版（MCP-call 边界 + commit-after pre-commit hook 双层） | US-A | ✅ W4 |
+| F-7 | Inspector NL 查询接口（15 个确定性 SQL 模板，关键词匹配） | US-I | ✅ W4 |
+| F-8 | 进程总线（agent register / heartbeat / list / status，自动 SESSION_AGENT_ID） | US-A, US-I | ✅ W4 |
+| F-9 | Dispatch 基础版（NL→历史检索→用户确认→转发，5 条 fallback rules R1/R2/R3/R4/R6） | US-D | ✅ W4 |
+| F-10 | Task Capsule lifeline（durable multi-agent work item：tasks 表 + 5 task tools） | US-S, US-D | ✅ W5 Phase 1 |
+| F-11 | Blockers + resume_packet（任务内等待答复 + 跨 session 接力 read-only aggregate） | US-S, US-D | ✅ W5 Phase 2 |
+| F-12 | Outcomes DSL（7 deterministic 原语 / AND 语义 / RUNNING ↔ WAITING_REVIEW ↔ DONE/RUNNING/FAILED 闭环 / terminal_fail 边界） | US-D, US-S | ✅ W5 Phase 3 |
+| F-13 | `cairn install` CLI（`.mcp.json` + git pre-commit hook + start-cairn-pet 脚本，三者幂等） | 通用 | ✅ W4 |
+| F-14 | desktop-shell pet（Electron 悬浮标，schema 状态 → sprite 动画契约） | 通用（ambient UI） | ✅ W4（基础形态） |
+
+### 6.1.1 Cairn 管理的 8 类 host-level state objects
+
+任何 Cairn capability 都建立在这 8 类持久状态对象之上。它们是 Cairn 的"内核数据结构"，agent 通过 28 个 MCP 工具读写它们：
+
+| State object | 用途 | Migration |
+|---|---|---|
+| `processes` | runner 在线状态 + capabilities + heartbeat | 004 |
+| `tasks` | durable multi-agent work items（state machine 12 transitions） | 007 |
+| `dispatch_requests` | 可审计派发请求（NL 意图 / parsed / generated prompt / agent / status） | 005 + 008 |
+| `scratchpad` | 共享上下文 + subagent 原始结果（cross-context durable，agent 主动写） | 002 |
+| `checkpoints` | 可回滚状态锚点（两阶段 PENDING → READY，git-stash backend） | 003 |
+| `conflicts` | 多 agent 写冲突（MCP-call + commit-after 双层检测）| 004 + 006 |
+| `blockers` | 任务内等待答复（FK CASCADE on task；OPEN / ANSWERED / SUPERSEDED） | 009 |
+| `outcomes` | 结果验收状态（UNIQUE(task_id)，PENDING / PASS / FAIL / TERMINAL_FAIL） | 010 |
+
+`resume_packet` 是从这些表组合的 **read-only aggregate view**（task 行 + open/answered blockers + scratchpad keys + outcomes_criteria + audit summary），由 `cairn.task.resume_packet` 工具按需聚合返回，**不是独立持久状态**。
 
 ### 6.2 v0.1 WON'T（明确不做）
 
@@ -611,21 +635,25 @@ v0.2+ 可能加：`inspector-ui`（Inspector 面板）/ `dispatcher`（Dispatch 
 
 ## 10. 路线图
 
-### 10.1 当前位置：v0.1 楔已超额完成
+### 10.1 当前位置：v0.1 W5 Phase 3 闭环已交付
 
-- W1：daemon 存储层（SQLite + migration + 仓储层）落地，`storage-p1` tag 打上。
-- W2：8 个 MCP 工具全部落地（包含 `scratchpad.delete` + `task_id` 切片），已合并 main。实际进度超出原计划（原 W2 只计划 scratchpad read/write）。
-- 当前（W2 EOD）：dogfood 阶段，等用户加 `.mcp.json` 接入 Claude Code 使用。
+| 阶段 | 周期 | 内容 | 状态 |
+|---|---|---|---|
+| W1 楔 | 2026-04 | daemon 存储 + 8 MCP 工具 + tag `storage-p1` | ✅ |
+| W2 PoC | 2026-04 | PoC-1（SQLite 并发）+ PoC-2（pre-commit hook 延迟）双 PASS | ✅ |
+| W4 Phase 1-4 | 2026-04~05 | 四能力 v1（conflict + inspector + process bus + dispatch + `cairn install` CLI + auto SESSION_AGENT_ID + Phase 1-4 review followups） | ✅ |
+| W5 Phase 1 | 2026-05 | Task Capsule lifeline（tasks 表 + 5 task tools） | ✅ |
+| W5 Phase 2 | 2026-05 | Blockers + resume_packet（blockers 表 + 3 task tools，cross-session handoff） | ✅ |
+| W5 Phase 3 | 2026-05 | Outcomes DSL + review/retry/terminal_fail 闭环（outcomes 表 + 3 outcomes tools + DSL stack 7 原语，dogfood 32/32 PASS） | ✅ |
+| Phase 4 | 2026-05~06 | Product unification + release polish（README / PRODUCT / ARCHITECTURE / CLAUDE / RELEASE_NOTES / demos index） | ⏳ 进行中 |
 
-### 10.2 后续 12 周：四能力 v1 实施
+### 10.2 后续：v0.1 release polish + 第三方 dogfood 扩展
 
-| 阶段 | 周期 | 目标 |
-|---|---|---|
-| 冲突检测 v1 | W3-W5 | 基础冲突检测 + Inspector NL 接口 + 进程总线基础版 |
-| Dispatch v1 | W5-W7 | 基础 Dispatch：NL→历史检索→用户确认→转发 |
-| 消息可达 v1 | W7-W9 | subagent 结果持久化 + 反汇总基础版 |
-| 集成 + 验证 | W9-W11 | 五条 US 端到端跑通；dogfood 扩展到 3+ 外部用户 |
-| 文档 + 发布 | W11-W12 | 文档整理；v0.1 工程交付闸（见 §10.4）逐条核对 |
+| 阶段 | 内容 |
+|---|---|
+| Phase 4 收尾 | 文档统一（本批次）+ CHANGELOG / RELEASE_NOTES 收束叙事 + Phase 4 close-out plan |
+| 外部 dogfood 扩展 | 邀请 ≥ 3 个外部 multi-agent 用户跑 `cairn install` + 反馈收集 |
+| v0.1 release 决策 | 是否 npm publish / 是否打 tag `v0.1.0` / LICENSE 选型 |
 
 ### 10.3 v0.2（预计 +3 月 - +6 月）
 
