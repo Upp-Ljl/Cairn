@@ -44,7 +44,7 @@
 - **LD-12**：`cairn.task.submit_for_review` 是 **upsert**——不直接触发评估。
   - **首次调用**（该 task 无 outcomes 行）：① 解析 criteria；② 同一事务里 INSERT outcomes(status='PENDING', criteria_json=冻结的 criteria) + assertTransition(RUNNING → WAITING_REVIEW) + updateTaskState。
   - **重复调用**（task 已有 outcomes 行，UNIQUE(task_id) 命中）：①保留既有 outcome_id；② **不接受新的 criteria** —— 第二次调用必须省略 criteria 参数，或传与既存 criteria_json 字面相等的值（否则 throw `CRITERIA_FROZEN`）；③ 同一事务里 UPDATE outcomes SET status='PENDING', evaluated_at=NULL, evaluation_summary=NULL + updateTaskState(RUNNING → WAITING_REVIEW)。
-  - **评估由独立工具 `cairn.outcomes.evaluate(outcome_id)` 触发，可重复调用**。每次 evaluate REPLACE outcomes 行的 status / evaluated_at / evaluation_summary 三个字段（criteria_json 永远不变）。
+  - **评估由独立工具 `cairn.outcomes.evaluate(outcome_id)` 触发**：每次 `submit_for_review` 把 outcome 重置回 PENDING 之后**可调用一次**，从 PENDING 走到 PASS 或 FAIL；FAIL 之后 outcome.status 是 FAIL，**不能直接再调 evaluate**——必须先走一次 `submit_for_review` 重置回 PENDING（upsert 路径）才能再 evaluate。每次 evaluate REPLACE outcomes 行的 status / evaluated_at / evaluation_summary 三个字段（criteria_json 永远不变）。
   - **闭环**：evaluate(FAIL) → task=RUNNING + outcome.status=FAIL → agent 修代码 → submit_for_review(task_id) 走 upsert 重置路径 → evaluate 再跑 → PASS → DONE。这条路径每一步都符合 `VALID_TRANSITIONS`，没有状态机违例。
 - **LD-13**：DSL **解析器（parser）与评估器（evaluator）严格分离**。
   - Parser：input `criteria_json` (raw string from MCP arg) → 输出 IR `OutcomePrimitive[]`（结构化 `{ primitive: PrimitiveName, args: ValidatedArgs }[]`）。语法检查 + 参数类型检查在这一层做。
@@ -130,7 +130,7 @@ packages/mcp-server/                                 # exists from Phase 1+2
 │   │   ├── evaluator.ts                             # NEW — evaluateCriteria(IR, ctx) → EvaluationResult
 │   │   ├── primitives.ts                            # NEW — 7 个 primitive functions + access-class declarations
 │   │   └── types.ts                                 # NEW — IR / EvaluationResult / GraderHook 接口（LD-11 reserved）
-│   └── index.ts                                     # MODIFY (register 2 new tools)
+│   └── index.ts                                     # MODIFY (register 3 new tools — submit_for_review + evaluate + terminal_fail)
 ├── scripts/
 │   ├── w5-phase1-dogfood.mjs                        # NO CHANGE
 │   ├── w5-phase2-dogfood.mjs                        # NO CHANGE
