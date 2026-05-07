@@ -9,18 +9,13 @@
 
 ## 0. TL;DR（30 秒读完）
 
-Cairn 是**本机多 agent 协作的内核**（Agent OS）。
+Cairn 是**主机级多 agent 协作内核**。它不是 agent，不写代码，不拆任务，不替用户规划，也不是某个长程任务的守护进程。Cairn 坐在 Claude Code、Cursor、subagents、Aider、Cline 这些 agent 工具之下，维护这台机器上所有 agent / subagent work 的共享协作状态：runner、durable work items、scratchpad、checkpoints、conflicts、blockers、outcomes 和 dispatch history。
 
-- N 个 agent / subagent 在同一份代码库上协作时，冲突可见、状态可逆、需求可派、消息可达。
-- Cairn **不写代码**，不替你做任何开发任务。写代码的是 Claude Code / Cursor / Cline 等——它们是"应用"，Cairn 是"OS"。
-- 用户和 Cairn 的交互只有两种：**看**（Inspector：查状态/查历史）和**下命令**（rewind / checkpoint 等确定性操作）。
-- 用户有具体任务要做？直接找 agent，跳过 Cairn。Cairn 站在后面做仲裁和记录。
+W5 引入的 **Task Capsule** 是 Cairn 的一个 OS primitive：durable multi-agent work item。它让多个 agent / subagent 可以围绕同一项复杂工作共享状态、暂停、接力、验收和回滚——但 Cairn 不接管任务、不做编排、不替 agent reasoning。
 
-Cairn 的三个动词：**Dispatch（派单）/ Rewind（回滚）/ Arbitrate（仲裁）**。
+> **Cairn is the host-level coordination kernel for multi-agent work. It gives agents and subagents durable shared state, conflict visibility, handoff packets, checkpoints, and outcome checks, so complex collaboration can survive failure, interruption, and handoff.**
 
-当前阶段：v0.1 楔已超额完成（8 个 MCP 工具上线），正在 dogfood。
-
-**W5 起，Cairn 进入"长程任务 OS"阶段**：每个长程任务建模为可暂停、可接力、可验收、可回滚的 Task Capsule。**Phase 1+2 已交付：任务生命线 + 暂停接力闭环**——一个任务可以在 session A 停下、过一晚、在 session B 接力（已通过真实 MCP stdio 三 child 进程 dogfood 验证）。Phase 3 加 outcomes 验收（grader agent + tests_pass DSL）。最终 pitch：**Cairn lets agents work longer because failure, interruption, and handoff are no longer fatal.**
+当前阶段：v0.1 W5 Phase 1+2 已交付（Task Capsule lifeline + BLOCKED-loop pause-and-resume，real MCP stdio 三 child 进程 dogfood 30/30 PASS），Phase 3（outcomes 验收）plan ready 待实施。
 
 ---
 

@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Framing note**: Phase 3 adds `outcomes` as another host-level coordination object Cairn manages. Task Capsule remains an OS primitive, not the product itself. Cairn 是主机级多 agent 协作内核——见 PRODUCT.md §0 / `CLAUDE.md` 顶部 framing。
+
 **Goal**：把 Task Capsule 从"可暂停可接力"升级到"可验收"。**Phase 3 唯一目标是把这条状态闭环跑通：`RUNNING → WAITING_REVIEW → DONE / RUNNING / FAILED`**——其中 DONE 来自验收通过，RUNNING（验收失败重试）来自验收失败但允许 agent 修后再试，FAILED 来自显式终判。验收手段是**确定性 DSL 评估器**（7 个原语），不调 LLM、不调 grader agent（schema 留 hook 但 v1 不实现）。Phase 3 完成时 W5 闭环 done：Cairn 真的能让一个任务"在 session A 停下、过一晚、在 session B 接力、最后系统自动验收测试是否通过"。
 
 **Architecture**：Phase 1+2 已 schema-complete 状态机（`tasks-state.ts` 含 WAITING_REVIEW 全部 transitions）+ tasks/blockers 仓储 + 8 个 cairn.task.* MCP 工具。Phase 3 新增 `outcomes` 表（migration 010，独立表，**不复用 conflicts/blockers**——LD-2 同一原则；表带 `UNIQUE(task_id)` 约束，**每 task 严格一行 outcome**），仓储层 4 verb 暴露 + 私有 transition helper 复用 Phase 2 范式，DSL parser/evaluator 拆分为 `packages/mcp-server/src/dsl/` 子目录（mcp-server 层因为需要 `child_process` + `fs` 访问；daemon 保持纯 DB），MCP 层 **3 个新工具**：`cairn.task.submit_for_review` / `cairn.outcomes.evaluate` / `cairn.outcomes.terminal_fail`。submit_for_review 是 **upsert**——第一次声明 + transition；retry 时复用 outcome_id、重置 status 为 PENDING、criteria 不变；evaluate 跑评估决定 PASS/FAIL；terminal_fail 是用户主动放弃路径。

@@ -2,6 +2,12 @@
 
 > 这个文件给未来的 Claude 会话用。仓库特定的"踩过的坑"和"非显然的本地约定"放这里，避免每次重新诊断。
 
+## Cairn 是什么（定位先看，再看下面）
+
+Cairn 是**主机级多 agent 协作内核**（host-level multi-agent coordination kernel）。它**不是** agent / 不写代码 / 不拆任务 / 不替 agent reasoning / 不是 task daemon / 不是 agent framework / 不是 Linear-Asana 类项目管理。它坐在 Claude Code / Cursor / subagents / Aider / Cline 这些 agent 工具**之下**，维护这台机器上所有 agent / subagent work 的共享协作状态（processes / tasks / scratchpad / checkpoints / conflicts / blockers / outcomes / dispatch history）。
+
+W5 引入的 Task Capsule 是 Cairn 的一个 OS primitive（durable multi-agent work item），**不是** Cairn 本身——Cairn 不会因为加了 Task Capsule 就变成 task manager。任何文档 / commit message / pitch 写作都按这个 framing。完整 positioning 见 PRODUCT.md §0；不要漂回"Agent OS"等模糊措辞。
+
 ## 项目坐标
 
 - **仓库（origin，主）**：https://github.com/Upp-Ljl/Cairn （**注意大小写**：`Cairn`，不是 `cairn`）
