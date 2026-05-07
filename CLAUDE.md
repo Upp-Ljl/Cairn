@@ -4,9 +4,15 @@
 
 ## Cairn 是什么（定位先看，再看下面）
 
-Cairn 是**主机级多 agent 协作内核**（host-level multi-agent coordination kernel）。它**不是** agent / 不写代码 / 不拆任务 / 不替 agent reasoning / 不是 task daemon / 不是 agent framework / 不是 Linear-Asana 类项目管理。它坐在 Claude Code / Cursor / subagents / Aider / Cline 这些 agent 工具**之下**，维护这台机器上所有 agent / subagent work 的共享协作状态（processes / tasks / scratchpad / checkpoints / conflicts / blockers / outcomes / dispatch history）。
+Cairn 是**主机级多 agent 协作内核**（host-level multi-agent coordination kernel）。它**不是** agent / 不写代码 / 不拆任务 / 不替 agent reasoning / 不是 task daemon / 不是 agent framework / 不是 Linear-Asana 类项目管理。它坐在 Claude Code / Cursor / subagents / Aider / Cline 这些 agent 工具**之下**，维护这台机器上所有 agent / subagent work 的共享协作状态。
 
-W5 引入的 Task Capsule 是 Cairn 的一个 OS primitive（durable multi-agent work item），**不是** Cairn 本身——Cairn 不会因为加了 Task Capsule 就变成 task manager。任何文档 / commit message / pitch 写作都按这个 framing。完整 positioning 见 PRODUCT.md §0；不要漂回"Agent OS"等模糊措辞。
+**v0.1 管理的 8 类 host-level state objects**：`processes`（runner 在线状态）/ `tasks`（durable multi-agent work items）/ `dispatch_requests`（可审计派发请求）/ `scratchpad`（共享上下文 + subagent 原始结果）/ `checkpoints`（可回滚状态锚点）/ `conflicts`（多 agent 写冲突）/ `blockers`（任务内等待答复）/ `outcomes`（结果验收状态）。`resume_packet` 是 read-only 聚合视图，不是独立持久状态。
+
+W5 引入的 Task Capsule 是 Cairn 管理的一类 durable work item（`tasks` + `blockers` + `outcomes` 三表组合），是 OS primitive 之一，**不是** Cairn 本身——Cairn 不会因为加了 Task Capsule 就变成 task manager。任何文档 / commit message / pitch 写作都按这个 framing。完整 positioning 见 PRODUCT.md §0；不要漂回"Agent OS / solo task daemon / lead-subagent orchestrator"等模糊或错误措辞。
+
+## 新会话起手入口
+
+不熟悉 repo 的新 session：先读 `README.md`（30 秒上手）→ `PRODUCT.md` §0 + §1（定位 + 反定义）→ `ARCHITECTURE.md` §1+§4（系统图 + state objects）→ 当前活跃 plan（`docs/superpowers/plans/2026-05-28-w5-phase4-closure.md` 或下一个）。Phase 1+2+3 demo 证据见 `docs/superpowers/demos/README.md`。再回头读本文（CLAUDE.md）拿 push / TLS / 测试命令等本地约定。
 
 ## 项目坐标
 
@@ -144,8 +150,14 @@ import { openDatabase } from '../../daemon/dist/storage/db.js';
 每个包独立跑：
 
 ```bash
-cd packages/daemon && npm test           # 90 tests (15 test files; 实测 2026-04-29 EOD)
-cd packages/mcp-server && npm test       # 42 tests (2 test files; 含 8 acceptance + 1 stdio smoke + W2 features)
+cd packages/daemon && npm test           # 411 tests / 29 test files（W5 Phase 3 后；含 19 outcomes 仓储 + 6 WAITING_REVIEW transition）
+cd packages/mcp-server && npm test       # 329 tests / 17 test files / 1 pre-existing skip（含 21 parser + 22 spawn/path utils + 32 primitives + 11 evaluator + 12 outcomes acceptance）
+```
+
+**Live dogfood**（W5 Phase 3 闭环，跨 3 个真实 MCP stdio session）：
+
+```bash
+cd packages/mcp-server && npm run build && node scripts/w5-phase3-dogfood.mjs   # 32/32 assertions PASS
 ```
 
 不要给 `cd packages/daemon` 加 `cd D:/lll/cairn &&` 前缀 — 工作目录已经是仓库根。
@@ -184,15 +196,26 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 
 ## 当前阶段
 
-v0.1 13 周计划，**W4 Phase 1-4 已完成**（2026-05-06）。
-- ✅ W1 楔技术雏形（`feat/storage-p1` 已合并 + tag `storage-p1`）
-- ✅ W4 Day 1-2：processes / conflicts / dispatch 三表 + 17 个 MCP 工具全部落地
-- ✅ Phase 1-4：auto SESSION_AGENT_ID / conflict.resolve / FORCE_FAIL hook / R6 规则 / pre-commit 写 DB / `cairn install` CLI
+v0.1 **W5 Phase 1+2+3 全部已交付**（2026-05-28，commit chain `cd20159..9ed613b` 已 push 到 origin）。
 
-## Phase 1-4 落地约定（新会话必读）
+| 阶段 | 内容 | Commit / 状态 |
+|---|---|---|
+| W1 楔 | 持久层 + 8 MCP tools | `feat/storage-p1` 已合并 + tag `storage-p1` |
+| W4 Phase 1-4 | processes / conflicts / dispatch 三表 + 17 工具 + auto agent_id + R6 + `cairn install` CLI | 2026-05-06 done |
+| W5 Phase 1 | Task Capsule lifeline（tasks 表 + 5 task tools） | 2026-05-07~14 |
+| W5 Phase 2 | Blockers + resume_packet（blockers 表 + 3 task tools） | 2026-05-14~21 |
+| W5 Phase 3 | Outcomes DSL + review/retry/terminal_fail 闭环（outcomes 表 + 3 outcomes tools + DSL stack 7 原语） | 2026-05-22~28，dogfood 32/32 PASS |
+| Phase 4 | Product unification + release polish | 进行中（本批次） |
+
+**v0.1 当前 28 个 MCP 工具 / 10 个 migration（001-010）**。下一个可用 migration 编号 = `011`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review / 007-tasks / 008-dispatch-task-id / 009-blockers / 010-outcomes。
+
+## 已落地约定（新会话必读）
 
 - **SESSION_AGENT_ID 自动注入**：mcp-server 启动时自动生成并写入 `process.env.CAIRN_SESSION_AGENT_ID`（格式 `cairn-<sha1(host:cwd).slice(0,12)>`）。`process.register` / `heartbeat` / `status` / `checkpoint.create` 的 `agent_id` 参数均为可选，缺省取该值。**测试不应传 agent_id，除非在断言显式覆盖逻辑**。
-- **Migration 006 已落地**；下一个可用编号是 `007`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review。
-- **pre-commit hook 现在写 DB**（不再是纯只读）：staged paths 与 OPEN 冲突有重叠时，hook INSERT 新 `PENDING_REVIEW` 行。`CAIRN_DISPATCH_FORCE_FAIL=1` 可强制 dispatch 写 FAILED（demo hook）。
+- **pre-commit hook 写 DB**：staged paths 与 OPEN 冲突有重叠时，hook INSERT 新 `PENDING_REVIEW` 行。`CAIRN_DISPATCH_FORCE_FAIL=1` 可强制 dispatch 写 FAILED（demo hook）。
 - **`cairn install` CLI**：bin entry `cairn` 在 `packages/mcp-server`（`npm run build` 后生效）。写 `.mcp.json` + pre-commit hook + start-cairn-pet 脚本，三者幂等可重跑。非 npm-published，当前需 file-link（clone + build + 绝对路径）。
-- **兜底规则共 5 条**：R1 / R2 / R3 / R4 / R6；R4b / R5 推迟 v0.2。`applyFallbackRules` helper 有单元测试覆盖各规则中英关键词。
+- **Dispatch 兜底规则共 5 条**：R1 / R2 / R3 / R4 / R6；R4b / R5 推迟 v0.2。`applyFallbackRules` helper 有单元测试覆盖各规则中英关键词。
+- **W5 状态机 12 条 transition 全部 active**（`tasks-state.ts` `VALID_TRANSITIONS`）；`WAITING_REVIEW → CANCELLED` **故意不存在**（P1.2 锁，evaluate 是 sub-second 中转态，超时返 RUNNING 后再 cancel）。
+- **Task Capsule 复用约定**：`subagent` 派单时 main agent 通过 prompt 传 `task_id`；scratchpad 用 `subagent/{agent_id}/result` key 命名（详见 `docs/cairn-subagent-protocol.md`）。
+- **DSL stack frozen 约束**：`packages/mcp-server/src/dsl/spawn-utils.ts` 是唯一可 import `child_process` 的文件；所有 path 校验经 `path-utils.assertWithinCwd`。grep 强制约束写在 plan §7.1.1。
+- **outcomes 仓储 6 个 named export**：`OutcomeStatus` / `OutcomeRow` / `submitOutcomesForReview`（upsert 语义） / `recordEvaluationResult`（PENDING-only） / `markTerminalFail`（PENDING-only） / `getOutcomeByTask`（read-only 聚合用）。绝不暴露 `cairn.outcomes.list/get` MCP 工具（LD-8 锁）。
