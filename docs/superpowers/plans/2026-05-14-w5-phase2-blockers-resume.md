@@ -36,7 +36,7 @@
 ### Phase 2 新锁（首次出现）
 
 - **LD-5**：Resume packet 的 JSON schema 已在 Phase 1 plan §6 冻结。Phase 2 **逐字段实现**，不改字段名、不删字段、不加字段。如发现需要变动，必须开 ADR。
-- **LD-6**：`recordBlocker`（仓储 verb）原子写入"`tasks.state` RUNNING→BLOCKED + insert blockers(OPEN)"，二者在同一 `db.transaction()` 内，任一失败都回滚。沿用 Phase 1 `cancelTask` 的原子性测试范式（黑盒：mock 内部 throw，验证两边都没动）。
+- **LD-6**：`recordBlocker`（仓储 verb）原子写入"`tasks.state` RUNNING→BLOCKED + insert blockers(OPEN)"，二者在同一 `db.transaction()` 内，任一失败都回滚。原子性测试沿用 Phase 1 `cancelTask` 的黑盒思路，但 Phase 2 用**确定性运行时触发**（非 mock）：`recordBlocker` 用 `question: null as any` 撞 NOT NULL 约束；`markAnswered` 用 raw SQL 把 task.state 改回 RUNNING 让事务末端的 `assertTransition` throw。这两个触发是真实错误路径，比 mock 更可信。
 - **LD-7**：`markAnswered`（仓储 verb）的状态升级逻辑：写完 blocker.ANSWERED 后，**精确**查询该 task 还有几个 OPEN blocker。**0 个**才升 `BLOCKED → READY_TO_RESUME`；**>0** 则 task 状态保持 `BLOCKED`。这一规则把"多 blocker 等多个答复"的语义钉住，未来即使支持多 blocker 场景也不需重写。
 - **LD-8**：MCP 层只暴露 3 个工具：`block` / `answer` / `resume_packet`。**不**暴露 `list_blockers` / `get_blocker` —— blocker 的访问只走 `resume_packet`（聚合视图）。这是为了避免给 agent 提供"绕过 task 上下文直接操作 blocker"的口子。
 - **LD-9**：Resume packet 生成是 **read-only**。绝不在生成 packet 时附带写操作（如 audit logging、metric counter）。这条保 Inspector 等只读路径调用 packet 生成无副作用。
@@ -80,7 +80,7 @@ RUNNING ──► WAITING_REVIEW
 WAITING_REVIEW ──► DONE / RUNNING / FAILED
 ```
 
-**关键 invariant**：Phase 2 完成时仍**未激活** WAITING_REVIEW 相关的 4 条转换。dogfood 必须验证：从 `BLOCKED` 调用 `cairn.task.submit_for_review` 应返回 INVALID_STATE_TRANSITION（因为该工具尚不存在于 tools/list；如果有人误注册了，验证即失败）。
+**关键 invariant**：Phase 2 完成时仍**未激活** WAITING_REVIEW 相关的 4 条转换。验证方式是在 dogfood 里调 `tools/list`，断言 `cairn.task.submit_for_review` / `cairn.outcomes.evaluate` 这两个名字**不**出现（未注册的 MCP 工具命中的是 protocol-level 的 unknown-tool / method-not-found，不会走到状态机 guard，所以不能用 INVALID_STATE_TRANSITION 做断言依据）。WAITING_REVIEW guard 行为留给 Phase 3 工具落地后测——Phase 1 已经在 `tasks-state.test.ts` 里覆盖了纯单元层的 transition 拒绝。
 
 `cairn.task.cancel` 在 Phase 1 写时支持从 PENDING / RUNNING 取消；Phase 2 由于 BLOCKED → CANCELLED 是合法 transition，**自动**支持从 BLOCKED 取消（assertTransition 已写）。**不需要改 cancel 工具代码**，但 Phase 2 dogfood 应包含一条"BLOCKED → cancel → CANCELLED + cancel_reason in metadata"的断言，确保这条路径真的通。
 
@@ -188,7 +188,7 @@ docs/superpowers/diagrams/w5-task-state.md           # MODIFY (Phase 2 转换从
 
 **目标**：`packages/daemon/src/storage/repositories/blockers.ts` 提供 verb-only 公开 API + 私有 transition helper。原子性沿用 Phase 1 `cancelTask` 范式。
 
-- [ ] **Step 1**：交付 `blockers.ts` 暴露**仅 4 个**符号：
+- [ ] **Step 1**：交付 `blockers.ts` 暴露 1 接口 + 4 个仓储动词（共 5 个 named exports）。其中 `listBlockersByTask` 与 `getBlocker` 是仓储层暴露的内部 helper —— `assembleResumePacket` / `markAnswered` 等同包内调用方需要它们，**但 LD-8 锁定它们绝不会被注册成 MCP 工具**。MCP 暴露的边界在 `mcp-server` 包，不在仓储层：
   ```ts
   export interface BlockerRow {
     blocker_id: string;
@@ -230,11 +230,13 @@ docs/superpowers/diagrams/w5-task-state.md           # MODIFY (Phase 2 转换从
   export function listBlockersByTask(db: DB, task_id: string, filter?: {
     status?: BlockerRow['status'] | BlockerRow['status'][];
   }): BlockerRow[]
-  // 内部 helper —— 给 resume_packet 组装用。LD-8 锁定**不**通过 MCP 暴露。
+  // 仓储层公开（mcp-server 的 assembleResumePacket 需要 import）。
+  // LD-8：**不**注册为 MCP 工具——所有外部访问走 resume_packet 聚合视图。
   // 默认按 raised_at ASC 排序。
 
   export function getBlocker(db: DB, blocker_id: string): BlockerRow | null
-  // 内部 helper —— 给 markAnswered 用。LD-8 锁定**不**通过 MCP 暴露。
+  // 仓储层公开（被 markAnswered + 单测使用）。
+  // LD-8：**不**注册为 MCP 工具。
   ```
   - module-private helper：复用 Phase 1 风格，加一个 `transitionTaskInTx(db, task_id, to)` 内部函数，把"读旧 state → assertTransition → 写新 state + updated_at"这一坨打包，让 `recordBlocker` / `markAnswered` 调用时干净
 - [ ] **Step 2**：实现细节
@@ -244,11 +246,11 @@ docs/superpowers/diagrams/w5-task-state.md           # MODIFY (Phase 2 转换从
 - [ ] **Step 3**：`tests/storage/blockers.test.ts`（≥ 12 case）：
   - `recordBlocker` happy path：RUNNING → BLOCKED，blocker.status='OPEN'，task 与 blocker 一并返回
   - `recordBlocker` from non-RUNNING：PENDING / BLOCKED / CANCELLED 各试一次 → throws via assertTransition
-  - `recordBlocker` 原子性：mock `db.prepare` 在 INSERT blocker 时 throw → task.state 不应变 BLOCKED（用 corrupt JSON 风格的 context_keys 触发即可）
+  - `recordBlocker` 原子性（**确定性触发，不用 mock**）：传 `question: null as any`（绕过 TS 类型）→ INSERT 时撞 `question NOT NULL` 约束 throw → 断言 task.state 仍是 RUNNING（未变 BLOCKED）。这是真实运行时错误路径，比 mock 更可信。
   - `markAnswered` 单 blocker happy path：OPEN → ANSWERED，task BLOCKED → READY_TO_RESUME
   - `markAnswered` 多 blocker：task 有 2 个 OPEN，answer 1 个 → task 仍 BLOCKED，剩 1 OPEN；answer 第 2 个 → task → READY_TO_RESUME
   - `markAnswered` already answered：blocker.status='ANSWERED' → throws BLOCKER_ALREADY_ANSWERED
-  - `markAnswered` 原子性：mock blocker UPDATE 后 throw → 状态都回滚
+  - `markAnswered` 原子性（**确定性触发，不用 mock**）：setup 阶段先 `recordBlocker` 让 task 进 BLOCKED + blocker OPEN；调 markAnswered 之前用 raw SQL 把 task.state 强行改回 RUNNING（模拟外部不一致）。markAnswered 内部事务里：blocker UPDATE 成功 → count OPEN = 0 → `assertTransition('RUNNING' → 'READY_TO_RESUME')` throws（这条 transition 不在 VALID_TRANSITIONS）→ 整个 tx 回滚。断言：blocker.status 仍是 OPEN，answer / answered_at 仍是 null。
   - `markAnswered` 边界：blocker_id 不存在 → throws BLOCKER_NOT_FOUND
   - `listBlockersByTask` 排序：按 raised_at ASC
   - `listBlockersByTask` filter by status
@@ -312,7 +314,10 @@ docs/superpowers/diagrams/w5-task-state.md           # MODIFY (Phase 2 转换从
 
   export function assembleResumePacket(db: DB, task_id: string): ResumePacket | null
   // 1. getTask(task_id) → null 时返回 null
-  // 2. 取 last checkpoint：SELECT * FROM checkpoints WHERE task_id=? ORDER BY created_at DESC LIMIT 1
+  // 2. 取 last READY checkpoint：SELECT * FROM checkpoints WHERE task_id=? AND snapshot_status='READY' ORDER BY created_at DESC LIMIT 1
+  //    `last_checkpoint_sha` 字段在当前实现中取该行的 `git_head`（migration 003 schema；W1 后 stash sha 已迁出 label 字段，但 git_head 仍是稳定锚点）。
+  //    没有 READY checkpoint（或该 task 完全无 checkpoint）→ last_checkpoint_sha = null。
+  //    PENDING / CORRUPTED 行**绝不**被选中，避免给调用方一个不可信的 sha。
   // 3. listBlockersByTask(status='OPEN') → open_blockers
   // 4. listBlockersByTask(status='ANSWERED') ORDER BY answered_at DESC LIMIT 10 → answered_blockers
   // 5. SELECT key FROM scratchpad WHERE task_id=? → scratchpad_keys
@@ -498,7 +503,7 @@ Phase 1 dogfood 证明了 task identity 跨进程存活。Phase 2 dogfood 证明
 | 风险 | 概率 | 影响 | 缓解 |
 |---|---|---|---|
 | `markAnswered` 多 blocker 计数逻辑错（在还有 OPEN 时误升 READY_TO_RESUME） | 中 | 高 | LD-7 锁定行为；blockers.test.ts 必须有 multi-blocker 计数测试 ≥ 3 种 |
-| `recordBlocker` 与 `markAnswered` 的事务不真正原子（state 写了但 blocker insert 失败） | 中 | 高 | 沿用 Phase 1 cancelTask 的黑盒原子性测试；mock 内部 throw 验证回滚 |
+| `recordBlocker` 与 `markAnswered` 的事务不真正原子（state 写了但 blocker insert 失败） | 中 | 高 | 黑盒原子性测试，**确定性触发**：recordBlocker 用 `question: null` 撞 NOT NULL；markAnswered 用 raw SQL 制造 task.state 不一致让 `assertTransition` 在事务末端 throw。两者都是真实运行时错误路径，无 mock。 |
 | Resume packet schema 偏离 Phase 1 §6 | 低 | 中 | LD-5 锁定；validator 单测对每个字段都断言 |
 | MCP 层暴露了不该暴露的 list/get blocker 工具 | 低 | 中 | LD-8 锁定；Day 5 grep 验证 |
 | Resume packet 生成意外写 DB | 低 | 中 | LD-9 锁定；测试用 prepared-statement spy 验证 SELECT-only |
@@ -514,7 +519,8 @@ Phase 1 dogfood 证明了 task identity 跨进程存活。Phase 2 dogfood 证明
 
 - [ ] migration 009 落地，daemon 测试全绿（≥ 5 个 schema test，含 CASCADE 与 FK）
 - [ ] `repositories/blockers.ts` + 单测 ≥ 12 case 全绿（含 `recordBlocker` 与 `markAnswered` 各自的原子性测试 + multi-blocker 计数 ≥ 3 case）
-- [ ] `repositories/blockers.ts` 公开 API 恰好 4 个符号（1 接口 + 3 verb）；module-private helper 不导出（grep 验证）
+- [ ] `repositories/blockers.ts` 公开 API 恰好 5 个 named export（1 接口 `BlockerRow` + 4 verb：`recordBlocker` / `markAnswered` / `listBlockersByTask` / `getBlocker`）；任何 module-private helper（如 `transitionTaskInTx`）不导出（grep 验证）
+- [ ] **MCP 层** `tools/task.ts` 仅追加 3 个工具（block / answer / resume_packet）；`cairn.task.list_blockers` / `cairn.task.get_blocker` 不存在于 MCP tool list（grep 验证 LD-8）
 - [ ] `cairn.task.block` / `answer` / `resume_packet` 3 个 MCP 工具落地，acceptance test ≥ 12 case 全绿；现有 17 case 零退化
 - [ ] `update_state` / `set_blocker_status` / `list_blockers` / `get_blocker` 工具**不存在**于 MCP tool list（grep 验证）
 - [ ] `assembleResumePacket` + `validateResumePacket` 单测 ≥ 8 case 全绿；packet 字段与 Phase 1 §6 schema 一一对应（除 timestamp 类型由 ISO 改为 INTEGER）
@@ -536,7 +542,7 @@ Phase 1 dogfood 证明了 task identity 跨进程存活。Phase 2 dogfood 证明
 | `tasks` 表 + `tasks-state.ts` `VALID_TRANSITIONS` | 直接读，不改 |
 | `repositories/tasks.ts` 6 个 verb | `recordBlocker` / `markAnswered` 内部调 `updateTaskState` 实现状态升级 |
 | `mergeMetadataInTx` module-private 模式 | Phase 2 加 `transitionTaskInTx` 私有 helper，遵循同一不暴露原则 |
-| `cancelTask` 原子性测试范式（黑盒 mock throw） | Phase 2 `recordBlocker` / `markAnswered` 的原子性测试逐字模仿 |
+| `cancelTask` 黑盒原子性测试范式（Phase 1 用 corrupt metadata_json 让 `JSON.parse` 在 tx 内 throw） | Phase 2 借用同一"在 tx 内触发真实运行时错误"思路，但用更直接的 NOT NULL 约束 + raw-SQL 状态不一致；不用 mock |
 | `INVALID_STATE_TRANSITION` 结构化错误 code | block / answer 错误 code 沿用同一 schema |
 | SESSION_AGENT_ID 注入（`ws.agentId`） | block.raised_by / answer.answered_by 缺省时同样从 ws.agentId 取 |
 | MCP stdio dogfood 脚本范式（`@modelcontextprotocol/sdk` Client + 双 child） | Phase 2 dogfood 直接 fork w5-phase1-dogfood.mjs 改步骤 |
