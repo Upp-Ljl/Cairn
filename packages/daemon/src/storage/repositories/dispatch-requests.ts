@@ -19,6 +19,7 @@ interface DispatchRequestRowRaw {
   status: string;
   created_at: number;
   confirmed_at: number | null;
+  task_id: string | null;
 }
 
 /** Public-facing type with deserialized JSON fields. */
@@ -34,6 +35,8 @@ export interface DispatchRequest {
   status: DispatchStatus;
   created_at: number;
   confirmed_at: number | null;
+  /** FK to tasks.task_id. Null for legacy rows created before W5 (LD-3). */
+  task_id: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +58,7 @@ function toDispatchRequest(row: DispatchRequestRowRaw): DispatchRequest {
     status: row.status as DispatchStatus,
     created_at: row.created_at,
     confirmed_at: row.confirmed_at,
+    task_id: row.task_id,
   };
 }
 
@@ -68,6 +72,8 @@ export interface CreateDispatchRequestInput {
   contextKeys?: string[] | null;
   generatedPrompt?: string | null;
   targetAgent?: string | null;
+  /** FK to tasks.task_id. Null (default) for legacy / unscoped requests (LD-3). */
+  taskId?: string | null;
 }
 
 export interface ListDispatchRequestsOptions {
@@ -104,14 +110,15 @@ export function createDispatchRequest(
     status: 'PENDING',
     created_at: now,
     confirmed_at: null,
+    task_id: input.taskId ?? null,
   };
   db.prepare(`
     INSERT INTO dispatch_requests
       (id, nl_intent, parsed_intent, context_keys, generated_prompt,
-       target_agent, status, created_at, confirmed_at)
+       target_agent, status, created_at, confirmed_at, task_id)
     VALUES
       (@id, @nl_intent, @parsed_intent, @context_keys, @generated_prompt,
-       @target_agent, @status, @created_at, @confirmed_at)
+       @target_agent, @status, @created_at, @confirmed_at, @task_id)
   `).run(row);
   return { id };
 }
