@@ -10,15 +10,17 @@
 
 ## 30-second summary
 
-Cairn is the coordination layer that sits under your AI coding agents. When you run Claude Code and Cursor side by side, or spawn three subagents from a single CC session, nothing in the current ecosystem handles how those agents coordinate. Each one assumes it is the only agent running: they share no file locks, no state, no message bus.
+> **Cairn is the host-level coordination kernel for multi-agent work.**
+> It gives agents and subagents durable shared state, conflict visibility, handoff packets, checkpoints, and outcome checks, so complex collaboration can survive failure, interruption, and handoff.
 
-Cairn fills that gap. It is not another agent. It does not write code. Think of it the way you think of an OS relative to the apps running on it: Word and Excel don't coordinate with each other — the OS does. Cairn is that layer for Claude Code, Cursor, Aider, and friends.
+When you run Claude Code and Cursor side by side, or spawn three subagents from a single CC session, nothing in the current ecosystem handles how those agents coordinate. Each one assumes it is the only agent running: they share no file locks, no state, no message bus.
+
+Cairn fills that gap. It is not another agent. It does not write code, does not decompose tasks, does not orchestrate a lead-subagent. Think of it the way you think of an OS relative to the apps running on it: Word and Excel don't coordinate with each other — the OS does. Cairn is that layer for Claude Code, Cursor, Aider, Cline, and the subagents they fork.
 
 - **Cairn does not write code.** It coordinates agents that do.
-- **Three verbs: Dispatch / Rewind / Arbitrate.** These are the only things Cairn does.
-- **Four capabilities:** conflict visibility, reversible state, dispatchable intent, message reachability.
-- **Current status:** v0.1 W4 complete — 17 MCP tools live (8 core + 9 four-capability), migration 001-006 landed, `cairn install` CLI ships a pre-commit hook + `.mcp.json` writer. Desktop pet (Electron, `packages/desktop-shell/`) is the ambient status UI.
-- **What's next:** W5–W7 integration and hardening, then W8–W12 release packaging and onboarding polish.
+- **8 host-level state objects.** processes / tasks / dispatch_requests / scratchpad / checkpoints / conflicts / blockers / outcomes — agent-readable / agent-writable through MCP, each surviving process death and cross-session handoff.
+- **Current status:** v0.1 **W5 Phase 3 closed loop delivered**. 28 MCP tools, 10 migrations (001-010), Task Capsule lifeline + Blockers + Outcomes DSL all live. **411 daemon tests / 329 mcp-server tests / 32-of-32 dogfood assertions** through real MCP stdio across 3 sessions. Desktop pet (Electron, `packages/desktop-shell/`) is the ambient status UI.
+- **What's next:** Phase 4 release polish (this batch) → external dogfood → v0.1 release decisions (npm publish / tag / LICENSE).
 
 ---
 
@@ -54,7 +56,9 @@ The analogy holds in both directions. An OS does not write your documents. It ma
 
 ---
 
-## What Cairn does (the four capabilities)
+## What Cairn does (capabilities, by state object)
+
+The four W4 capabilities (conflict visibility / reversible state / dispatchable intent / message reachability) are now joined by W5's Task Capsule + Outcomes verification.
 
 ### Conflict visibility / 冲突可见
 
@@ -70,11 +74,23 @@ v0.1 covers L0 (full file tree), L1 (paths subset), and L2 (scratchpad). Agent c
 
 ### Dispatchable intent / 需求可派
 
-The user describes their intent in natural language. Cairn retrieves relevant scratchpad and checkpoint history, selects the best available active agent, generates a prompt with the historical context attached, and presents it for the user's review before forwarding. Cairn exits after forwarding. It does not track whether the agent executes correctly.
+The user describes their intent in natural language. Cairn retrieves relevant scratchpad and checkpoint history, selects the best available active agent (via 5 deterministic fallback rules R1/R2/R3/R4/R6), generates a prompt with the historical context attached, and presents it for the user's review before forwarding. Cairn exits after forwarding. It does not track whether the agent executes correctly.
 
 ### Message reachability / 消息可达
 
-Subagents write their complete results to a shared scratchpad (`cairn.scratchpad.write`) before exiting. The main agent reads from scratchpad (`cairn.scratchpad.read`) rather than from its own context window. The full text is always available regardless of how much context compression has occurred. v0.2 will add semantic diff between the subagent's original report and the main agent's restatement.
+Subagents write their complete results to a shared scratchpad (`cairn.scratchpad.write`) before exiting. The main agent reads from scratchpad (`cairn.scratchpad.read`) rather than from its own context window. The full text is always available regardless of how much context compression has occurred. The convention for naming and structure is documented in [`docs/cairn-subagent-protocol.md`](docs/cairn-subagent-protocol.md). v0.2 will add semantic diff between the subagent's original report and the main agent's restatement.
+
+### Task Capsule (W5 Phase 1) / durable multi-agent work item
+
+A **Task Capsule** is a durable host-level work item that can outlive any single agent process and any single session. It carries an `intent`, a `state` (PENDING / RUNNING / BLOCKED / READY_TO_RESUME / WAITING_REVIEW / DONE / FAILED / CANCELLED), and metadata. Multiple agents can read and update the same task across sessions. Task Capsules are an OS primitive — they let the kernel hold a piece of work, but Cairn does not decide what work happens. Agents do.
+
+### Blockers + resume packet (W5 Phase 2) / cross-session handoff
+
+When an agent gets stuck on a question only the user can answer, it calls `cairn.task.block(question)` to create a `blocker` row and transitions the task to BLOCKED. The agent process can then exit cleanly. Later — minutes or days later, in a fresh session — the user (or another agent) calls `cairn.task.answer` and the task moves to READY_TO_RESUME. A new agent picks it up via `cairn.task.resume_packet(task_id)`, which returns a **read-only aggregate** of the task's full context: open + answered blockers, scratchpad keys, the criteria the previous agent committed to, plus an audit summary. Resume packet is computed on demand; it is not an independent persistent state.
+
+### Outcomes DSL + review loop (W5 Phase 3) / verifiable completion
+
+Before declaring a task done, an agent calls `cairn.task.submit_for_review(task_id, criteria)` and the task transitions to WAITING_REVIEW. The criteria is a JSON array of deterministic primitives (`tests_pass` / `command_exits_0` / `file_exists` / `regex_matches` / `scratchpad_key_exists` / `no_open_conflicts` / `checkpoint_created_after`) — AND-aggregated, no LLM-grader in v1. Calling `cairn.outcomes.evaluate(outcome_id)` runs the criteria deterministically and routes PASS → DONE / FAIL → back to RUNNING (the agent fixes the issue and re-submits — criteria is frozen across the retry). For paths the agent gives up on, `cairn.outcomes.terminal_fail(reason)` routes to FAILED.
 
 ---
 
@@ -108,22 +124,29 @@ Subagents write their complete results to a shared scratchpad (`cairn.scratchpad
 
 ## What is in the box
 
-### 17 MCP tools (v0.1, W1+W4, fully shipped)
+### 28 MCP tools (v0.1, W1 + W4 + W5, fully shipped)
 
-| Tool | Semantics |
-|---|---|
-| `cairn.scratchpad.write(key, content, [task_id])` | Persist a named note to SQLite. Supports `task_id` slicing for multi-task isolation. Auto-creates an `auto:before-scratchpad-write` checkpoint before writing. |
-| `cairn.scratchpad.read(key, [task_id])` | Read a named note verbatim, uncompressed. |
-| `cairn.scratchpad.list([task_id])` | List all notes, optionally filtered by `task_id`. |
-| `cairn.scratchpad.delete(key, [task_id])` | Delete a named note. Completes the CRUD set. |
-| `cairn.checkpoint.create(label, [task_id])` | Snapshot the working directory and git HEAD. Two-phase commit: PENDING → READY. |
-| `cairn.checkpoint.list([task_id])` | List checkpoints, optionally filtered by `task_id`. |
-| `cairn.rewind.to(checkpoint_id, [paths])` | Restore to a checkpoint. Supports `paths` for selective restore. Auto-creates an `auto:before-rewind` checkpoint first. |
-| `cairn.rewind.preview(checkpoint_id, [paths])` | Preview what a rewind would change and what it would leave alone. Dry-run, no side effects. |
+Grouped by namespace. The full alphabetical list is asserted in `tests/stdio-smoke.test.ts`; the schemas + dispatch live in `packages/mcp-server/src/index.ts`.
 
-The `task_id` field on scratchpad and checkpoint provides soft partitioning: all data from a given task shares the same `task_id`, making it filterable across tools. The daemon does not enforce or assign `task_id` values — the host agent generates them and passes them through.
+**scratchpad ×4** — `write` / `read` / `list` / `delete`. Persistent shared key-value store; values > 128KB blob-spill to `~/.cairn/blobs/`. All take optional `task_id` for multi-task partitioning.
 
-**W4 tools (conflict visibility + process bus + dispatch):** `cairn.process.register/heartbeat/list/status`, `cairn.conflict.list`, `cairn.conflict.resolve`, `cairn.inspector.query`, `cairn.dispatch.request`, `cairn.dispatch.confirm`. The `agent_id` parameter is optional on all process and checkpoint tools — the mcp-server auto-injects a stable `CAIRN_SESSION_AGENT_ID` (`cairn-<sha1(host:cwd).slice(0,12)>`) at startup.
+**checkpoint ×2** — `create` / `list`. Two-phase PENDING → READY snapshot via git-stash backend; CORRUPTED scan on daemon restart for crash recovery.
+
+**rewind ×2** — `to` / `preview`. `to` supports `paths` parameter for selective restore; auto-creates `auto:before-rewind` checkpoint first. `preview` is a dry-run that returns the will-change / will-not-change file lists.
+
+**process ×4** — `register` / `heartbeat` / `list` / `status`. The runner bus. `agent_id` is optional on all four — the mcp-server auto-injects a stable `CAIRN_SESSION_AGENT_ID` (`cairn-<sha1(host:cwd).slice(0,12)>`) at startup.
+
+**conflict ×3** — `list` / `resolve` (since W4 Phase 2). MCP-call + commit-after dual detection writes `OPEN` / `PENDING_REVIEW` rows; `resolve` clears them with TOCTOU guard.
+
+**inspector ×1** — `query`. 15 deterministic SQL templates matched by keyword (no LLM).
+
+**dispatch ×2** — `request` / `confirm`. NL → parsed intent → 5 fallback rules (R1/R2/R3/R4/R6) → user-confirmed agent prompt forwarding. `CAIRN_DISPATCH_FORCE_FAIL=1` env override for demo.
+
+**task ×8** (W5 Phase 1+2+3) — `create` / `get` / `list` / `start_attempt` / `cancel` / `block` / `answer` / `resume_packet` / `submit_for_review`. The Task Capsule lifecycle. `resume_packet` is a read-only aggregate of (task + open/answered blockers + scratchpad keys + outcomes_criteria + audit summary).
+
+**outcomes ×2** (W5 Phase 3) — `evaluate` / `terminal_fail`. Deterministic criteria evaluator + user-driven escape hatch. Both PENDING-only — FAIL state requires `submit_for_review` to reset criteria_json (frozen) before re-evaluation. **Not exposed:** `cairn.outcomes.list` / `cairn.outcomes.get` (outcomes are read through resume_packet, by design).
+
+The `task_id` field threads through scratchpad / checkpoint / outcomes for soft partitioning. The daemon does not enforce or assign `task_id` values — the host agent generates them per Task Capsule and passes them through.
 
 ### Pre-implementation validation (PoC-1 + PoC-2, both PASS)
 
@@ -155,7 +178,7 @@ Full reports: [`docs/superpowers/plans/2026-04-29-poc-1-results.md`](docs/superp
   │   └──────────────┘             │     (Node.js subprocess)     │ │
   │                                │                              │ │
   │   ┌──────────────┐  MCP stdio  │     8 tools (shipped)        │ │
-  │   │ Cursor / etc.├────────────►│   + N tools (v0.1 roadmap)   │ │
+  │   │ Cursor / etc.├────────────►│   28 tools (W1+W4+W5)        │ │
   │   │ (Agent B)    │◄────────────┤                              │ │
   │   └──────────────┘             └──────────┬───────────────────┘ │
   │                                           │ function call        │
@@ -164,9 +187,11 @@ Full reports: [`docs/superpowers/plans/2026-04-29-poc-1-results.md`](docs/superp
   │                            │        cairn daemon             │  │
   │                            │     packages/daemon/            │  │
   │                            │                                  │  │
-  │                            │  repositories/                   │  │
-  │                            │  scratchpad / checkpoints        │  │
-  │                            │  processes / conflicts           │  │
+  │                            │  8 host-level state objects:    │  │
+  │                            │  processes / tasks /             │  │
+  │                            │  dispatch_requests / scratchpad /│  │
+  │                            │  checkpoints / conflicts /       │  │
+  │                            │  blockers / outcomes             │  │
   │                            │           │                      │  │
   │                            │  SQLite (WAL mode)               │  │
   │                            │  ~/.cairn/cairn.db               │  │
@@ -264,14 +289,64 @@ cairn.rewind.preview("<checkpoint_id>")
 cairn.rewind.to("<checkpoint_id>", paths=["src/"])
 ```
 
+### Sample workflow — Task Capsule with cross-session handoff and outcome verification (W5)
+
+```
+# Session A: declare a durable task and start working
+cairn.task.create({ intent: "refactor auth module to use the new TokenStatus union" })
+# → returns task_id T-001, state PENDING
+cairn.task.start_attempt({ task_id: "T-001" })   # → RUNNING
+
+# Session A hits a question only the user can answer; pause cleanly
+cairn.task.block({ task_id: "T-001", question: "keep the legacy sync API behind a deprecation flag?" })
+# → BLOCKED + blocker.OPEN. The agent process can now exit.
+
+# (Hours or days later, in a fresh session)
+cairn.task.answer({ blocker_id: "<id>", answer: "yes — deprecation flag, drop in v0.3" })
+# → blocker.ANSWERED + task.READY_TO_RESUME
+
+# Session B (different agent, different process) picks up
+cairn.task.resume_packet({ task_id: "T-001" })
+# → read-only aggregate: intent + answered question + scratchpad keys + outcomes_criteria
+cairn.task.start_attempt({ task_id: "T-001" })   # → RUNNING (resume)
+
+# Session B finishes the work; commit to deterministic verification criteria
+cairn.task.submit_for_review({
+  task_id: "T-001",
+  criteria: [
+    { primitive: "tests_pass",        args: { target: "packages/daemon" } },
+    { primitive: "no_open_conflicts", args: {} }
+  ]
+})   # → outcome PENDING + task.WAITING_REVIEW (criteria_json now frozen)
+
+cairn.outcomes.evaluate({ outcome_id: "<id>" })
+# → if PASS: task.DONE
+# → if FAIL: task back to RUNNING; agent fixes, calls submit_for_review again
+#            (criteria stays frozen; outcome.status resets to PENDING),
+#            then re-evaluates.
+```
+
 For full engineering conventions (commit style, test commands, monorepo structure, push instructions), see [`CLAUDE.md`](CLAUDE.md).
 
 ### Run tests
 
 ```bash
-cd packages/daemon && npm test        # 207+ tests (W4 Day 2 baseline)
-cd packages/mcp-server && npm test    # 132+ tests (W4 Day 2 baseline)
+cd packages/daemon && npm test        # 411 tests (W5 Phase 3 baseline)
+cd packages/mcp-server && npm test    # 329 tests + 1 pre-existing skip (W5 Phase 3 baseline)
 ```
+
+### Run the full Phase 3 closed-loop dogfood (real MCP stdio across 3 sessions)
+
+```bash
+cd packages/mcp-server && npm run build
+node scripts/w5-phase3-dogfood.mjs    # 32/32 assertions PASS — covers
+                                       # the FAIL → fix → resubmit → PASS retry
+                                       # cycle, the terminal_fail escape hatch,
+                                       # cross-process state durability, and
+                                       # the LD-8 (no list/get outcomes) wall.
+```
+
+See `docs/superpowers/demos/README.md` for the full Phase 1 / Phase 2 / Phase 3 dogfood index.
 
 ---
 
@@ -297,22 +372,25 @@ These are boundary definitions, not disclaimers. Any design or feature request t
 
 ## Roadmap
 
-### v0.1 (in progress, W1–W12 2026)
+### v0.1 (delivered through W5 Phase 3)
 
-- W1+W2 complete: 8 MCP tools, SQLite persistence, git-stash checkpoint backend, task_id isolation
-- W2 complete: PoC-1 (SQLite concurrency) + PoC-2 (git hook latency) both PASS
-- W4 complete: four-capability v1 — conflict detection (migration 004+006), process bus (4 tools), Dispatch NL (migration 005, 5 fallback rules), Inspector query (15 SQL templates), `cairn install` CLI, auto SESSION_AGENT_ID
-- W5–W7: integration and hardening
-- W8–W10: acceptance criteria verification
-- W11–W12: release packaging, onboarding polish (npm publish, `npx cairn install`)
+- **W1+W2** ✅ — 8 MCP tools, SQLite persistence, git-stash checkpoint backend, task_id isolation. PoC-1 (SQLite concurrency) + PoC-2 (git hook latency) both PASS.
+- **W4 Phase 1-4** ✅ — four-capability v1: conflict detection (migration 004+006), process bus (4 tools), Dispatch NL (migration 005, 5 fallback rules R1/R2/R3/R4/R6), Inspector query (15 SQL templates), `cairn install` CLI, auto SESSION_AGENT_ID, conflict.resolve + Inspector resolve UI.
+- **W5 Phase 1** ✅ — Task Capsule lifeline: tasks table (migration 007 + 008) + 5 task tools.
+- **W5 Phase 2** ✅ — Blockers + resume_packet: blockers table (migration 009) + 3 task tools, cross-session handoff verified through real MCP stdio.
+- **W5 Phase 3** ✅ — Outcomes DSL + review/retry/terminal_fail closed loop: outcomes table (migration 010, UNIQUE(task_id)) + 3 outcomes tools + DSL stack with 7 deterministic primitives. **32/32 dogfood assertions PASS** through real MCP stdio across 3 sessions.
+- **Phase 4** ⏳ — release polish: documentation unification (this batch), CHANGELOG / RELEASE_NOTES, demos index, external dogfood expansion, release decisions (npm publish, LICENSE).
 
 ### v0.2
 
 - **Floating Marker** — persistent ambient desktop UI (Electron; right-corner float panel with three visibility modes). `packages/desktop-shell/` already scaffolded in v0.1. This is the primary v0.2 UX investment.
-- **Path (b): Task tool wrapper** — stronger CC subagent integration for message reachability
-- **Echo diff / reverse summary** — semantic diff between subagent original output and main agent restatement
-- **Inspector panel UI** — conflict history, checkpoint timeline, scratchpad browser
-- L3–L5 checkpoint granularity (conversation truncation, tool call traces, agent internal state)
+- **Path (b): Task tool wrapper** — stronger CC subagent integration for message reachability.
+- **Echo diff / reverse summary** — semantic diff between subagent original output and main agent restatement.
+- **Inspector panel UI** — conflict history, checkpoint timeline, scratchpad browser, outcomes status.
+- **Grader agent hook** (`GraderHook` interface already reserved in DSL types) — allow non-deterministic outcome verification while keeping the deterministic 7-primitive AND-evaluator as the default.
+- **DSL v2** — OR / NOT / nested combinators (v1 is AND-only by design).
+- **outcome_evaluations history table** — per-attempt audit log (v1 keeps only the latest evaluation per outcome by design).
+- L3–L5 checkpoint granularity (conversation truncation, tool call traces, agent internal state).
 
 ### v0.3+
 
@@ -337,9 +415,12 @@ The v0.2 Floating Marker is the desktop expression of this same idea: a small, p
 
 | Document | Contents |
 |---|---|
-| [`PRODUCT.md`](PRODUCT.md) | Product definition v2: positioning, four capabilities, user stories, roadmap, anti-definitions, UX forms |
+| [`PRODUCT.md`](PRODUCT.md) | Product definition v2: positioning, anti-definitions, four capabilities + Task Capsule + Outcomes, 8 host-level state objects, user stories, UX forms |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Implementation architecture: system diagram, process model, monorepo structure, SQLite schema, MCP tool list, ADRs, known technical debt |
-| [`CLAUDE.md`](CLAUDE.md) | Engineering conventions: push workflow, Node/SQLite version constraints, commit style, test commands, monorepo build rules |
+| [`CLAUDE.md`](CLAUDE.md) | Engineering conventions: push workflow, Node/SQLite version constraints, commit style, test commands, monorepo build rules, current 411 / 329 baselines |
+| [`RELEASE_NOTES.md`](RELEASE_NOTES.md) | v0.1 release narrative organized by 4 stories (Task Capsule / Blockers + Resume Packet / Outcomes DSL / Coordination Kernel positioning); verified evidence and known limitations |
+| [`docs/superpowers/demos/README.md`](docs/superpowers/demos/README.md) | Phase 1 / Phase 2 / Phase 3 dogfood index — real MCP stdio cross-process evidence, not just unit tests |
+| [`docs/cairn-subagent-protocol.md`](docs/cairn-subagent-protocol.md) | Subagent ↔ scratchpad naming + structure convention (paste-ready prompt template) |
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Weekly plans, PoC result reports, pre-implementation validation tracking |
 
 ---
