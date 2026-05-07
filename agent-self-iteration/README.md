@@ -1,24 +1,29 @@
 # agent-self-iteration
 
-A dual-agent (executor + reviewer) iteration loop for Claude Code. One agent
-edits code, a separate agent audits it across nine dimensions and decides
-whether more work remains. The two agents run as **separate processes** so
-neither can rubber-stamp the other — the mutual-supervision pattern is
-mechanically enforced, not just instructed.
+A multi-agent (profiler + executor + reviewer) iteration loop for Claude
+Code. A profiler reads the project once and derives a project-specific
+**MANIFEST** of audit dimensions; then an executor edits code and a separate
+reviewer audits against the MANIFEST and decides whether more work remains.
+The three roles run as **separate processes** so neither can rubber-stamp
+the other — mutual supervision is mechanically enforced, not just instructed.
 
 ```
-                    ┌────────────────────────┐
-                    │ bash (orchestrator)    │
-                    └────┬─────────────┬─────┘
-                         │             │
-       ┌─────────────────▼─┐         ┌─▼──────────────────┐
-       │ claude -p          │         │ claude -p          │
-       │ EXECUTOR persona   │ ──pytest──→ REVIEWER persona │
-       │ (Read/Edit/Write/  │         │ (Read/Bash/Grep)   │
-       │  Bash)             │         │                    │
-       └────────────────────┘         └────────────────────┘
-              edits code              emits VERDICT JSON
+                    ┌──────────────────────────────┐
+                    │ bash (orchestrator)          │
+                    └──┬───────────┬───────────┬───┘
+                       │           │           │
+              ┌────────▼─┐  ┌──────▼─┐  ┌──────▼──┐
+              │ claude -p│  │claude-p│  │claude -p│
+              │ PROFILER │  │EXECUTOR│  │REVIEWER │
+              │ (once)   │  │ edits  │ →│ audits  │
+              └────┬─────┘  └────────┘  └─────────┘
+                   │ emits MANIFEST: {dimensions: [...]}
+                   ▼
+              <PROMPT_DIR>/manifest.json — fed into every executor
+                                          + reviewer prompt below
 
+       per iteration:
+         executor → signal command (pytest/tsc/...) → reviewer → VERDICT
        loop until reviewer says improvements_exhausted=true
        for QUIET_STREAK consecutive iterations, OR MAX_ITER hit
 ```
@@ -29,18 +34,26 @@ You point it at a working directory + a task ("make these tests pass", "fix
 the bugs in src/", "audit for performance and security"). It runs a tight
 loop:
 
+0. **Profiler** runs ONCE before the iteration loop. It reads the README,
+   TASK, and a few central source files, then emits a MANIFEST — a list of
+   4–7 **project-specific** dimensions worth auditing (e.g. `role_leakage`
+   and `vote_correctness` for a werewolf game; `responsive_breakpoints` and
+   `keyboard_nav` for a CSS page; `correctness` and `edge_cases` for a tiny
+   bug-fix script). The manifest replaces the legacy fixed nine-dim lens.
 1. **Executor** reads the code, edits files, runs the signal command (tests/
-   typecheck/lint).
+   typecheck/lint). It receives the manifest so it knows what "done" means.
 2. **Signal command** runs (e.g. `pytest -q`, `npm test`, `tsc --noEmit`)
    and bash captures the exit code.
 3. **Reviewer** reads the *current* state of the code (it has no shared
-   memory with the executor) plus the signal output. It judges across nine
-   dimensions: correctness, test quality, performance, security, reliability,
-   maintainability, UX/UI, documentation, project hygiene.
+   memory with the executor) plus the signal output. It judges against the
+   manifest's dimensions — not a fixed checklist.
 4. Reviewer emits `VERDICT: { verdict: pass|fail, improvements_exhausted: bool, issues: [...] }`.
 5. If signals are red, bash mechanically force-fails the verdict (the
    reviewer cannot rubber-stamp red tests).
-6. If verdict is `pass` AND `improvements_exhausted: true` for `QUIET_STREAK`
+6. The bash driver tracks **recurring issue classes** (same dimension +
+   normalized fix_hint flagged 2+ iterations in a row) so the loop doesn't
+   keep re-finding the same nit.
+7. If verdict is `pass` AND `improvements_exhausted: true` for `QUIET_STREAK`
    consecutive iterations → exit. Otherwise feed the issues back to executor
    and iterate.
 
@@ -103,22 +116,29 @@ edits files inside it and runs the signal command from inside it.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `TASK_FILE` | `<work_dir>/TASK.md` | Path to a TASK description. If absent, reviewer drives the loop from a 9-dimension audit only. |
+| `TASK_FILE` | `<work_dir>/TASK.md` | Path to a TASK description. If absent, profiler infers from project; reviewer audits whatever manifest the profiler emits. |
 | `SIGNAL_CMD` | `python3 -m pytest -q` | Shell command run from `<work_dir>` after each iteration. Must exit 0 on green. |
 | `MAX_ITER` | `10` | Hard cap on iterations (safety net). |
 | `QUIET_STREAK` | `2` | Consecutive `pass + improvements_exhausted=true` verdicts required to exit. Lower = more aggressive exit, higher = more skeptical. |
-| `MODEL` | `claude-sonnet-4-6` | Claude model for both executor and reviewer. |
+| `MODEL` | `claude-sonnet-4-6` | Claude model for executor and reviewer. |
+| `PROFILE_MODEL` | (same as `MODEL`) | Model for the one-shot profiler. Cheaper Haiku is usually fine. |
+| `SKIP_PROFILE` | `0` | Set to `1` to skip the profiler and use a generic 3-dim safety-net manifest. Useful for tiny single-file projects. |
+| `MAX_SIGNAL_TAIL` | `80` | Truncate red signal output to the last N lines before passing to executor/reviewer. Green signals collapse to `EXIT=0`. |
 | `LOG_FILE` | stderr | Append per-iteration trace here. |
-| `PROMPT_DIR` | tmp dir | Where to drop iter executor/reviewer prompt files for debugging. |
-| `PROJECT_ROOT` | script's parent's parent | Where `.claude/agents/{executor,reviewer}.md` live. |
+| `PROMPT_DIR` | tmp dir | Where to drop prompt files (and `manifest.json`) for debugging. |
+| `PROJECT_ROOT` | script's parent's parent | Where `.claude/agents/{profiler,executor,reviewer}.md` live. |
 
 ### Output
 
 stdout: a single JSON summary line on completion:
 
 ```json
-{"status":"exhausted","iterations":3,"final_signal_exit":0,"duration_s":487}
+{"status":"exhausted","iterations":3,"final_signal_exit":0,"duration_s":487,"manifest_dims":5}
 ```
+
+`manifest_dims` is how many audit dimensions the profiler derived (or `3`
+when `SKIP_PROFILE=1`). Inspect the actual dimensions in
+`<PROMPT_DIR>/manifest.json`.
 
 Exit code: 0 if `final_signal_exit == 0`, else 1.
 
@@ -149,16 +169,27 @@ QUIET_STREAK=3 \
 bash scripts/dual_agent_iter.sh ~/my-react-app
 ```
 
-**No TASK file — let the reviewer drive a 9-dim audit:**
+**No TASK file — let the profiler derive what to audit from the code itself:**
 
 ```bash
 SIGNAL_CMD='npm run lint' \
 bash scripts/dual_agent_iter.sh ~/legacy-codebase
 ```
 
-The reviewer will keep finding issues across correctness, security,
-performance, UX, maintainability, etc., and the executor will fix them
-until the reviewer says exhausted twice in a row.
+The profiler will inspect the project, decide what kind of project it is,
+and emit a manifest of dimensions appropriate for it. The reviewer will then
+audit against those dimensions and the executor will fix issues until the
+reviewer says exhausted twice in a row.
+
+**Skip the profiler for tiny one-file projects:**
+
+```bash
+SKIP_PROFILE=1 \
+bash scripts/dual_agent_iter.sh ~/tiny-script
+```
+
+Falls back to a generic `correctness / test_coverage / maintainability`
+3-dim safety net.
 
 **Save the per-iteration trace for debugging:**
 
@@ -212,15 +243,18 @@ Recognized keys: `max-iter`, `quiet` (= `QUIET_STREAK`), `model`.
 
 The personas are kept in `.claude/agents/`:
 
+- **`profiler.md`** — runs ONCE before iteration 1. Reads README/TASK/source
+  layout and emits a `MANIFEST: {...}` JSON line listing the dimensions of
+  quality that genuinely matter for THIS project (4–7 axes is the target).
 - **`executor.md`** — autonomy contract (no asking questions, no waiting for
   confirmation), operating rules ("treat TASK as contract", "verify
   empirically not by inspection"), and the `EXECUTOR_SUMMARY` output format.
-- **`reviewer.md`** — separate-context audit, the nine inspection dimensions,
-  severity ladder (blocker/major/minor), the honesty clause ("don't invent
-  trivial issues; admit exhaustion when warranted"), and the `VERDICT`
-  output format.
+- **`reviewer.md`** — separate-context audit against the manifest's
+  dimensions, severity ladder (blocker/major/minor), the honesty clause
+  ("don't invent trivial issues; admit exhaustion when warranted"), and
+  the `VERDICT` output format.
 
-`dual_agent_iter.sh` reads both files at runtime, strips the YAML
+`dual_agent_iter.sh` reads all three files at runtime, strips the YAML
 frontmatter, and prepends the body as the persona for the respective
 `claude -p` invocation. Editing these files changes the loop's behavior
 without touching code.
@@ -285,12 +319,13 @@ running `/auto-iter` on their own codebase won't usually need it.
 agent-self-iteration/
 ├── README.md                     ← you are here
 ├── scripts/
-│   ├── dual_agent_iter.sh        ← the primary tool. Generic dual-agent loop driver.
+│   ├── dual_agent_iter.sh        ← the primary tool. Profiler + executor + reviewer driver.
 │   └── regression.sh             ← scoring harness (uses dual_agent_iter.sh per-target)
 ├── .claude/
 │   ├── agents/
-│   │   ├── executor.md           ← executor persona body (used by dual_agent_iter.sh)
-│   │   ├── reviewer.md           ← reviewer persona body (used by dual_agent_iter.sh)
+│   │   ├── profiler.md           ← profiler persona (runs once at iter 0)
+│   │   ├── executor.md           ← executor persona body
+│   │   ├── reviewer.md           ← reviewer persona body
 │   │   └── self-improver.md      ← meta-loop persona body
 │   └── commands/
 │       ├── auto-iter.md          ← /auto-iter slash command (delegates to dual_agent_iter.sh)
@@ -309,15 +344,26 @@ agent-self-iteration/
 
 ## Costs
 
-Each iteration runs two `claude -p` calls (executor + reviewer). Cost
-depends on:
-- Model (Sonnet 4.6 ≈ \$15/1M output tokens at the time of writing)
-- Length of TASK + prev_issues + prev_signals (grows slightly per iteration)
-- How long the agent decides to think
+Each run does:
+- ONE `claude -p` profiler call at iter 0 (typically 5–10k tokens)
+- TWO `claude -p` calls per iteration (executor + reviewer)
+
+Token-saving measures applied by the new driver:
+- The MANIFEST replaces the legacy nine-dim boilerplate in every reviewer
+  prompt (–500 to –1500 tokens per reviewer call depending on persona slim)
+- Signal output is truncated: red output keeps only the last
+  `MAX_SIGNAL_TAIL` lines (default 80); green output collapses to `EXIT=0`
+  (saves the full pytest/typecheck dump on every passing iteration)
+- Personas were slimmed (executor 41→47 lines, reviewer 93→90 lines, with
+  cuts to redundant exposition; the contracts are unchanged)
+- Recurring-issue tracking discourages the reviewer from re-flagging the
+  same class repeatedly, which shortens the loop
 
 A typical "fix the bugs in this small Python file" run on Sonnet 4.6 is on
-the order of \$0.30–\$1 per target per run. A 7-target regression of this
-project's own suite is roughly \$2–\$5.
+the order of \$0.30–\$1 per target per run; the manifest-driven loop tends
+to cut a 5-iteration loop to 3 by giving both agents a sharper "what
+matters" signal. A 7-target regression of this project's own suite is
+roughly \$2–\$5.
 
 ## Common failure modes
 

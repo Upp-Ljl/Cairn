@@ -1,0 +1,59 @@
+# .auto-iter.yml — drop this at the root of any project where you want to use
+# /auto-iter as an auxiliary tool. Copy and edit:
+#
+#   cp /path/to/agent-self-iteration/templates/.auto-iter.yml.example .auto-iter.yml
+#
+# All keys are optional. If this file is absent entirely, the orchestrator
+# auto-detects signals from common project markers (pyproject.toml → pytest,
+# package.json → npm test, go.mod → go test, Cargo.toml → cargo test). Auto-
+# detection is best-effort; declare signals here for stable behavior.
+
+# --- Objective signals -------------------------------------------------------
+# Commands the orchestrator runs after every iteration. Any non-zero exit
+# forces verdict=fail regardless of what the reviewer says. Names are arbitrary
+# labels (used in logs); commands must run from the project root.
+signals:
+  tests: pytest -q
+  # types: mypy src
+  # lint: ruff check src
+
+# --- Loop knobs --------------------------------------------------------------
+max_iterations: 10           # hard upper bound on iterations per task
+quiet_streak: 2              # consecutive 'pass' verdicts needed before stopping
+
+# --- Blast radius ------------------------------------------------------------
+# Globs (POSIX, evaluated from project root). Executor MUST stay inside
+# allowed_paths and OUT of forbidden_paths. The orchestrator passes these to
+# every executor dispatch and rejects any file edit that violates them.
+allowed_paths:
+  - "src/**"
+  - "tests/**"
+forbidden_paths:
+  - "**/secrets/**"
+  - "**/.env*"
+  - "migrations/**"           # data-shape changes need human design
+  - "**/*.lock"               # avoid spurious lockfile churn
+  - ".github/workflows/**"    # CI changes are policy decisions
+
+# --- Branch policy -----------------------------------------------------------
+# {slug} is replaced by a kebab-case slug derived from the task description.
+# Set working_branch to "" to disable auto-branching (run on the current branch).
+working_branch: "auto-iter/{slug}"
+
+# Hard refusal — orchestrator aborts if the current branch matches any of these
+# patterns. Glob matching, case-insensitive.
+forbidden_branches:
+  - "main"
+  - "master"
+  - "production"
+  - "release/*"
+
+# Working tree must be clean before /auto-iter starts. If true and the tree is
+# dirty, orchestrator aborts (it does not stash automatically — too easy to lose
+# uncommitted work).
+require_clean_worktree: true
+
+# --- Diff cap ---------------------------------------------------------------
+# Maximum total lines changed (added + removed) across all iterations. Catches
+# runaway "let me rewrite the whole codebase" behaviors. Set to 0 to disable.
+max_diff_lines: 500

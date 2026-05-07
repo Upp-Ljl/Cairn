@@ -83,11 +83,58 @@ condition. The Reviewer prompt MUST keep:
 - The honesty clause forbidding invented trivial issues
 - The "minor must be worth changing" filter
 - The instruction to set `improvements_exhausted: true` when nothing
-  meaningful remains across all nine inspection dimensions
+  meaningful remains across the project-specific MANIFEST dimensions
+  (or, when the manifest is missing, the small generic safety-net set)
 
 Weakening any of these breaks the loop's natural termination — either by
 making the Reviewer rubber-stamp prematurely (false exhaustion) or by making
 it eternally pessimistic (no exit). Both are loop failures.
+
+## I10 — Dual-agent process separation
+
+The Profiler, Executor, and Reviewer roles MUST run as SEPARATE `claude -p`
+sub-sessions dispatched by `scripts/dual_agent_iter.sh`. The `/auto-iter`
+orchestrator front-end (`.claude/commands/auto-iter.md`) MUST NOT:
+- Simulate the loop in its own session (writing fake "iteration N..." prose)
+- Use the `Agent` / `Task` tool to dispatch profiler/executor/reviewer
+  subagents itself, bypassing the bash driver
+- Read, edit, or grep files inside `TARGET_DIR` (doing so re-merges the
+  orchestrator with the executor/reviewer context the script isolates)
+
+The mechanical process boundary between roles is the entire premise of this
+project. A single Claude session attempting to play multiple roles collapses
+into self-approval. Removing the bash-driven separation — either by inlining
+the loop into `auto-iter.md` or by giving the orchestrator TARGET_DIR
+file-access tools — is forbidden by this invariant.
+
+## I11 — Profiler runs before iteration 1
+
+`scripts/dual_agent_iter.sh` MUST emit a MANIFEST (either via the profiler
+sub-session, or via the generic 3-dim safety net when `SKIP_PROFILE=1` or
+the profiler persona is missing) BEFORE invoking the executor/reviewer for
+iteration 1. The MANIFEST is what the reviewer audits against; without it
+the reviewer falls back to the legacy fixed dimension list and the project-
+specific lens is lost.
+
+The MANIFEST contract (as parsed by the script):
+- A line beginning with `MANIFEST:` followed by valid JSON
+- A `dimensions` array of objects, each with at least a `name` field
+- The script writes the JSON body to `<PROMPT_DIR>/manifest.json` for inspection
+
+Renaming the `MANIFEST:` sentinel or removing the fallback safety net
+violates this invariant.
+
+## I12 — Signal output truncation must keep the failure tail
+
+Token-saving signal truncation in the script (`truncate_signal`) MUST
+preserve the LAST `MAX_SIGNAL_TAIL` lines of red signal output and MAY
+suppress only earlier lines (with a "... earlier lines omitted ..."
+marker). Truncating the tail (where pytest puts the failure summary) would
+hide the executor's debug surface. Replacing red output entirely with a
+summary string is forbidden.
+
+When the signal is green (`EXIT=0`), the script MAY collapse the body to a
+single `EXIT=0` line — green output carries no executor-relevant info.
 
 ---
 

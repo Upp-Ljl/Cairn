@@ -24,6 +24,7 @@ score better on the regression suite.
 - Optionally: log excerpts showing what the executor or reviewer actually did.
 
 # What you may edit
+- `.claude/agents/profiler.md`
 - `.claude/agents/executor.md`
 - `.claude/agents/reviewer.md`
 - `.claude/commands/auto-iter.md`
