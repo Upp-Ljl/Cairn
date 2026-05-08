@@ -64,6 +64,29 @@ A good dimension is:
 Aim for **4 to 7 dimensions**. Fewer than 4 means you didn't think hard
 enough; more than 7 means you're padding.
 
+**Mix correctness-shaped axes with optimization-shaped axes.** Auditing
+"is anything broken" is not enough — a working-but-mediocre project
+should still surface improvement opportunities. For most projects,
+include at least 1–2 optimization-flavored dimensions on top of the
+correctness ones:
+
+- *Performance/scalability axes* — hot path complexity; allocation
+  count; N+1 calls; concurrency bottleneck; latency budget; memory
+  growth; cache hit rate.
+- *Code-quality / abstraction axes* — public API ergonomics; module
+  boundary clarity; duplication that's worth de-duping; missing-but-
+  load-bearing invariants worth naming.
+- *Observability / operability axes* — log signal-to-noise; error
+  message clarity; failure-mode messaging; metrics coverage on the
+  critical path.
+- *Documentation / discoverability axes* — public-API docstrings; README
+  match-up to actual behavior; changelog truth.
+
+These optimization-shaped axes should NOT be padding ("performance"
+axis on a 30-line script is padding). They should be axes where, even
+when no bug exists, the reviewer can defensibly raise an `improvement`-
+severity issue that a real engineer would respect.
+
 When the project is genuinely small or generic (e.g. "fix a few bugs in this
 20-line Python file"), it's fine to default to a small set of broad
 dimensions like `correctness`, `test_coverage`, `error_handling`. Don't
@@ -93,16 +116,22 @@ falls back to a small generic dimension set (`correctness`, `test_coverage`,
 MANIFEST: {"domain":"python_lib","summary":"Small arithmetic library; 'done' is all pytest tests in tests/test_calc.py pass without modifying tests","dimensions":[{"name":"correctness","rationale":"Tests are spec; arithmetic must be exact","checks":["each function returns the value the test asserts","ZeroDivisionError raised when divisor is 0","ValueError raised when averaging an empty list"]},{"name":"edge_cases","rationale":"Math edge cases (zero, negatives, empty input) are common bug surfaces","checks":["multiply by 0","negative inputs to subtract/multiply","empty list to average"]},{"name":"test_coverage","rationale":"Loop is graded by these tests; reviewer should confirm new behavior is exercised","checks":["all asserted behaviors have a test case","no test was modified to make it pass"]}]}
 ```
 
-**A werewolf-style social-deduction game agent:**
+**A werewolf-style social-deduction game agent (correctness AND optimization axes):**
 
 ```
-MANIFEST: {"domain":"social_deduction_game","summary":"LLM-driven werewolf game; 'done' is end-to-end games complete without rule violations or role leakage","dimensions":[{"name":"role_leakage","rationale":"Hidden roles must not appear in messages visible to players who shouldn't see them","checks":["no role identifier in public chat","seer/wolf private channels strictly partitioned","death messages don't reveal role unless rules say so"]},{"name":"vote_correctness","rationale":"Vote tallies under tie/abstention are easy to get wrong","checks":["tie-break rule deterministic","abstentions counted as the rules require","majority threshold matches game rules"]},{"name":"belief_consistency","rationale":"Agents' stated beliefs across rounds must not contradict their hidden role","checks":["wolf does not claim to be wolf","villager's statements consistent with what they could know"]},{"name":"prompt_injection","rationale":"Player-supplied names/messages flow into LLM prompts and could subvert role rules","checks":["player input sanitized before injection into role prompts","no instruction-following from inside player messages"]},{"name":"determinism_seam","rationale":"Tests need reproducibility; randomness must be seedable","checks":["random.Random instance accepts a seed argument","no hidden time.time()-based randomness"]}]}
+MANIFEST: {"domain":"social_deduction_game","summary":"LLM-driven werewolf game; 'done' is end-to-end games complete without rule violations or role leakage, and the night-action critical path is tight","dimensions":[{"name":"role_leakage","rationale":"Hidden roles must not appear in messages visible to players who shouldn't see them","checks":["no role identifier in public chat","seer/wolf private channels strictly partitioned","death messages don't reveal role unless rules say so"]},{"name":"vote_correctness","rationale":"Vote tallies under tie/abstention are easy to get wrong","checks":["tie-break rule deterministic","abstentions counted as the rules require","majority threshold matches game rules"]},{"name":"prompt_quality","rationale":"Role prompts shape every LLM call; ambiguity here costs every game","checks":["role prompts unambiguously partition private vs public knowledge","no contradictory instructions across system+role+context","prompt token cost on the night-action hot path is bounded"]},{"name":"night_action_concurrency","rationale":"Parallelized wolf/seer/guard calls share GameMaster state — bottlenecks and races both live here","checks":["shared mutable state guarded by lock","no serialization between independent role workers","no redundant LLM calls per night turn"]},{"name":"observability","rationale":"When a game derails, operators need to know why without rerunning","checks":["state-changing events logged with role+pid","SSE payload matches client view actually rendered","failure modes (LLM timeout, malformed tool call) produce a recognizable log line, not silent fallthrough"]}]}
 ```
 
 **A web page being audited for accessibility:**
 
 ```
 MANIFEST: {"domain":"web_a11y","summary":"Static HTML/CSS page; 'done' is automated a11y checker emits zero errors","dimensions":[{"name":"semantic_html","rationale":"Screen readers depend on landmarks","checks":["headings form a hierarchy","main/nav/footer landmarks present","buttons not divs"]},{"name":"keyboard_nav","rationale":"Non-mouse users must reach every control","checks":["tab order matches visual order","focus indicators visible","no positive tabindex"]},{"name":"contrast","rationale":"Required by WCAG AA","checks":["text contrast >= 4.5:1","interactive contrast >= 3:1"]},{"name":"alt_text","rationale":"Image content must have textual alternative","checks":["non-decorative images have alt","decorative images have empty alt"]},{"name":"responsive","rationale":"Page must work on mobile widths","checks":["meta viewport present","no horizontal scroll at 360px"]}]}
+```
+
+**A Python library with mixed correctness + perf concerns:**
+
+```
+MANIFEST: {"domain":"python_data_lib","summary":"Pandas-style data utility; 'done' is API contract correct + hot paths don't allocate per-row","dimensions":[{"name":"correctness","rationale":"Edge cases (empty/NaN/non-numeric) commonly slip","checks":["empty-input return value matches spec","NaN handling consistent across functions","dtype preserved end-to-end"]},{"name":"hot_path_allocations","rationale":"This library is called inside row loops; per-row dict/list creation is a real cost","checks":["no list comprehension where generator suffices in hot paths","no string concatenation in inner loops","numpy operations are vectorized, not Python-looped"]},{"name":"public_api_ergonomics","rationale":"Function signatures are user-facing; defaults and docstrings shape every call site","checks":["public functions have docstrings with examples","keyword-only args used where order would be ambiguous","no boolean flag parameters that should be Enums"]},{"name":"failure_messages","rationale":"Bad input today produces a confusing pandas trace 3 frames deep","checks":["validate args at the boundary with a clear ValueError","error messages reference the offending arg by name","no silent type coercion that masks the real bug"]}]}
 ```
 
 # Honesty clause
