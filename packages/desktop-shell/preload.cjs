@@ -1,14 +1,54 @@
 'use strict';
+
+/**
+ * Preload bridge between the renderer (panel.html / inspector-legacy.html /
+ * preview.html) and the Electron main process.
+ *
+ * Read-only by default. The mutation channel (resolveConflict) is exposed
+ * here ONLY when the main process advertises it via process.env-derived
+ * flag CAIRN_DESKTOP_ENABLE_MUTATIONS=1. Renderers detect mutation
+ * availability by checking `typeof window.cairn.resolveConflict ===
+ * 'function'` (see inspector-legacy.js).
+ */
+
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('cairn', {
-  getState: () => ipcRenderer.invoke('get-state'),
-  getActiveAgents: () => ipcRenderer.invoke('get-active-agents'),
-  getOpenConflicts: () => ipcRenderer.invoke('get-open-conflicts'),
-  getRecentDispatches: () => ipcRenderer.invoke('get-recent-dispatches'),
-  getActiveLanes: () => ipcRenderer.invoke('get-active-lanes'),
-  resolveConflict: (id, reason) => ipcRenderer.invoke('resolve-conflict', id, reason),
-  openInspector: () => ipcRenderer.send('open-inspector'),
-  startDrag: (mouseX, mouseY) => ipcRenderer.send('start-drag', { mouseX, mouseY }),
-  doDrag: (mouseX, mouseY) => ipcRenderer.send('do-drag', { mouseX, mouseY }),
-});
+// Mutation flag is forwarded into the preload via a synchronous IPC call
+// at startup. Main is the source of truth; preload just mirrors.
+const MUTATIONS_ENABLED = (() => {
+  try {
+    return ipcRenderer.sendSync('cairn:mutations-enabled?') === true;
+  } catch (_e) {
+    return false;
+  }
+})();
+
+const api = {
+  // ---- Day 1: panel ----
+  getProjectSummary: () => ipcRenderer.invoke('get-project-summary'),
+  getTasksList:      () => ipcRenderer.invoke('get-tasks-list'),
+  getTaskDetail:     (taskId) => ipcRenderer.invoke('get-task-detail', taskId),
+  getRunLogEvents:   () => ipcRenderer.invoke('get-run-log-events'),
+  getDbPath:         () => ipcRenderer.invoke('get-db-path'),
+  setDbPath:         (path) => ipcRenderer.invoke('set-db-path', path),
+  openLegacyInspector: () => ipcRenderer.send('open-legacy-inspector'),
+
+  // ---- Legacy (inspector-legacy.html + preview.html pet) ----
+  getState:           () => ipcRenderer.invoke('get-state'),
+  getActiveAgents:    () => ipcRenderer.invoke('get-active-agents'),
+  getOpenConflicts:   () => ipcRenderer.invoke('get-open-conflicts'),
+  getRecentDispatches:() => ipcRenderer.invoke('get-recent-dispatches'),
+  getActiveLanes:     () => ipcRenderer.invoke('get-active-lanes'),
+  openInspector:      () => ipcRenderer.send('open-inspector'),
+  startDrag:          (mouseX, mouseY) => ipcRenderer.send('start-drag', { mouseX, mouseY }),
+  doDrag:             (mouseX, mouseY) => ipcRenderer.send('do-drag', { mouseX, mouseY }),
+};
+
+// Mutation channel — present only in dev-flag mode. Renderers detect via
+// typeof check; legacy inspector hides its Resolve button when absent.
+if (MUTATIONS_ENABLED) {
+  api.resolveConflict = (id, reason) =>
+    ipcRenderer.invoke('resolve-conflict', id, reason);
+}
+
+contextBridge.exposeInMainWorld('cairn', api);

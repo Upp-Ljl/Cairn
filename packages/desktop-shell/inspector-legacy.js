@@ -19,12 +19,26 @@ function renderAgents(rows) {
   ).join('');
 }
 
+// Mutations are gated on whether the preload bridge actually exposes
+// resolveConflict. When CAIRN_DESKTOP_ENABLE_MUTATIONS=1 the main process
+// registers the IPC handler and preload wires window.cairn.resolveConflict;
+// otherwise it's absent and the Resolve button is hidden. Default state =
+// read-only.
+const MUTATIONS_ENABLED = typeof window !== 'undefined'
+  && window.cairn
+  && typeof window.cairn.resolveConflict === 'function';
+
 function renderConflicts(rows) {
   const el = document.getElementById('conflicts-list');
   if (!rows.length) { el.innerHTML = '<span class="empty">no open conflicts</span>'; return; }
-  el.innerHTML = rows.map(r =>
-    `<div class="row" data-conflict-id="${r.id}"><span class="pill pill-open">OPEN</span>#${r.id} ${r.conflict_type} — ${r.agent_a} ↔ ${r.agent_b} — ${trunc(r.summary, 60)} <kbd>${rel(r.detected_at)}</kbd> <button class="resolve-btn" data-id="${r.id}">Resolve</button> <span class="resolve-status"></span></div>`
-  ).join('');
+  el.innerHTML = rows.map(r => {
+    const resolveBtn = MUTATIONS_ENABLED
+      ? ` <button class="resolve-btn" data-id="${r.id}">Resolve</button> <span class="resolve-status"></span>`
+      : '';
+    return `<div class="row" data-conflict-id="${r.id}"><span class="pill pill-open">OPEN</span>#${r.id} ${r.conflict_type} — ${r.agent_a} ↔ ${r.agent_b} — ${trunc(r.summary, 60)} <kbd>${rel(r.detected_at)}</kbd>${resolveBtn}</div>`;
+  }).join('');
+
+  if (!MUTATIONS_ENABLED) return;
 
   el.querySelectorAll('.resolve-btn').forEach(btn => {
     btn.addEventListener('click', async () => {

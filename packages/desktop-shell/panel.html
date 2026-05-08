@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cairn — Project Control Surface</title>
+<style>
+  /* Aesthetic per PRODUCT.md v3 §8.3:
+     monospace dark, high information density,
+     references = Activity Monitor / journalctl. */
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    margin: 0;
+    background: #1a1a1a;
+    color: #eee;
+    font-size: 12px;
+    line-height: 1.45;
+    overflow: hidden;
+  }
+
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* Header — workspace label + DB path + menu */
+  #header {
+    padding: 8px 12px;
+    background: #0f0f0f;
+    border-bottom: 1px solid #333;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex: 0 0 auto;
+  }
+  #workspace-label {
+    color: #7af;
+    font-weight: 600;
+    flex: 0 0 auto;
+  }
+  #db-path {
+    color: #666;
+    font-size: 0.85em;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #menu-btn {
+    background: none;
+    border: 1px solid #444;
+    color: #aaa;
+    cursor: pointer;
+    padding: 1px 8px;
+    font-family: inherit;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+  }
+  #menu-btn:hover { border-color: #7af; color: #7af; }
+
+  /* Inline menu dropdown (poor-man's, no native menus needed Day 1) */
+  #menu-pop {
+    position: absolute;
+    top: 32px;
+    right: 8px;
+    background: #1f1f1f;
+    border: 1px solid #444;
+    padding: 4px 0;
+    z-index: 10;
+    min-width: 180px;
+    display: none;
+  }
+  #menu-pop.open { display: block; }
+  #menu-pop button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    color: #ddd;
+    cursor: pointer;
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 0.9em;
+  }
+  #menu-pop button:hover { background: #2a2a2a; color: #7af; }
+
+  /* Project summary card — 6-line status grid */
+  #summary {
+    padding: 8px 12px;
+    background: #141414;
+    border-bottom: 1px solid #333;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 12px;
+    row-gap: 2px;
+    flex: 0 0 auto;
+  }
+  #summary .row { display: flex; justify-content: space-between; }
+  #summary .k { color: #888; }
+  #summary .v { color: #ddd; font-variant-numeric: tabular-nums; }
+  #summary .v.warn  { color: #ff7; }
+  #summary .v.alert { color: #f77; }
+  #summary .v.zero  { color: #555; }
+  #summary-meta {
+    grid-column: 1 / -1;
+    color: #555;
+    font-size: 0.85em;
+    margin-top: 4px;
+    border-top: 1px dashed #2a2a2a;
+    padding-top: 4px;
+  }
+
+  /* Tab bar — Run Log / Tasks (Run Log is default per Decision 4) */
+  #tabs {
+    display: flex;
+    background: #0f0f0f;
+    border-bottom: 1px solid #333;
+    flex: 0 0 auto;
+  }
+  .tab {
+    background: none;
+    border: 0;
+    color: #888;
+    cursor: pointer;
+    padding: 6px 14px;
+    font-family: inherit;
+    font-size: 0.95em;
+    border-bottom: 2px solid transparent;
+  }
+  .tab:hover { color: #ddd; }
+  .tab.active {
+    color: #7af;
+    border-bottom-color: #7af;
+  }
+
+  /* Active view body */
+  #view-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 8px 12px;
+  }
+  .placeholder {
+    color: #555;
+    font-style: italic;
+    padding: 24px 0;
+    text-align: center;
+  }
+
+  /* Status footer (DB unavailable banner etc.) */
+  #footer {
+    padding: 4px 12px;
+    background: #0f0f0f;
+    border-top: 1px solid #333;
+    color: #666;
+    font-size: 0.8em;
+    flex: 0 0 auto;
+  }
+  #footer.bad { color: #f77; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <span id="workspace-label">workspace: …</span>
+    <span id="db-path">DB: …</span>
+    <button id="menu-btn" type="button">⋯</button>
+    <div id="menu-pop">
+      <button id="menu-switch-db" type="button">Switch DB / workspace…</button>
+      <button id="menu-open-legacy" type="button">Open Legacy Inspector</button>
+    </div>
+  </div>
+
+  <div id="summary">
+    <div class="row"><span class="k">active agents</span>          <span class="v zero" id="s-agents">—</span></div>
+    <div class="row"><span class="k">tasks running/blocked/review</span><span class="v zero" id="s-tasks">—</span></div>
+    <div class="row"><span class="k">open blockers</span>          <span class="v zero" id="s-blockers">—</span></div>
+    <div class="row"><span class="k">failed outcomes</span>        <span class="v zero" id="s-fail">—</span></div>
+    <div class="row"><span class="k">open conflicts</span>         <span class="v zero" id="s-conflicts">—</span></div>
+    <div class="row"><span class="k">dispatches (last 1h)</span>   <span class="v zero" id="s-dispatch">—</span></div>
+    <div id="summary-meta">loading…</div>
+  </div>
+
+  <div id="tabs">
+    <button class="tab active" data-tab="runlog" type="button">Run Log</button>
+    <button class="tab"        data-tab="tasks"  type="button">Tasks</button>
+  </div>
+
+  <div id="view-body">
+    <div id="view-runlog" class="view">
+      <div class="placeholder">Run Log — Day 2 deliverable. Day 1 ships summary card only.</div>
+    </div>
+    <div id="view-tasks" class="view" hidden>
+      <div class="placeholder">Tasks — Day 2 deliverable.</div>
+    </div>
+  </div>
+
+  <div id="footer">read-only · polling 1s · Cairn project control surface</div>
+</div>
+<script src="panel.js"></script>
+</body>
+</html>
