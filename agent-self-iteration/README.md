@@ -260,16 +260,21 @@ The personas are kept in `.claude/agents/`:
 - **`profiler.md`** — runs ONCE before iteration 1. Reads README/TASK/source
   layout and emits a `MANIFEST: {...}` JSON line listing the dimensions of
   quality that genuinely matter for THIS project (4–7 axes is the target).
+- **`validator.md`** — runs ONCE after the profiler (iter 0). Sanity-checks
+  the profiler's MANIFEST for shape errors, domain mismatches, coverage gaps,
+  or irrelevant padding. Emits an advisory `MANIFEST_VALIDATION` note — never
+  blocks or rewrites the manifest; its only effect is a `MANIFEST_WARNING`
+  block threaded into later executor and reviewer prompts when it says `warn`.
 - **`executor.md`** — autonomy contract (no asking questions, no waiting for
   confirmation), operating rules ("treat TASK as contract", "verify
   empirically not by inspection"), and the `EXECUTOR_SUMMARY` output format.
 - **`reviewer.md`** — separate-context audit against the manifest's
-  dimensions, severity ladder (blocker/major/minor), the honesty clause
-  ("don't invent trivial issues; admit exhaustion when warranted"), and
+  dimensions, severity ladder (blocker/major/improvement/minor), the honesty
+  clause ("don't invent trivial issues; admit exhaustion when warranted"), and
   the `VERDICT` output format.
 
-`dual_agent_iter.sh` reads all three files at runtime, strips the YAML
-frontmatter, and prepends the body as the persona for the respective
+`dual_agent_iter.sh` reads all four persona files at runtime, strips the
+YAML frontmatter, and prepends the body as the persona for the respective
 `claude -p` invocation. Editing these files changes the loop's behavior
 without touching code.
 
@@ -420,10 +425,13 @@ agent-self-iteration/
 ├── README.md                     ← you are here
 ├── scripts/
 │   ├── dual_agent_iter.sh        ← the primary tool. Profiler + executor + reviewer driver.
-│   └── regression.sh             ← scoring harness (uses dual_agent_iter.sh per-target)
+│   ├── regression.sh             ← scoring harness (uses dual_agent_iter.sh per-target)
+│   ├── smoke_test_driver.sh      ← stub-driven smoke tests (no API cost)
+│   └── render_ui.py              ← Playwright renderer for UI_RENDER=1 multimodal audit
 ├── .claude/
 │   ├── agents/
 │   │   ├── profiler.md           ← profiler persona (runs once at iter 0)
+│   │   ├── validator.md          ← manifest validator persona (runs once at iter 0, advisory)
 │   │   ├── executor.md           ← executor persona body
 │   │   ├── reviewer.md           ← reviewer persona body
 │   │   └── self-improver.md      ← meta-loop persona body
@@ -437,8 +445,10 @@ agent-self-iteration/
     ├── string_utils/             ← Python string ops
     ├── csv_reader/               ← Python CSV state machine
     ├── task_scheduler/           ← Python graph algorithms
+    ├── regex_validators/         ← Python regex edge cases (anchoring, octet bounds, etc.)
     ├── shell_script_bugs/        ← bash script bugs (custom shell test harness)
     ├── broken_html_a11y/         ← HTML accessibility violations (vanilla node static checker)
+    ├── broken_visual_design/     ← visual-design audit target (requires UI_RENDER=1)
     └── typescript_types/         ← TypeScript strict-mode type errors (tsc --noEmit)
 ```
 
@@ -446,6 +456,8 @@ agent-self-iteration/
 
 Each run does:
 - ONE `claude -p` profiler call at iter 0 (typically 5–10k tokens)
+- ONE `claude -p` validator call at iter 0 (cheap Haiku second-opinion;
+  `SAFETY_VALIDATE_MANIFEST=1` by default — set to `0` to skip)
 - TWO `claude -p` calls per iteration (executor + reviewer)
 
 Token-saving measures applied by the new driver:

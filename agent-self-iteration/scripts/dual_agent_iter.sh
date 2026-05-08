@@ -228,15 +228,27 @@ snapshot_workdir() {
 # ============================================================================
 # W1: Compute total diff line count between baseline snapshot and current state.
 # Returns the count on stdout. Used to enforce MAX_DIFF_LINES.
+#
+# IMPORTANT: both sides must honor the SAME exclusion filter, otherwise the
+# diff falsely counts noise like .git/ / .regression-runs/ / __pycache__/ as
+# brand-new additions on the current side (the baseline doesn't have them
+# because snapshot_workdir excluded them at iter 0). Snapshot the current
+# state through the same filter before diffing.
 # ============================================================================
 compute_diff_lines() {
   local baseline="$1"
   local current="$2"
-  diff -ruN --new-file "$baseline" "$current" 2>/dev/null \
+  local current_snap
+  current_snap=$(mktemp -d -t curr-snap.XXXXXX)
+  snapshot_workdir "$current" "$current_snap"
+  local lines
+  lines=$(diff -ruN --new-file "$baseline" "$current_snap" 2>/dev/null \
     | grep -E '^[+-]' \
     | grep -vE '^(\+\+\+|---) ' \
     | wc -l \
-    | tr -d ' '
+    | tr -d ' ')
+  rm -rf "$current_snap"
+  printf '%s' "$lines"
 }
 
 # ============================================================================
@@ -650,7 +662,7 @@ $MANIFEST_JSON
 ${MANIFEST_WARNING_BLOCK:+
 $MANIFEST_WARNING_BLOCK}
 Previous reviewer issues (just the issues array, in priority order
-blocker → major → minor):
+blocker → major → improvement → minor):
 $PREV_ISSUES
 
 Previous signal output:
