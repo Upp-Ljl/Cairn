@@ -4,11 +4,16 @@
 
 ## Cairn 是什么（定位先看，再看下面）
 
-Cairn 是**主机级多 agent 协作内核**（host-level multi-agent coordination kernel）。它**不是** agent / 不写代码 / 不拆任务 / 不替 agent reasoning / 不是 task daemon / 不是 agent framework / 不是 Linear-Asana 类项目管理。它坐在 Claude Code / Cursor / subagents / Aider / Cline 这些 agent 工具**之下**，维护这台机器上所有 agent / subagent work 的共享协作状态。
+Cairn 是双层产品（PRODUCT.md v3 reframe，2026-05-08 锁，commit `3562f1f`）：
 
-**v0.1 管理的 8 类 host-level state objects**：`processes`（runner 在线状态）/ `tasks`（durable multi-agent work items）/ `dispatch_requests`（可审计派发请求）/ `scratchpad`（共享上下文 + subagent 原始结果）/ `checkpoints`（可回滚状态锚点）/ `conflicts`（多 agent 写冲突）/ `blockers`（任务内等待答复）/ `outcomes`（结果验收状态）。`resume_packet` 是 read-only 聚合视图，不是独立持久状态。
+- **Product layer**：**project-scoped agent work side panel / project control surface**——本机桌面侧边窗 + tray + ambient floating marker + Live Run Log，让程序员在长程多 agent 编程项目里看清状态、复盘、接力、回退。**这是用户感知的产品形态**，主定位词是 *project control surface*，"AI PMO layer" 是辅助 framing 不是主标题。
+- **Kernel layer**：**host-level multi-agent coordination kernel**——坐在 Claude Code / Cursor / subagents / Aider / Cline 之下，维护本机所有 agent / subagent work 的共享协作状态。这是产品底座，不直接面向用户。
 
-W5 引入的 Task Capsule 是 Cairn 管理的一类 durable work item（`tasks` + `blockers` + `outcomes` 三表组合），是 OS primitive 之一，**不是** Cairn 本身——Cairn 不会因为加了 Task Capsule 就变成 task manager。任何文档 / commit message / pitch 写作都按这个 framing。完整 positioning 见 PRODUCT.md §0；不要漂回"Agent OS / solo task daemon / lead-subagent orchestrator"等模糊或错误措辞。
+它**不是** agent / 不写代码 / 不拆任务 / 不替 agent reasoning / 不是 task daemon / 不是 agent framework / 不是 Linear-Jira-Asana 类项目管理 / 不是 Cursor clone / 不是 IDE / 不是 plain MCP service。
+
+**v0.1 管理的 8 类 host-level state objects**（kernel 层）：`processes`（runner 在线状态）/ `tasks`（durable multi-agent work items）/ `dispatch_requests`（可审计派发请求）/ `scratchpad`（共享上下文 + subagent 原始结果）/ `checkpoints`（可回滚状态锚点）/ `conflicts`（多 agent 写冲突）/ `blockers`（任务内等待答复）/ `outcomes`（结果验收状态）。`resume_packet` 是 read-only 聚合视图，不是独立持久状态。
+
+W5 引入的 Task Capsule 是 Cairn 管理的一类 durable work item（`tasks` + `blockers` + `outcomes` 三表组合），是 OS primitive 之一，**不是** Cairn 本身——Cairn 不会因为加了 Task Capsule 就变成 task manager。任何文档 / commit message / pitch 写作都按这个 framing。完整 positioning 见 PRODUCT.md §0 / §1 / §1.3；不要漂回"Agent OS / solo task daemon / lead-subagent orchestrator / Linear-clone / Cursor-clone"等模糊或错误措辞。
 
 ## Agent Work Rules
 
@@ -164,8 +169,9 @@ git push "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" --tags
 
 ```
 packages/
-├── daemon/         # P1 持久层（SQLite + 仓储层 + git-stash backend）
-└── mcp-server/     # W1 楔→W4（17 个 MCP 工具，stdio）
+├── daemon/         # 持久层（SQLite + 仓储层 + git-stash backend，411 tests）
+├── mcp-server/     # 28 MCP 工具，stdio（kernel + integration layer，329 tests）
+└── desktop-shell/  # Electron product layer（panel + pet + tray，read-only SQLite）
 ```
 
 跨包 import 走 daemon 的 `dist/`（不是源码）：
@@ -227,7 +233,7 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 
 ## 当前阶段
 
-v0.1 **W5 Phase 1+2+3 全部已交付**（2026-05-28，commit chain `cd20159..9ed613b` 已 push 到 origin）。
+**Product MVP Quick Slice** desktop side panel 已交付（2026-05-08，commit chain `3562f1f..4c24fb6`，origin + mirror 已 push）。kernel layer 早已 done。
 
 | 阶段 | 内容 | Commit / 状态 |
 |---|---|---|
@@ -236,17 +242,23 @@ v0.1 **W5 Phase 1+2+3 全部已交付**（2026-05-28，commit chain `cd20159..9e
 | W5 Phase 1 | Task Capsule lifeline（tasks 表 + 5 task tools） | 2026-05-07~14 |
 | W5 Phase 2 | Blockers + resume_packet（blockers 表 + 3 task tools） | 2026-05-14~21 |
 | W5 Phase 3 | Outcomes DSL + review/retry/terminal_fail 闭环（outcomes 表 + 3 outcomes tools + DSL stack 7 原语） | 2026-05-22~28，dogfood 32/32 PASS |
-| Phase 4 | Product unification + release polish | 进行中（本批次） |
+| Phase 4 | Product unification + release polish | 2026-05-28 done |
+| **PRODUCT.md v3 reframe** | product layer 主定位升级为 project-scoped agent work side panel / project control surface（kernel 论题保留） | 2026-05-08，commit `3562f1f` |
+| **Product MVP Quick Slice** | desktop-shell：panel.html + queries.cjs + tray + dogfood fixture，9/9 MUST 落地 | 2026-05-08，commit chain `f088b56..4c24fb6` |
 
-**v0.1 当前 28 个 MCP 工具 / 10 个 migration（001-010）**。下一个可用 migration 编号 = `011`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review / 007-tasks / 008-dispatch-task-id / 009-blockers / 010-outcomes。
+**v0.1 当前 28 个 MCP 工具 / 10 个 migration（001-010）**。下一个可用 migration 编号 = `011`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review / 007-tasks / 008-dispatch-task-id / 009-blockers / 010-outcomes。Quick Slice **没有**新增 schema / MCP 工具 / npm dep——纯 product layer 工作。
 
 ## 已落地约定（新会话必读）
 
 - **SESSION_AGENT_ID 自动注入**：mcp-server 启动时自动生成并写入 `process.env.CAIRN_SESSION_AGENT_ID`（格式 `cairn-<sha1(host:cwd).slice(0,12)>`）。`process.register` / `heartbeat` / `status` / `checkpoint.create` 的 `agent_id` 参数均为可选，缺省取该值。**测试不应传 agent_id，除非在断言显式覆盖逻辑**。
 - **pre-commit hook 写 DB**：staged paths 与 OPEN 冲突有重叠时，hook INSERT 新 `PENDING_REVIEW` 行。`CAIRN_DISPATCH_FORCE_FAIL=1` 可强制 dispatch 写 FAILED（demo hook）。
 - **`cairn install` CLI**：bin entry `cairn` 在 `packages/mcp-server`（`npm run build` 后生效）。写 `.mcp.json` + pre-commit hook + start-cairn-pet 脚本，三者幂等可重跑。非 npm-published，当前需 file-link（clone + build + 绝对路径）。
-- **Dispatch 兜底规则共 5 条**：R1 / R2 / R3 / R4 / R6；R4b / R5 推迟 v0.2。`applyFallbackRules` helper 有单元测试覆盖各规则中英关键词。
+- **Dispatch 兜底规则共 5 条**：R1 / R2 / R3 / R4 / R6；R4b / R5 推迟 Later。`applyFallbackRules` helper 有单元测试覆盖各规则中英关键词。
 - **W5 状态机 12 条 transition 全部 active**（`tasks-state.ts` `VALID_TRANSITIONS`）；`WAITING_REVIEW → CANCELLED` **故意不存在**（P1.2 锁，evaluate 是 sub-second 中转态，超时返 RUNNING 后再 cancel）。
 - **Task Capsule 复用约定**：`subagent` 派单时 main agent 通过 prompt 传 `task_id`；scratchpad 用 `subagent/{agent_id}/result` key 命名（详见 `docs/cairn-subagent-protocol.md`）。
 - **DSL stack frozen 约束**：`packages/mcp-server/src/dsl/spawn-utils.ts` 是唯一可 import `child_process` 的文件；所有 path 校验经 `path-utils.assertWithinCwd`。grep 强制约束写在 plan §7.1.1。
 - **outcomes 仓储 6 个 named export**：`OutcomeStatus` / `OutcomeRow` / `submitOutcomesForReview`（upsert 语义） / `recordEvaluationResult`（PENDING-only） / `markTerminalFail`（PENDING-only） / `getOutcomeByTask`（read-only 聚合用）。绝不暴露 `cairn.outcomes.list/get` MCP 工具（LD-8 锁）。
+- **desktop-shell 严格 read-only**（PRODUCT.md v3 §12 D9）：默认 panel + tray + legacy 都不显示任何 mutation 按钮。仅 `CAIRN_DESKTOP_ENABLE_MUTATIONS=1` 时 legacy Inspector 显示 Resolve（panel 永远不显示）。`grep '\.run\|\.exec' packages/desktop-shell/*.cjs *.js` 必须 ≤ 1 处（dev-only resolve-conflict）。
+- **desktop-shell 真实列名**：`tasks.task_id`（不是 `id`） / `blockers.raised_at`（不是 `created_at`） / `conflicts.id` / `paths_json` / `dispatch_requests.id`，详 `packages/desktop-shell/SCHEMA_NOTES.md`。任何 panel 查询写错列名直接 schema 报错。
+- **desktop-shell stack frozen**：Electron 32 + 原生 HTML/CSS/JS + better-sqlite3，**不引** React / Vue / Svelte / Tailwind / Vite / TypeScript（subagent verdict 2026-05-08）。
+- **不再做版本路线（v0.2 / v0.3）**：PRODUCT.md v3 §12 D10 锁定，路线只有 "Product MVP（当前）" 和 "Later（不绑时间）"。新 feature 评估只问"在 MVP 里 / 不在 MVP 里"，不再切版本号。
