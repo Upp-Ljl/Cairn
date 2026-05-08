@@ -26,7 +26,7 @@ describe('presence — boot-time auto-register + heartbeat', () => {
   it('boot-time register inserts the SESSION_AGENT_ID with status ACTIVE', () => {
     expect(getProcess(ws.db, ws.agentId)).toBeNull();
 
-    const handle = startPresence(ws, { installSignalHandlers: false });
+    const handle = startPresence(ws, { installBeforeExitHandler: false });
     try {
       const row = getProcess(ws.db, ws.agentId);
       expect(row).not.toBeNull();
@@ -41,7 +41,7 @@ describe('presence — boot-time auto-register + heartbeat', () => {
 
   it('register options override agent_type, capabilities, heartbeat_ttl', () => {
     const handle = startPresence(ws, {
-      installSignalHandlers: false,
+      installBeforeExitHandler: false,
       agentType: 'custom-host',
       capabilities: ['scratch', 'rewind'],
       heartbeatTtlMs: 12_345,
@@ -57,7 +57,7 @@ describe('presence — boot-time auto-register + heartbeat', () => {
   });
 
   it('manual tick() advances last_heartbeat', () => {
-    const handle = startPresence(ws, { installSignalHandlers: false });
+    const handle = startPresence(ws, { installBeforeExitHandler: false });
     try {
       const before = getProcess(ws.db, ws.agentId)!.last_heartbeat;
       // sleep 5ms to ensure Date.now() advances on fast machines
@@ -77,7 +77,7 @@ describe('presence — boot-time auto-register + heartbeat', () => {
     vi.useFakeTimers();
     try {
       const handle = startPresence(ws, {
-        installSignalHandlers: false,
+        installBeforeExitHandler: false,
         intervalMs: 1000,
       });
       try {
@@ -102,7 +102,7 @@ describe('presence — boot-time auto-register + heartbeat', () => {
     vi.useFakeTimers();
     try {
       const handle = startPresence(ws, {
-        installSignalHandlers: false,
+        installBeforeExitHandler: false,
         intervalMs: 500,
       });
       handle.stop();
@@ -116,9 +116,9 @@ describe('presence — boot-time auto-register + heartbeat', () => {
   });
 
   it('boot-time register is idempotent across re-runs (same agent_id)', () => {
-    const handle1 = startPresence(ws, { installSignalHandlers: false });
+    const handle1 = startPresence(ws, { installBeforeExitHandler: false });
     handle1.stop();
-    const handle2 = startPresence(ws, { installSignalHandlers: false });
+    const handle2 = startPresence(ws, { installBeforeExitHandler: false });
     try {
       const all = listProcesses(ws.db, { statuses: ['ACTIVE', 'IDLE', 'DEAD'] });
       // Only one row for the same agent_id (INSERT OR REPLACE)
@@ -130,18 +130,40 @@ describe('presence — boot-time auto-register + heartbeat', () => {
     }
   });
 
-  it('signal handler tear-down does not throw and cancels ticks', () => {
+  it('does NOT install SIGINT/SIGTERM listeners (must not swallow Ctrl+C)', () => {
+    const sigintBefore  = process.listenerCount('SIGINT');
+    const sigtermBefore = process.listenerCount('SIGTERM');
+
+    // Default options must not register signal handlers.
+    const handle = startPresence(ws);
+    try {
+      expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+      expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
+    } finally {
+      handle.stop();
+    }
+
+    // Even with installBeforeExitHandler: true, signal handlers must
+    // remain untouched. presence relies on the unref'd interval +
+    // Node's default signal handling for clean shutdown.
+    const handle2 = startPresence(ws, { installBeforeExitHandler: true });
+    try {
+      expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+      expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
+    } finally {
+      handle2.stop();
+    }
+  });
+
+  it('beforeExit handler tears down without throwing and cancels ticks', () => {
     vi.useFakeTimers();
     try {
-      // installSignalHandlers: true in this test to exercise the wiring.
-      // The handlers are registered with `process.once`, so emitting
-      // SIGINT triggers the handler exactly once.
       const handle = startPresence(ws, {
-        installSignalHandlers: true,
+        installBeforeExitHandler: true,
         intervalMs: 500,
       });
-      // Manually emit beforeExit to invoke the handler we registered.
-      // (Avoids actually killing the test runner with SIGINT.)
+      // Manually emit beforeExit to invoke the handler we registered
+      // with `process.once`.
       process.emit('beforeExit', 0);
       const t0 = getProcess(ws.db, ws.agentId)!.last_heartbeat;
       vi.advanceTimersByTime(2_000);
@@ -152,5 +174,13 @@ describe('presence — boot-time auto-register + heartbeat', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('startPresence does not leak beforeExit listeners after stop()', () => {
+    const before = process.listenerCount('beforeExit');
+    const handle = startPresence(ws, { installBeforeExitHandler: true });
+    expect(process.listenerCount('beforeExit')).toBe(before + 1);
+    handle.stop();
+    expect(process.listenerCount('beforeExit')).toBe(before);
   });
 });

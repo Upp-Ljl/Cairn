@@ -29,11 +29,18 @@ export interface PresenceOptions {
   /** Heartbeat tick interval in ms. Default 30000 (30s). */
   intervalMs?: number;
   /**
-   * Whether to install SIGINT/SIGTERM/beforeExit handlers that tear
-   * presence down on graceful exit. Default true. Tests should pass
-   * `false` to avoid trapping the test runner.
+   * Whether to install a `beforeExit` handler that tears presence down
+   * on graceful Node exit. Default true. Tests that emit beforeExit
+   * synthetically may want false to avoid the synthetic emit calling
+   * stop() out from under them. Note: presence does NOT install
+   * SIGINT/SIGTERM handlers — registering those would override Node's
+   * default behavior of exiting on Ctrl+C, swallowing the user's
+   * shutdown intent. The 30s interval is already `.unref()`'d so it
+   * never keeps the process alive on its own; relying on Node's
+   * default signal handling is the correct shape for a long-running
+   * stdio server.
    */
-  installSignalHandlers?: boolean;
+  installBeforeExitHandler?: boolean;
   /** Override agent_type. Default 'mcp-server'. */
   agentType?: string;
   /** Override capabilities. Default empty array. */
@@ -56,7 +63,7 @@ export function startPresence(
   opts: PresenceOptions = {},
 ): PresenceHandle {
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
-  const installSignalHandlers = opts.installSignalHandlers ?? true;
+  const installBeforeExitHandler = opts.installBeforeExitHandler ?? true;
   const agentType = opts.agentType ?? 'mcp-server';
   const capabilities = opts.capabilities ?? [];
 
@@ -102,27 +109,16 @@ export function startPresence(
     if (stopped) return;
     stopped = true;
     clearInterval(interval);
-    if (installSignalHandlers) {
-      process.removeListener('SIGINT', onSignal);
-      process.removeListener('SIGTERM', onSignal);
+    if (installBeforeExitHandler) {
       process.removeListener('beforeExit', onBeforeExit);
     }
   };
-
-  function onSignal() {
-    stop();
-    // Don't call process.exit() here — let the host SIGINT handler
-    // (mcp-server's stdio transport) do the actual exit. We just clean
-    // up our interval so we don't keep ticking after teardown.
-  }
 
   function onBeforeExit() {
     stop();
   }
 
-  if (installSignalHandlers) {
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
+  if (installBeforeExitHandler) {
     process.once('beforeExit', onBeforeExit);
   }
 
