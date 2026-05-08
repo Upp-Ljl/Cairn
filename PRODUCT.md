@@ -1233,7 +1233,7 @@ v3（2026-05-08）是 **product surface reframe**，**不是** kernel pivot。ke
 | **Arbitrate（仲裁）** | Cairn 三动词之一。检测 agent 间冲突 → 诊断 → 给出仲裁建议 → 用户拍板 → 通知相关 agent。 |
 | **Inspector** | 用户与 Cairn 的 read-only 通道，用于查询当前状态、历史、冲突记录。不执行任何写操作。v3 panel 是 Inspector 的视觉载体。 |
 | **共享 scratchpad** | Cairn 提供的 IPC 总线，agent 间通信的主通道。SQLite 表 + MCP CRUD。 |
-| **进程总线** | agent 注册、心跳、状态查询的机制（`cairn.process.*` 4 工具，自动 SESSION_AGENT_ID）。 |
+| **进程总线** | agent 注册、心跳、状态查询的机制（`cairn.process.*` 4 工具，自动 SESSION_AGENT_ID）。Real Agent Presence v2（2026-05-08）起，SESSION_AGENT_ID 是 **session-level** 唯一（`cairn-session-<12hex>`），不再是 project-level sha1 哈希——同 project 下 N 个终端 session 在 processes 表展示为 N 行；project attribution 走 `processes.capabilities` 的 `git_root` / `cwd` tags + `agent_id_hints` 手动 hint。详 ARCHITECTURE.md ADR-9a。 |
 | **红线（user intent boundary）** | 用户给 agent 划定的操作边界。当前基础版只检测文件范围越界，完整版 Later。 |
 | **反汇总（layer 3）** | 主 agent 复述 vs subagent 原文 diff。Later，前提是主 agent 主动写 `echo/{agent_id}/restatement`。 |
 | **checkpoint 粒度矩阵** | L0（文件全量）/ L1（paths）/ L2（scratchpad）已实现；L3-L6（对话 / 工具 trace / agent 内部态 / subagent 树）Later，需 host LLM 配合。 |

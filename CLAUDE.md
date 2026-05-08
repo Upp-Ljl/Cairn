@@ -250,7 +250,9 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 
 ## 已落地约定（新会话必读）
 
-- **SESSION_AGENT_ID 自动注入**：mcp-server 启动时自动生成并写入 `process.env.CAIRN_SESSION_AGENT_ID`（格式 `cairn-<sha1(host:cwd).slice(0,12)>`）。`process.register` / `heartbeat` / `status` / `checkpoint.create` 的 `agent_id` 参数均为可选，缺省取该值。**测试不应传 agent_id，除非在断言显式覆盖逻辑**。
+- **SESSION_AGENT_ID 自动注入**（**Real Agent Presence v2，2026-05-08 起**）：mcp-server 每个 process 启动时生成**唯一 session-level** id，格式 `cairn-session-<12hex>`（26 字符），写入 `process.env.CAIRN_SESSION_AGENT_ID`。**同一个 project 下开多个终端 session → processes 表 N 行（不再合并）**。`process.register` / `heartbeat` / `status` / `checkpoint.create` 的 `agent_id` 参数均为可选，缺省取该值。**测试不应传 agent_id，除非在断言显式覆盖逻辑**。
+  - Project attribution：mcp-server 在 `presence.startPresence` 把 `client:mcp-server` / `cwd:<...>` / `git_root:<...>` / `pid:<...>` / `host:<...>` / `session:<...>` 写入 `processes.capabilities` (string[])。desktop-shell `project-queries.cjs::resolveProjectAgentIds` 按 `git_root` exact 或 `cwd` ⊆ project_root 匹配，结合 registry `agent_id_hints` 求 union。
+  - **Pre-v2 旧公式** `cairn-<sha1(host:cwd).slice(0,12)>`（18 字符）仅保留在 `desktop-shell/registry.cjs::deriveAgentIdHint`，给历史行手动加 hint 用；新 project 默认 hints=[]。详 ARCHITECTURE.md ADR-9a。
 - **pre-commit hook 写 DB**：staged paths 与 OPEN 冲突有重叠时，hook INSERT 新 `PENDING_REVIEW` 行。`CAIRN_DISPATCH_FORCE_FAIL=1` 可强制 dispatch 写 FAILED（demo hook）。
 - **`cairn install` CLI**：bin entry `cairn` 在 `packages/mcp-server`（`npm run build` 后生效）。写 `.mcp.json` + pre-commit hook + start-cairn-pet 脚本，三者幂等可重跑。非 npm-published，当前需 file-link（clone + build + 绝对路径）。
 - **Dispatch 兜底规则共 5 条**：R1 / R2 / R3 / R4 / R6；R4b / R5 推迟 Later。`applyFallbackRules` helper 有单元测试覆盖各规则中英关键词。

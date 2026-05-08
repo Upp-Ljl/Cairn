@@ -814,20 +814,45 @@ LLM 不能完全依赖。W5-W7 plan 的 acceptance 必须含以下 4 条：
 
 ### ADR-9：Auto SESSION_AGENT_ID + `cairn install` CLI + pre-commit 写 DB（Phase 1/3/4）
 
-#### 9a. Auto SESSION_AGENT_ID（Phase 1）
+#### 9a. Auto SESSION_AGENT_ID（Phase 1 → Real Agent Presence v2 / 2026-05-08）
 
-**决策**：mcp-server 启动时自动计算 `cairn-<sha1(hostname:cwd).slice(0,12)>` 作为当前会话的 agent_id，挂到 `ws.agentId`，写入 `process.env.CAIRN_SESSION_AGENT_ID`。
-
-`cairn.process.register` / `heartbeat` / `status` 和 `cairn.checkpoint.create` 的 `agent_id` 参数变为可选，缺省时自动取 SESSION_AGENT_ID。MCP schema 不再标记 `agent_id` 为 required。
+**决策（v2 当前）**：mcp-server 启动时为每个 process 生成**唯一 session-level** agent_id，格式 `cairn-session-<12-char hex>`（24+2=26 字符）。挂到 `ws.agentId`，写入 `process.env.CAIRN_SESSION_AGENT_ID`。同一个 project 下开多个终端 session 时，每个 mcp-server 进程拿到自己的 agent_id，processes 表里有多行。
 
 ```
 mcp-server 启动
-  → sha1(os.hostname() + ':' + process.cwd()).slice(0,12)
-  → CAIRN_SESSION_AGENT_ID = "cairn-<hash>"
+  → sessionId = randomBytes(6).toString('hex')   // 12 hex
+  → CAIRN_SESSION_AGENT_ID = "cairn-session-<sessionId>"
   → 所有工具的 agent_id 参数缺省时读此值
 ```
 
-**测试约定**：测试不应传 `agent_id` 除非在断言显式覆盖行为；auto-inject 路径是默认路径。
+`cairn.process.register` / `heartbeat` / `status` 和 `cairn.checkpoint.create` 的 `agent_id` 参数仍是可选，缺省时取 SESSION_AGENT_ID。MCP schema 不标记 `agent_id` 为 required。
+
+**Project attribution**（Day 5 之前 = sha1 hash 推导；v2 起 = capability tags + 手动 hint）：
+
+mcp-server 在 `presence.startPresence` 把以下 tags 作为 string-encoded 条目写入 `processes.capabilities`（schema 仍是 `string[]`，不改 schema）：
+
+```
+client:mcp-server
+cwd:<process cwd>
+git_root:<git rev-parse --show-toplevel of cwd, fallback cwd>
+pid:<process.pid>
+host:<hostname>
+session:<sessionId>      // 与 agentId 后 12 位一致
+```
+
+desktop-shell `project-queries.cjs::resolveProjectAgentIds(project)` 把以下两类合并为该 project 的 attribution 集合：
+1. **capability match**：`processes` 行的 `git_root:<path>` 与 project_root 完全相等（normalized），或 `cwd:<path>` 在 project_root 之内。
+2. **hint match**：`agent_id` 直接出现在 `~/.cairn/projects.json` 的 `agent_id_hints`（手动添加 / 历史兼容）。
+
+跨平台路径 normalize：Windows 转小写 + 反斜杠转正斜杠 + trim trailing slash；POSIX 仅 trim trailing slash。
+
+**Pre-v2 历史**：2026-04~05 期间 SESSION_AGENT_ID = `cairn-<sha1(host:cwd).slice(0,12)>`（18 字符），是 project-level 稳定 id。同一 project 多个终端 session 会被合并成 1 行。v2 把这个改成 session-level；legacy 公式保留在 `desktop-shell/registry.cjs::deriveAgentIdHint` 仅用于：
+- 手动给 project 添加历史 row 对应的 hint
+- 用户从 Unassigned 把 pre-v2 row 归到 project
+
+新 project 的 `agent_id_hints` 默认为空数组（v2 起），attribution 完全靠 capability tag。
+
+**测试约定**：测试不应传 `agent_id` 除非显式覆盖行为；auto-inject 路径是默认路径。`phase1-agent-id.test.ts` 的"两次 openWorkspace 同 cwd 应得相同 id"用例在 v2 已**反向**——必须得到不同的 session id。
 
 #### 9b. pre-commit hook 写 DB（Phase 3）
 
