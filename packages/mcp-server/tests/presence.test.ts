@@ -33,13 +33,25 @@ describe('presence — boot-time auto-register + heartbeat', () => {
       expect(row!.agent_id).toBe(ws.agentId);
       expect(row!.agent_type).toBe('mcp-server');
       expect(row!.status).toBe('ACTIVE');
-      expect(row!.capabilities).toEqual([]);
+      // Real Agent Presence v2: default capabilities now include the
+      // attribution tag set built by defaultPresenceCapabilities.
+      expect(row!.capabilities).toEqual(
+        expect.arrayContaining([
+          'client:mcp-server',
+          `cwd:${ws.cwd}`,
+          `git_root:${ws.gitRoot}`,
+          `host:${ws.host}`,
+          `session:${ws.sessionId}`,
+        ]),
+      );
+      // pid is process-bound; assert the prefix only.
+      expect(row!.capabilities!.some(c => c.startsWith('pid:'))).toBe(true);
     } finally {
       handle.stop();
     }
   });
 
-  it('register options override agent_type, capabilities, heartbeat_ttl', () => {
+  it('caller-provided capabilities are merged with the system defaults (not replaced)', () => {
     const handle = startPresence(ws, {
       installBeforeExitHandler: false,
       agentType: 'custom-host',
@@ -49,7 +61,18 @@ describe('presence — boot-time auto-register + heartbeat', () => {
     try {
       const row = getProcess(ws.db, ws.agentId)!;
       expect(row.agent_type).toBe('custom-host');
-      expect(row.capabilities).toEqual(['scratch', 'rewind']);
+      // Caller extras present:
+      expect(row.capabilities).toEqual(
+        expect.arrayContaining(['scratch', 'rewind']),
+      );
+      // Attribution tags still present (they're system-managed in v2):
+      expect(row.capabilities).toEqual(
+        expect.arrayContaining([
+          'client:mcp-server',
+          `git_root:${ws.gitRoot}`,
+          `session:${ws.sessionId}`,
+        ]),
+      );
       expect(row.heartbeat_ttl).toBe(12_345);
     } finally {
       handle.stop();

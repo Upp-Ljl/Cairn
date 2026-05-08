@@ -64,15 +64,21 @@ const REGISTRY_VERSION    = 2;
 // ---------------------------------------------------------------------------
 
 /**
- * Compute the SESSION_AGENT_ID that mcp-server would assign to a
- * workspace whose canonical path is `canonicalPath`. Mirrors the formula
- * in `packages/mcp-server/src/workspace.ts`:
- *   sha1(hostname() + ':' + canonicalPath).slice(0, 12), prefixed
- *   with "cairn-".
+ * Compute the legacy project-level agent id `cairn-<sha1(host:path).slice(0,12)>`.
  *
- * NOTE: mcp-server first tries `git rev-parse --show-toplevel` and falls
- * back to raw cwd. We don't shell out from desktop-shell, so the caller
- * should pass the git toplevel (or the project_root) when known.
+ * **Legacy / backwards-compat only.** Pre-Real-Agent-Presence-v2 (before
+ * 2026-05-08), mcp-server's SESSION_AGENT_ID used this exact formula,
+ * so every session in a given project shared one deterministic id.
+ * v2 switched to per-process random session ids
+ * (`cairn-session-<12hex>`); the panel now attributes via capability
+ * tags in `processes.capabilities` (see project-queries.cjs).
+ *
+ * Why this still exists:
+ *   - `tasks.created_by_agent_id` rows from pre-v2 sessions still
+ *     carry the project-level form; manually adding the legacy id as
+ *     a hint via "Add to project…" attributes those historical rows.
+ *   - mirrors mcp-server's pre-v2 formula 1:1 so user-typed hints
+ *     resolve identically.
  *
  * @param {string} canonicalPath
  * @returns {string}
@@ -221,10 +227,16 @@ function saveRegistry(reg) {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a fresh registry entry. Auto-derives a default agent_id_hint
- * from the project_root using mcp-server's SESSION_AGENT_ID formula
- * (so a project_root that is also the git toplevel will match
- * out-of-the-box).
+ * Build a fresh registry entry.
+ *
+ * Real Agent Presence v2 (2026-05-08): hints default to **empty**.
+ * Attribution of new sessions runs through capability tags
+ * (`git_root:` / `cwd:`) emitted by mcp-server presence — see
+ * project-queries.cjs::resolveProjectAgentIds. Pre-v2 we auto-bootstrapped
+ * a legacy `cairn-<sha1(host:gitRoot).slice(0,12)>` hint here, which no
+ * longer matches any v2 session. Users can still add hints manually
+ * via "Add to project…" — that's the path for historical rows or for
+ * non-MCP agents that registered with a custom agent_id.
  *
  * @param {{ project_root: string, db_path?: string, label?: string, agent_id_hints?: string[] }} input
  * @returns {ProjectRegistryEntry}
@@ -239,7 +251,7 @@ function makeProjectEntry(input) {
     : DEFAULT_DB_PATH;
   const hints = Array.isArray(input.agent_id_hints) && input.agent_id_hints.length > 0
     ? input.agent_id_hints.slice()
-    : (project_root === '(unknown)' ? [] : [deriveAgentIdHint(project_root)]);
+    : [];
   return {
     id: newProjectId(),
     label: input.label && input.label.trim() ? input.label : defaultLabelFor(project_root),

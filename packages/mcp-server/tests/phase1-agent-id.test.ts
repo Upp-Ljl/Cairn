@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir, hostname } from 'node:os';
-import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { openWorkspace, type Workspace } from '../src/workspace.js';
 import { toolCreateCheckpoint } from '../src/tools/checkpoint.js';
 import { toolRegisterProcess, toolHeartbeat, toolGetProcess } from '../src/tools/process.js';
@@ -22,32 +21,16 @@ function makeGitRepo(): string {
   return dir;
 }
 
-/**
- * Mirror computeAgentId logic: resolve git toplevel (if available), then hash.
- * Must stay in sync with workspace.ts::computeAgentId.
- */
-function expectedAgentId(cwd: string): string {
-  let canonicalPath = cwd;
-  try {
-    const top = execSync('git rev-parse --show-toplevel', {
-      cwd,
-      timeout: 1000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (top.length > 0) canonicalPath = top;
-  } catch {
-    // not a git repo — use raw cwd
-  }
-  const raw = hostname() + ':' + canonicalPath;
-  return 'cairn-' + createHash('sha1').update(raw).digest('hex').slice(0, 12);
-}
-
 // ---------------------------------------------------------------------------
-// 1a — SESSION_AGENT_ID on Workspace
+// 1a — SESSION_AGENT_ID on Workspace (Real Agent Presence v2: session-level)
 // ---------------------------------------------------------------------------
+//
+// Identity contract was flipped from project-level (sha1(host:gitRoot))
+// to session-level (random per-process). The whole point of the upgrade
+// is that two terminal sessions in the same project must NOT collapse
+// into a single processes row.
 
-describe('phase 1a — agentId on Workspace', () => {
+describe('phase 1a — session-level agentId on Workspace', () => {
   let cairnRoot: string;
   let ws: Workspace;
 
@@ -61,51 +44,97 @@ describe('phase 1a — agentId on Workspace', () => {
     rmSync(cairnRoot, { recursive: true, force: true });
   });
 
-  it('agentId starts with "cairn-" and is 18 chars total', () => {
-    expect(ws.agentId).toMatch(/^cairn-[0-9a-f]{12}$/);
-    expect(ws.agentId.length).toBe(18);
+  it('agentId starts with "cairn-session-" and ends with 12 hex chars (26 chars total)', () => {
+    expect(ws.agentId).toMatch(/^cairn-session-[0-9a-f]{12}$/);
+    expect(ws.agentId.length).toBe(26);
+    expect(ws.sessionId).toMatch(/^[0-9a-f]{12}$/);
+    // agentId is exactly 'cairn-session-' + sessionId.
+    expect(ws.agentId).toBe('cairn-session-' + ws.sessionId);
   });
 
-  it('agentId is stable: two openWorkspace() calls with same cwd return same id', () => {
-    const ws2 = openWorkspace({ cairnRoot: mkdtempSync(join(tmpdir(), 'cairn-p1a2-')), cwd: ws.cwd });
+  it('two openWorkspace() calls with the same cwd produce DIFFERENT agentIds (session-level uniqueness)', () => {
+    // This is the inverse of the pre-v2 contract. Same cwd, same git
+    // toplevel, same machine → two distinct sessions still get two
+    // distinct agentIds, otherwise the panel can't show concurrent
+    // terminal sessions as separate rows.
+    const ws2 = openWorkspace({
+      cairnRoot: mkdtempSync(join(tmpdir(), 'cairn-p1a2-')),
+      cwd: ws.cwd,
+    });
     try {
-      expect(ws2.agentId).toBe(ws.agentId);
+      expect(ws2.agentId).not.toBe(ws.agentId);
+      expect(ws2.sessionId).not.toBe(ws.sessionId);
     } finally {
       ws2.db.close();
       rmSync(ws2.cairnRoot, { recursive: true, force: true });
     }
   });
 
-  it('different git toplevels produce different agentIds (two separate git repos)', () => {
-    // Two distinct git repos → distinct toplevels → distinct agentIds.
-    const repo1 = makeGitRepo();
-    const repo2 = makeGitRepo();
-    const ws1 = openWorkspace({ cairnRoot: mkdtempSync(join(tmpdir(), 'cairn-p1a-cr1-')), cwd: repo1 });
-    const ws2 = openWorkspace({ cairnRoot: mkdtempSync(join(tmpdir(), 'cairn-p1a-cr2-')), cwd: repo2 });
+  it('gitRoot is set: git repo cwd resolves to the toplevel', () => {
+    const repo = makeGitRepo();
+    const cr = mkdtempSync(join(tmpdir(), 'cairn-p1a-gr-'));
+    const wsr = openWorkspace({ cairnRoot: cr, cwd: repo });
     try {
-      expect(ws1.agentId).not.toBe(ws2.agentId);
+      // gitRoot must equal the repo's toplevel. On macOS / Linux this
+      // is `repo` directly; on Windows the temp path may have an
+      // 8.3-shortened component vs git's resolved path — compare via
+      // realpath-like equivalence by reading both ends.
+      const top = execSync('git rev-parse --show-toplevel', {
+        cwd: repo, timeout: 1000, encoding: 'utf8',
+      }).trim();
+      expect(wsr.gitRoot).toBe(top);
     } finally {
-      ws1.db.close();
-      ws2.db.close();
-      rmSync(ws1.cairnRoot, { recursive: true, force: true });
-      rmSync(ws2.cairnRoot, { recursive: true, force: true });
-      rmSync(repo1, { recursive: true, force: true });
-      rmSync(repo2, { recursive: true, force: true });
+      wsr.db.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(cr, { recursive: true, force: true });
     }
   });
 
-  it('agentId matches expected sha1(hostname:cwd) formula', () => {
-    expect(ws.agentId).toBe(expectedAgentId(ws.cwd));
+  it('gitRoot is consistent with `git rev-parse --show-toplevel` from cwd, or cwd when git finds nothing', () => {
+    // The temp dir may or may not sit inside a parent git repo —
+    // on dev machines with user-home dotfiles repos, a tmp path can
+    // resolve to a surprising toplevel. The contract is consistency
+    // with whatever git itself would say from that cwd, with cwd as
+    // the fallback when git fails. Derive the same way the workspace
+    // does so we don't hardcode environment assumptions.
+    const noGit = mkdtempSync(join(tmpdir(), 'cairn-p1a-nogit-'));
+    const cr = mkdtempSync(join(tmpdir(), 'cairn-p1a-nogit-cr-'));
+    let expected = noGit;
+    try {
+      const top = execSync('git rev-parse --show-toplevel', {
+        cwd: noGit, timeout: 1000, encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (top.length > 0) expected = top;
+    } catch { /* git failed → expected stays = noGit */ }
+    const wsr = openWorkspace({ cairnRoot: cr, cwd: noGit });
+    try {
+      expect(wsr.gitRoot).toBe(expected);
+    } finally {
+      wsr.db.close();
+      rmSync(noGit, { recursive: true, force: true });
+      rmSync(cr, { recursive: true, force: true });
+    }
   });
 
   it('CAIRN_SESSION_AGENT_ID env var is set at openWorkspace time', () => {
-    // The env var must match the workspace agentId.
     expect(process.env['CAIRN_SESSION_AGENT_ID']).toBe(ws.agentId);
+  });
+
+  it('explicit sessionId override is respected (test-only path)', () => {
+    const cr = mkdtempSync(join(tmpdir(), 'cairn-p1a-fix-'));
+    const wsr = openWorkspace({ cairnRoot: cr, sessionId: 'aaaa11112222' });
+    try {
+      expect(wsr.agentId).toBe('cairn-session-aaaa11112222');
+    } finally {
+      wsr.db.close();
+      rmSync(cr, { recursive: true, force: true });
+    }
   });
 });
 
 // ---------------------------------------------------------------------------
-// 1a — auto agent_id in checkpoint.create
+// 1a — auto agent_id in checkpoint.create (semantics unchanged: still uses ws.agentId)
 // ---------------------------------------------------------------------------
 
 describe('phase 1a — checkpoint.create auto agent_id', () => {

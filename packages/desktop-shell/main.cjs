@@ -514,8 +514,12 @@ function refreshTray() {
     const entry = ensureDbHandle(p.db_path);
     if (!entry) continue;
     aggAvailable = true;
+    // Real Agent Presence v2: attribution = hints ∪ capability matches.
+    const agentIds = projectQueries.resolveProjectAgentIds(
+      entry.db, entry.tables, p,
+    );
     const s = projectQueries.queryProjectScopedSummary(
-      entry.db, entry.tables, p.db_path, p.agent_id_hints,
+      entry.db, entry.tables, p.db_path, agentIds,
     );
     if (s.health === 'alert') worst = 'alert';
     else if (s.health === 'warn' && worst !== 'alert') worst = 'warn';
@@ -584,7 +588,6 @@ function createTray() {
  * one Unassigned bucket per unique db_path.
  */
 function getProjectsList() {
-  const hintsByDb = registry.hintsByDbPath(reg);
   const projects = reg.projects.map(p => {
     const entry = ensureDbHandle(p.db_path);
     if (!entry) {
@@ -594,8 +597,10 @@ function getProjectsList() {
         last_opened_at: p.last_opened_at, summary: null,
       };
     }
+    // Real Agent Presence v2: attribution = hints ∪ capability matches.
+    const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, p);
     const summary = projectQueries.queryProjectScopedSummary(
-      entry.db, entry.tables, p.db_path, p.agent_id_hints,
+      entry.db, entry.tables, p.db_path, agentIds,
     );
     return {
       id: p.id, label: p.label, project_root: p.project_root,
@@ -605,14 +610,16 @@ function getProjectsList() {
   });
 
   // One Unassigned bucket per unique db_path that registry references.
-  // (DB paths with no registered project are not surfaced here — user
-  // must register at least one project against that DB to see it.)
+  // Attribution union for the bucket is computed across every project
+  // pointing at that db_path (capability matches + hint matches).
   const unassigned = [];
-  for (const p of registry.uniqueDbPaths(reg)) {
-    const entry = ensureDbHandle(p);
+  for (const dbPath of registry.uniqueDbPaths(reg)) {
+    const entry = ensureDbHandle(dbPath);
     if (!entry) continue;
-    const allHints = hintsByDb.get(p) || new Set();
-    const u = projectQueries.queryUnassignedSummary(entry.db, entry.tables, p, allHints);
+    const attributed = projectQueries.resolveAttributedAgentIdsForDb(
+      entry.db, entry.tables, reg.projects, dbPath,
+    );
+    const u = projectQueries.queryUnassignedSummary(entry.db, entry.tables, dbPath, attributed);
     unassigned.push(u);
   }
 
@@ -701,7 +708,9 @@ ipcMain.handle('get-project-sessions', () => {
   if (!proj) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
   const entry = ensureDbHandle(proj.db_path);
   if (!entry) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
-  return projectQueries.queryProjectScopedSessions(entry.db, entry.tables, proj.agent_id_hints);
+  // Attribution v2: hints ∪ capability-matched session agent_ids.
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  return projectQueries.queryProjectScopedSessions(entry.db, entry.tables, agentIds);
 });
 
 // Unassigned drill-down — keyed by db_path so a user inspecting one DB's
@@ -711,8 +720,10 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
   if (!dbPath || typeof dbPath !== 'string') return null;
   const entry = ensureDbHandle(dbPath);
   if (!entry) return null;
-  const allHints = registry.hintsByDbPath(reg).get(dbPath) || new Set();
-  return projectQueries.queryUnassignedDetail(entry.db, entry.tables, dbPath, allHints);
+  const attributed = projectQueries.resolveAttributedAgentIdsForDb(
+    entry.db, entry.tables, reg.projects, dbPath,
+  );
+  return projectQueries.queryUnassignedDetail(entry.db, entry.tables, dbPath, attributed);
 });
 
 // ---------------------------------------------------------------------------
@@ -730,8 +741,9 @@ ipcMain.handle('get-project-summary', () => {
   if (!entry) return projectQueries.queryProjectScopedSummary(null, new Set(), activeDbPath(), []);
   const proj = activeProject();
   if (proj) {
+    const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
     return projectQueries.queryProjectScopedSummary(
-      entry.db, entry.tables, proj.db_path, proj.agent_id_hints,
+      entry.db, entry.tables, proj.db_path, agentIds,
     );
   }
   // No project selected — fall back to the legacy unscoped summary
@@ -751,8 +763,11 @@ ipcMain.handle('get-tasks-list', () => {
   if (!proj || !entry) {
     return { available: false, hints_empty: true, tasks: [] };
   }
+  // Real Agent Presence v2: include capability-matched sessions in
+  // the attribution set, not just registry hints.
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
   return projectQueries.queryProjectScopedTasks(
-    entry.db, entry.tables, proj.agent_id_hints,
+    entry.db, entry.tables, agentIds,
   );
 });
 

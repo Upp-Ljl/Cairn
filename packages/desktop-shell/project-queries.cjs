@@ -1,5 +1,7 @@
 'use strict';
 
+const path = require('path');
+
 /**
  * Hint-filtered queries for the per-project view.
  *
@@ -706,6 +708,181 @@ function queryProjectScopedTasks(db, tables, hints, limit) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Real Agent Presence v2 — capability-tag-based project attribution
+// ---------------------------------------------------------------------------
+//
+// Identity model (post Real Agent Presence v2, 2026-05-08):
+//   - mcp-server's SESSION_AGENT_ID is a per-process random
+//     `cairn-session-<12hex>` (session-level, not project-level).
+//     Two terminal sessions in the same git repo therefore produce
+//     two distinct rows in the `processes` table.
+//   - Project attribution is no longer derivable from agent_id alone.
+//     mcp-server emits descriptive capability tags on every register:
+//         client:mcp-server
+//         cwd:<process cwd>
+//         git_root:<git toplevel of cwd, or cwd if not in a git repo>
+//         pid:<process.pid>
+//         host:<hostname>
+//         session:<12hex>
+//   - The desktop panel attributes a process row to a registered
+//     project by matching `git_root:<...>` (preferred, exact) or
+//     `cwd:<...>` (project_root ≤ cwd) tags against
+//     project.project_root, with case/slash normalization on Windows.
+//   - registry's `agent_id_hints` continues to work as a manual /
+//     historical attribution mechanism (legacy project-level ids,
+//     "Add to project…" entries, etc.). Final attribution = the
+//     union of capability-matched and hint-matched agent_ids.
+//
+// All helpers here are pure / read-only.
+
+/**
+ * Normalize a filesystem path for cross-platform comparison.
+ * - Replace backslashes with forward slashes.
+ * - Lowercase on Windows (case-insensitive paths).
+ * - Trim trailing slash (keep root).
+ *
+ * @param {string|null|undefined} p
+ * @returns {string}
+ */
+function normalizePath(p) {
+  if (!p || typeof p !== 'string') return '';
+  let n = p.replace(/\\/g, '/');
+  if (process.platform === 'win32') n = n.toLowerCase();
+  if (n.length > 1 && n.endsWith('/')) n = n.slice(0, -1);
+  return n;
+}
+
+/**
+ * Returns true if `child` is the same path as `parent`, or a path
+ * inside `parent`. Both inputs go through normalizePath first.
+ */
+function pathInsideOrEqual(child, parent) {
+  const c = normalizePath(child);
+  const p = normalizePath(parent);
+  if (!c || !p) return false;
+  return c === p || c.startsWith(p + '/');
+}
+
+/**
+ * Parse a `key:value` capability tag string into {key, value}, or
+ * return null for non-tag entries (free-form feature strings).
+ */
+function parseCapabilityTag(s) {
+  if (typeof s !== 'string') return null;
+  const idx = s.indexOf(':');
+  if (idx <= 0) return null;
+  return { key: s.slice(0, idx), value: s.slice(idx + 1) };
+}
+
+/**
+ * Decide whether a process row's capability tags attribute it to a
+ * project. Order:
+ *   1. `git_root:<path>` exact match (preferred — git toplevels are
+ *      canonical and stable across subdir cwds).
+ *   2. `cwd:<path>` is inside or equal to project_root.
+ * Returns false when capabilities is missing or no tag matches.
+ *
+ * @param {string[]|null|undefined} capabilities
+ * @param {string} projectRoot
+ * @returns {boolean}
+ */
+function capabilitiesMatchProject(capabilities, projectRoot) {
+  if (!Array.isArray(capabilities) || !projectRoot) return false;
+  if (projectRoot === '(unknown)') return false;
+  const projN = normalizePath(projectRoot);
+  if (!projN) return false;
+  for (const tag of capabilities) {
+    const kv = parseCapabilityTag(tag);
+    if (!kv) continue;
+    if (kv.key === 'git_root' && normalizePath(kv.value) === projN) return true;
+    if (kv.key === 'cwd' && pathInsideOrEqual(kv.value, projectRoot)) return true;
+  }
+  return false;
+}
+
+/**
+ * Read every process row in this DB (all statuses, including DEAD —
+ * staleness is computed at render time). Used by the attribution
+ * resolver. Returns an empty array on missing table / error so
+ * the caller never has to special-case the unattributed path.
+ */
+function readAllProcessRowsForAttribution(db, tables) {
+  if (!db || !tables.has('processes')) return [];
+  try {
+    return db.prepare(`
+      SELECT agent_id, capabilities, status, last_heartbeat
+        FROM processes
+    `).all();
+  } catch (_e) { return []; }
+}
+
+/**
+ * Resolve the full set of agent_ids attributable to a project.
+ *
+ * Inputs:
+ *   - project = { project_root, agent_id_hints }
+ *
+ * Output: an array of unique agent_ids = hints ∪ {process.agent_id
+ * whose capabilities match project_root}. The order (hints first)
+ * is deterministic but not semantically meaningful — callers treat
+ * it as a set.
+ *
+ * Notes:
+ *   - When project_root is "(unknown)" or empty, only hints count
+ *     (capability matching requires a real path to compare against).
+ *   - DEAD-status sessions still attribute (the panel decides
+ *     whether to render them). This keeps the attribution surface
+ *     stable across heartbeat windows.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {{project_root:string, agent_id_hints?:string[]}} project
+ * @returns {string[]}
+ */
+function resolveProjectAgentIds(db, tables, project) {
+  const set = new Set();
+  const hints = (project && Array.isArray(project.agent_id_hints))
+    ? project.agent_id_hints
+    : [];
+  for (const h of hints) if (h) set.add(h);
+
+  const projectRoot = project && project.project_root ? project.project_root : '';
+  if (!projectRoot || projectRoot === '(unknown)') {
+    return [...set];
+  }
+  const rows = readAllProcessRowsForAttribution(db, tables);
+  for (const r of rows) {
+    let caps = null;
+    if (r.capabilities) {
+      try { caps = JSON.parse(r.capabilities); } catch (_e) { caps = null; }
+    }
+    if (capabilitiesMatchProject(caps, projectRoot)) set.add(r.agent_id);
+  }
+  return [...set];
+}
+
+/**
+ * Resolve the attributed-id union across every registered project
+ * pointing at `dbPath`. Used by the Unassigned bucket: anything in
+ * this DB that is NOT in this union is unassigned.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {Array<{project_root:string, db_path:string, agent_id_hints?:string[]}>} projects
+ * @param {string} dbPath
+ * @returns {Set<string>}
+ */
+function resolveAttributedAgentIdsForDb(db, tables, projects, dbPath) {
+  const out = new Set();
+  if (!Array.isArray(projects)) return out;
+  for (const p of projects) {
+    if (!p || p.db_path !== dbPath) continue;
+    for (const id of resolveProjectAgentIds(db, tables, p)) out.add(id);
+  }
+  return out;
+}
+
 module.exports = {
   queryProjectScopedSummary,
   queryUnassignedSummary,
@@ -719,4 +896,11 @@ module.exports = {
   STALE_GRACE_FACTOR,
   SUPPORTED_TABLES,
   PROJECT_TASKS_LIMIT,
+  // Attribution v2:
+  normalizePath,
+  pathInsideOrEqual,
+  parseCapabilityTag,
+  capabilitiesMatchProject,
+  resolveProjectAgentIds,
+  resolveAttributedAgentIdsForDb,
 };

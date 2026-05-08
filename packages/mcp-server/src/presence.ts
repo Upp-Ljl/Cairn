@@ -2,6 +2,37 @@ import type { Workspace } from './workspace.js';
 import { registerProcess, heartbeat } from '../../daemon/dist/storage/repositories/processes.js';
 
 /**
+ * Build the default `capabilities` tag set for a session's presence row.
+ *
+ * `processes.capabilities` is a JSON-encoded `string[]` (no schema
+ * change in this batch — see Real Agent Presence v2 plan §6). We
+ * encode session metadata as `key:value` strings inside that array so
+ * the desktop panel can attribute the row to a registered project
+ * without depending on agent_id alone.
+ *
+ * Tags emitted (production):
+ *   client:mcp-server
+ *   cwd:<process cwd>
+ *   git_root:<git toplevel of cwd, or cwd if not in a git repo>
+ *   pid:<process.pid>
+ *   host:<hostname>
+ *   session:<12-hex session suffix>
+ *
+ * The tags are descriptive only — they're never parsed by the daemon
+ * and have no effect on the `agent_id` PK or status enum.
+ */
+export function defaultPresenceCapabilities(ws: Workspace): string[] {
+  return [
+    'client:mcp-server',
+    `cwd:${ws.cwd}`,
+    `git_root:${ws.gitRoot}`,
+    `pid:${process.pid}`,
+    `host:${ws.host}`,
+    `session:${ws.sessionId}`,
+  ];
+}
+
+/**
  * Boot-time presence integration.
  *
  * When mcp-server starts, register the SESSION_AGENT_ID into the
@@ -43,7 +74,13 @@ export interface PresenceOptions {
   installBeforeExitHandler?: boolean;
   /** Override agent_type. Default 'mcp-server'. */
   agentType?: string;
-  /** Override capabilities. Default empty array. */
+  /**
+   * Extra `capabilities` tags appended to the system-managed defaults
+   * (client / cwd / git_root / pid / host / session — see
+   * defaultPresenceCapabilities). Pass an array of feature strings
+   * (e.g. `['scratch','rewind']`) and they'll be merged in alongside
+   * the attribution tags. Default: no extras.
+   */
   capabilities?: string[];
   /** Override heartbeat_ttl in ms. Default left to daemon repo (60_000). */
   heartbeatTtlMs?: number;
@@ -65,7 +102,15 @@ export function startPresence(
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
   const installBeforeExitHandler = opts.installBeforeExitHandler ?? true;
   const agentType = opts.agentType ?? 'mcp-server';
-  const capabilities = opts.capabilities ?? [];
+  // System-managed attribution tags + caller-provided extras.
+  // The system tags are how the desktop panel attributes a session to
+  // a registered project (see desktop-shell/project-queries.cjs); they
+  // are NOT optional in production. Tests that assert specific shapes
+  // should use `arrayContaining` instead of strict equality.
+  const capabilities = [
+    ...defaultPresenceCapabilities(ws),
+    ...(opts.capabilities ?? []),
+  ];
 
   // Boot-time register. INSERT OR REPLACE semantics on the daemon side
   // make this idempotent across mcp-server restarts: re-registering the

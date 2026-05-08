@@ -1,7 +1,7 @@
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import type { Database as DB } from 'better-sqlite3';
 import { openDatabase } from '../../daemon/dist/storage/db.js';
@@ -11,6 +11,12 @@ import { ALL_MIGRATIONS } from '../../daemon/dist/storage/migrations/index.js';
 export interface WorkspaceOpts {
   cwd?: string;
   cairnRoot?: string;
+  /**
+   * Override the random session id (e.g. for deterministic tests).
+   * Production code MUST NOT pass this — every mcp-server boot needs
+   * its own unique session.
+   */
+  sessionId?: string;
 }
 
 export interface Workspace {
@@ -18,29 +24,42 @@ export interface Workspace {
   cairnRoot: string;
   blobRoot: string;
   cwd: string;
+  /**
+   * Session-level identity, regenerated per mcp-server boot.
+   * Format: `cairn-session-<12hex>` (24 chars).
+   *
+   * History: prior to Real Agent Presence v2 this was a deterministic
+   * `cairn-<sha1(host:gitRoot).slice(0,12)>` (18 chars) — project-level
+   * stable. That made multiple terminal sessions in the same project
+   * collapse into a single processes row. Identity is now per-process.
+   * Project attribution lives in capabilities tags + registry hints.
+   */
   agentId: string;
+  /** Canonical git toplevel of `cwd`, falling back to `cwd` itself. */
+  gitRoot: string;
+  /** Random 12-hex session suffix (= the trailing chars of agentId). */
+  sessionId: string;
+  /** Hostname (cached at boot) — also surfaced in capabilities tags. */
+  host: string;
 }
 
-function computeAgentId(cwd: string): string {
-  // Canonicalize to git toplevel so subdirs of the same repo share an agentId.
-  // Falls back to raw cwd if not inside a git repo (or git unavailable).
-  let canonicalPath = cwd;
+function resolveGitRoot(cwd: string): string {
   try {
-    const topLevel = execSync('git rev-parse --show-toplevel', {
+    const top = execSync('git rev-parse --show-toplevel', {
       cwd,
       timeout: 1000,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    if (topLevel.length > 0) {
-      canonicalPath = topLevel;
-    }
+    if (top.length > 0) return top;
   } catch {
-    // Not a git repo or git not available — use raw cwd
+    // Not a git repo, git unavailable, or timeout — fall through.
   }
-  const raw = hostname() + ':' + canonicalPath;
-  const hash = createHash('sha1').update(raw).digest('hex');
-  return 'cairn-' + hash.slice(0, 12);
+  return cwd;
+}
+
+function newSessionId(): string {
+  return randomBytes(6).toString('hex'); // 12 hex chars
 }
 
 export function openWorkspace(opts: WorkspaceOpts = {}): Workspace {
@@ -52,7 +71,9 @@ export function openWorkspace(opts: WorkspaceOpts = {}): Workspace {
   const db = openDatabase(join(cairnRoot, 'cairn.db'));
   runMigrations(db, ALL_MIGRATIONS);
   const cwd = opts.cwd ?? process.cwd();
-  const agentId = computeAgentId(cwd);
+  const gitRoot = resolveGitRoot(cwd);
+  const sessionId = opts.sessionId ?? newSessionId();
+  const agentId = 'cairn-session-' + sessionId;
   process.env['CAIRN_SESSION_AGENT_ID'] = agentId;
   return {
     db,
@@ -60,5 +81,8 @@ export function openWorkspace(opts: WorkspaceOpts = {}): Workspace {
     blobRoot: cairnRoot,
     cwd,
     agentId,
+    gitRoot,
+    sessionId,
+    host: hostname(),
   };
 }
