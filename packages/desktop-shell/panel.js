@@ -67,6 +67,29 @@ function relTime(unixSec) {
   return `${Math.round(sec / 3600)}h ago`;
 }
 
+function relTimeMs(unixMs) {
+  if (!unixMs) return '?';
+  return relTime(Math.floor(unixMs / 1000));
+}
+
+function fmtClockMs(unixMs) {
+  if (!unixMs) return '—';
+  const d = new Date(unixMs);
+  // HH:MM:SS in local time. Run Log has tabular columns; this gives a
+  // consistent width without needing absolute dates for recent rows.
+  return d.toTimeString().slice(0, 8);
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 // ---------------------------------------------------------------------------
 // Renderers
 // ---------------------------------------------------------------------------
@@ -125,8 +148,140 @@ function renderSummary(summary) {
 }
 
 // ---------------------------------------------------------------------------
-// Tab switching (Day 1 = inert; Run Log / Tasks render Day 2)
+// Run Log + Tasks renderers (Day 2)
 // ---------------------------------------------------------------------------
+
+function renderRunLog(events) {
+  const el = document.getElementById('runlog-list');
+  if (!events || !events.length) {
+    el.innerHTML = '<div class="placeholder">no events yet — Cairn DB is quiet</div>';
+    return;
+  }
+  el.innerHTML = events.map(ev => {
+    const sevClass = `sev-${ev.severity || 'info'}`;
+    const tsLabel = fmtClockMs(ev.ts);
+    const msg = escapeHtml(ev.message || '');
+    const targetHint = ev.task_id
+      ? `<span style="color:#557">${escapeHtml(ev.task_id.slice(0, 14))}</span> · `
+      : '';
+    return (
+      `<div class="ev ${sevClass}">` +
+        `<span class="ts">${tsLabel}</span>` +
+        `<span class="src">${escapeHtml(ev.source)}</span>` +
+        `<span class="ty">${escapeHtml(ev.type)}</span>` +
+        `<span class="msg">${targetHint}${msg}</span>` +
+      `</div>`
+    );
+  }).join('');
+}
+
+// Persistent across polls so inline expansions survive 1s refreshes.
+let selectedTaskId = null;
+/** @type {Object|null} */
+let selectedTaskDetail = null;
+
+function renderTaskDetail(detail) {
+  if (!detail) return '<div class="tk-detail">detail unavailable</div>';
+  const t = detail.task;
+  const blockers = detail.blockers || [];
+  const latestOpen = blockers.find(b => b.status === 'OPEN') || null;
+  const latestAnswered = blockers.find(b => b.status === 'ANSWERED') || null;
+  const latest = latestOpen || latestAnswered || blockers[0] || null;
+  const out = detail.outcome;
+
+  const blockerPill = (() => {
+    if (detail.blockers_open_count > 0) {
+      return `<span class="pill warn">blocker OPEN ×${detail.blockers_open_count}</span>`;
+    }
+    if (blockers.length > 0) {
+      return `<span class="pill">blocker history ×${blockers.length}</span>`;
+    }
+    return '<span class="pill">no blockers</span>';
+  })();
+
+  const outcomePill = (() => {
+    if (!out) return '<span class="pill">no outcome</span>';
+    const cls =
+      out.status === 'PASS' ? 'ok' :
+      (out.status === 'FAIL' || out.status === 'TERMINAL_FAIL') ? 'error' :
+      out.status === 'PENDING' ? 'warn' : '';
+    return `<span class="pill ${cls}">outcome ${out.status} (${detail.outcome_criteria_count} criteria)</span>`;
+  })();
+
+  const blockerSummary = latest
+    ? `<div class="kv"><span class="k">latest blocker</span><span class="v">${escapeHtml(latest.status)} · ${escapeHtml(latest.question || '')}${latest.answer ? '<br><span style=\"color:#666\">→ ' + escapeHtml(latest.answer) + '</span>' : ''}</span></div>`
+    : '';
+
+  const outcomeSummary = out && out.status !== 'PENDING' && out.evaluation_summary
+    ? `<div class="kv"><span class="k">last evaluation</span><span class="v">${escapeHtml(out.evaluation_summary)}</span></div>`
+    : '';
+
+  return (
+    `<div class="tk-detail">` +
+      `<div style="margin-bottom:4px">${blockerPill}${outcomePill}</div>` +
+      `<div class="kv"><span class="k">task_id</span><span class="v">${escapeHtml(t.task_id)}</span></div>` +
+      (t.parent_task_id
+        ? `<div class="kv"><span class="k">parent</span><span class="v">${escapeHtml(t.parent_task_id)}</span></div>`
+        : '') +
+      `<div class="kv"><span class="k">created_by</span><span class="v">${escapeHtml(t.created_by_agent_id || '—')}</span></div>` +
+      `<div class="kv"><span class="k">created</span><span class="v">${relTimeMs(t.created_at)}</span></div>` +
+      `<div class="kv"><span class="k">updated</span><span class="v">${relTimeMs(t.updated_at)}</span></div>` +
+      blockerSummary +
+      outcomeSummary +
+    `</div>`
+  );
+}
+
+function renderTasks(tasks) {
+  const el = document.getElementById('tasks-list');
+  if (!tasks || !tasks.length) {
+    el.innerHTML = '<div class="placeholder">no tasks yet — start an MCP session and call cairn.task.create</div>';
+    return;
+  }
+  el.innerHTML = tasks.map(t => {
+    const isSelected = (t.task_id === selectedTaskId);
+    const stateCls = `s-${t.state}`;
+    const detailHtml = isSelected ? renderTaskDetail(selectedTaskDetail) : '';
+    const parentLabel = t.parent_task_id ? ` · ⤴ ${escapeHtml(t.parent_task_id.slice(0, 12))}` : '';
+    return (
+      `<div class="tk${isSelected ? ' selected' : ''}" data-task-id="${escapeHtml(t.task_id)}">` +
+        `<div class="tk-line">` +
+          `<span class="tk-state ${stateCls}">${escapeHtml(t.state)}</span>` +
+          `<span class="tk-intent">${escapeHtml(t.intent || '')}${parentLabel}</span>` +
+          `<span class="tk-meta">${relTimeMs(t.updated_at)}</span>` +
+        `</div>` +
+        detailHtml +
+      `</div>`
+    );
+  }).join('');
+
+  // Wire click handlers (rebuilt every render — cheap with ≤100 rows).
+  el.querySelectorAll('.tk').forEach(row => {
+    row.addEventListener('click', async () => {
+      const id = row.getAttribute('data-task-id');
+      if (selectedTaskId === id) {
+        // toggle: collapse
+        selectedTaskId = null;
+        selectedTaskDetail = null;
+      } else {
+        selectedTaskId = id;
+        selectedTaskDetail = null; // show the row immediately, populate on reply
+        try {
+          selectedTaskDetail = await window.cairn.getTaskDetail(id);
+        } catch (_e) { selectedTaskDetail = null; }
+      }
+      // Re-render Tasks tab once with new selection state.
+      renderTasks(lastTasks);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tab switching — track active tab so polling fetches only what's visible
+// ---------------------------------------------------------------------------
+
+let activeTab = 'runlog';
+let lastTasks = [];
 
 function setupTabs() {
   const tabs = document.querySelectorAll('.tab');
@@ -139,6 +294,9 @@ function setupTabs() {
       tabs.forEach(b => b.classList.toggle('active', b === btn));
       const target = btn.getAttribute('data-tab');
       Object.entries(views).forEach(([k, el]) => { el.hidden = (k !== target); });
+      activeTab = target;
+      // Force an immediate poll so the view doesn't sit empty for up to 1s.
+      poll().catch(() => {});
     });
   });
 }
@@ -188,12 +346,52 @@ function setupMenu() {
 
 async function poll() {
   try {
-    const [summary, dbPath] = await Promise.all([
-      window.cairn.getProjectSummary(),
-      window.cairn.getDbPath(),
+    // Always-on data
+    const summaryP = window.cairn.getProjectSummary();
+    const dbPathP  = window.cairn.getDbPath();
+
+    // Active-tab data (fetched in parallel; inactive tab keeps last render
+    // so switching to it shows previous data instantly while the next
+    // poll refreshes).
+    const eventsP = activeTab === 'runlog'
+      ? window.cairn.getRunLogEvents()
+      : Promise.resolve(null);
+    const tasksP = activeTab === 'tasks'
+      ? window.cairn.getTasksList()
+      : Promise.resolve(null);
+
+    // Refresh selected-task detail (if any) in parallel so inline
+    // expansion reflects fresh blocker/outcome state.
+    const detailP = selectedTaskId
+      ? window.cairn.getTaskDetail(selectedTaskId)
+      : Promise.resolve(null);
+
+    const [summary, dbPath, events, tasks, detail] = await Promise.all([
+      summaryP, dbPathP, eventsP, tasksP, detailP,
     ]);
+
     renderHeader(dbPath);
     renderSummary(summary);
+
+    if (events) renderRunLog(events);
+    if (tasks) {
+      lastTasks = tasks;
+      // Detail may have changed; refresh before render so inline shows fresh.
+      if (selectedTaskId) selectedTaskDetail = detail;
+      renderTasks(lastTasks);
+    } else if (selectedTaskId) {
+      // We're on Run Log tab but a previously-selected task is still
+      // expanded under Tasks. Update the detail in case Tasks tab gets
+      // reopened.
+      selectedTaskDetail = detail;
+    }
+
+    // Reset footer if it was showing an error
+    const footer = document.getElementById('footer');
+    if (footer.classList.contains('bad')) {
+      footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+      footer.classList.remove('bad');
+    }
   } catch (err) {
     const footer = document.getElementById('footer');
     footer.textContent = `poll error: ${err && err.message ? err.message : err}`;

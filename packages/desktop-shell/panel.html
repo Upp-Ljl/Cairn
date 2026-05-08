@@ -136,14 +136,104 @@
   #view-body {
     flex: 1 1 auto;
     overflow-y: auto;
-    padding: 8px 12px;
+    padding: 0;
   }
+  .view { padding: 0; }
   .placeholder {
     color: #555;
     font-style: italic;
-    padding: 24px 0;
+    padding: 24px 12px;
     text-align: center;
   }
+
+  /* Run Log rows */
+  .ev {
+    display: grid;
+    grid-template-columns: 70px 56px 64px 1fr;
+    column-gap: 8px;
+    padding: 3px 12px;
+    border-bottom: 1px solid #1e1e1e;
+    align-items: baseline;
+  }
+  .ev:nth-child(odd) { background: #161616; }
+  .ev .ts   { color: #666; font-variant-numeric: tabular-nums; }
+  .ev .src  { font-size: 0.78rem; color: #88a; text-transform: lowercase; }
+  .ev .ty   { font-size: 0.85rem; color: #aac; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev .msg  { color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev.sev-info  .src { color: #88a; }
+  .ev.sev-warn  { background: #1a1a0e; }
+  .ev.sev-warn:nth-child(odd)  { background: #1f1f10; }
+  .ev.sev-warn  .src, .ev.sev-warn  .ty { color: #ee7; }
+  .ev.sev-error { background: #1f0e0e; }
+  .ev.sev-error:nth-child(odd) { background: #240e0e; }
+  .ev.sev-error .src, .ev.sev-error .ty { color: #f88; }
+
+  /* Task list rows + inline expansion */
+  .tk {
+    padding: 5px 12px;
+    border-bottom: 1px solid #1e1e1e;
+    cursor: pointer;
+  }
+  .tk:hover { background: #181818; }
+  .tk.selected { background: #1d2233; }
+  .tk-line {
+    display: grid;
+    grid-template-columns: 110px 1fr 80px;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .tk-state {
+    font-size: 0.78rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-align: center;
+    background: #2a2a2a;
+    color: #aaa;
+  }
+  .tk-state.s-FAILED         { background: #3a1010; color: #f88; }
+  .tk-state.s-BLOCKED         { background: #3a2a10; color: #ec8; }
+  .tk-state.s-WAITING_REVIEW  { background: #2a2a4a; color: #aaf; }
+  .tk-state.s-RUNNING         { background: #1a3a1a; color: #7e7; }
+  .tk-state.s-READY_TO_RESUME { background: #1a3a3a; color: #7ee; }
+  .tk-state.s-DONE            { background: #1a2a1a; color: #5b5; }
+  .tk-state.s-CANCELLED       { background: #222; color: #666; }
+  .tk-intent {
+    color: #ddd;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tk-meta {
+    color: #666;
+    font-size: 0.85em;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tk-detail {
+    margin-top: 4px;
+    padding: 6px 0 4px;
+    border-top: 1px dashed #2a2a2a;
+    color: #aaa;
+    font-size: 0.92em;
+    line-height: 1.6;
+  }
+  .tk-detail .kv { display: grid; grid-template-columns: 110px 1fr; column-gap: 8px; }
+  .tk-detail .kv .k { color: #777; }
+  .tk-detail .kv .v { color: #ccc; word-break: break-word; }
+  .tk-detail .pill {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 2px;
+    font-size: 0.78rem;
+    margin-right: 4px;
+    background: #2a2a2a;
+    color: #aaa;
+  }
+  .tk-detail .pill.warn  { background: #3a2a10; color: #ec8; }
+  .tk-detail .pill.error { background: #3a1010; color: #f88; }
+  .tk-detail .pill.ok    { background: #1a3a1a; color: #7e7; }
 
   /* Status footer (DB unavailable banner etc.) */
   #footer {
@@ -186,10 +276,14 @@
 
   <div id="view-body">
     <div id="view-runlog" class="view">
-      <div class="placeholder">Run Log — Day 2 deliverable. Day 1 ships summary card only.</div>
+      <div id="runlog-list">
+        <div class="placeholder">loading…</div>
+      </div>
     </div>
     <div id="view-tasks" class="view" hidden>
-      <div class="placeholder">Tasks — Day 2 deliverable.</div>
+      <div id="tasks-list">
+        <div class="placeholder">loading…</div>
+      </div>
     </div>
   </div>
 
