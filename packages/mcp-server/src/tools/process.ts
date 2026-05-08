@@ -5,6 +5,7 @@ import {
   getProcess,
 } from '../../../daemon/dist/storage/repositories/processes.js';
 import type { Workspace } from '../workspace.js';
+import { defaultPresenceCapabilities, mergeCapabilities } from '../presence.js';
 
 // ---------------------------------------------------------------------------
 // Arg types
@@ -47,10 +48,28 @@ export function toolRegisterProcess(ws: Workspace, args: RegisterProcessArgs) {
         ? args.agent_type ?? 'session'
         : 'session';
 
+  // Capability resolution (Real Agent Presence v2):
+  //   - When the call targets THIS session's agent_id (i.e. the
+  //     mcp-server process registering itself, with or without an
+  //     explicit id), merge the system attribution tags
+  //     (defaultPresenceCapabilities) with whatever the caller passed.
+  //     This keeps `git_root:` / `cwd:` / `session:` etc. stable across
+  //     explicit `cairn.process.register` calls — without it, an agent
+  //     prompt that calls register({}) after boot would INSERT OR REPLACE
+  //     with capabilities=null and silently break desktop attribution.
+  //   - When the call targets a different agent_id (peer registration),
+  //     pass capabilities through as-is. This mcp-server doesn't speak
+  //     for that other process; making up tags for it would be wrong.
+  const isSelfRegistration = effectiveAgentId === ws.agentId;
+  const callerCaps = args.capabilities;
+  const effectiveCapabilities: string[] | null = isSelfRegistration
+    ? mergeCapabilities(defaultPresenceCapabilities(ws), callerCaps)
+    : (callerCaps ?? null);
+
   const input: Parameters<typeof registerProcess>[1] = {
     agentId: effectiveAgentId,
     agentType: effectiveAgentType,
-    capabilities: args.capabilities ?? null,
+    capabilities: effectiveCapabilities,
   };
   if (args.heartbeat_ttl !== undefined) {
     input.heartbeatTtl = args.heartbeat_ttl;

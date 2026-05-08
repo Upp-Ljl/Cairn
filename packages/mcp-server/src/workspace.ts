@@ -26,7 +26,7 @@ export interface Workspace {
   cwd: string;
   /**
    * Session-level identity, regenerated per mcp-server boot.
-   * Format: `cairn-session-<12hex>` (24 chars).
+   * Format: `cairn-session-<12hex>` (26 chars: 14-char prefix + 12 hex).
    *
    * History: prior to Real Agent Presence v2 this was a deterministic
    * `cairn-<sha1(host:gitRoot).slice(0,12)>` (18 chars) — project-level

@@ -110,7 +110,7 @@ const TOOLS = [
   },
   {
     name: 'cairn.process.register',
-    description: 'Register an agent on the process bus. Re-registering with the same agent_id resets the heartbeat timer. When omitted, agent_id defaults to the session id (sha1 of host+cwd) and agent_type defaults to "session".',
+    description: 'Register an agent on the process bus. Re-registering with the same agent_id resets the heartbeat timer. When omitted, agent_id defaults to the per-process SESSION_AGENT_ID (cairn-session-<12hex>) and agent_type defaults to "session". For self-registration (the default path), the system attribution tags (client / cwd / git_root / pid / host / session) are merged into capabilities so the desktop panel can attribute this session to a registered project; caller-provided capability strings are appended after the system tags.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -130,7 +130,7 @@ const TOOLS = [
   },
   {
     name: 'cairn.process.heartbeat',
-    description: 'Update last_heartbeat for the agent. Keeps the agent ACTIVE; reactivates a DEAD agent. When agent_id is omitted, defaults to the session id (sha1 of host+cwd).',
+    description: 'Update last_heartbeat for the agent. Keeps the agent ACTIVE; reactivates a DEAD agent. When agent_id is omitted, defaults to the per-process SESSION_AGENT_ID (cairn-session-<12hex>).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -153,7 +153,7 @@ const TOOLS = [
   },
   {
     name: 'cairn.process.status',
-    description: 'Get the current status of a specific agent by agent_id. When agent_id is omitted, defaults to the session id (sha1 of host+cwd).',
+    description: 'Get the current status of a specific agent by agent_id. When agent_id is omitted, defaults to the per-process SESSION_AGENT_ID (cairn-session-<12hex>).',
     inputSchema: {
       type: 'object',
       properties: {

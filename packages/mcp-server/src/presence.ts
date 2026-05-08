@@ -33,6 +33,30 @@ export function defaultPresenceCapabilities(ws: Workspace): string[] {
 }
 
 /**
+ * Merge two capability arrays preserving order (defaults first), with
+ * de-duplication on exact-string equality. Shared by:
+ *   - `startPresence` (boot-time + heartbeat re-registers)
+ *   - `toolRegisterProcess` for self-registration (cairn.process.register
+ *     called for ws.agentId — defaults must survive INSERT OR REPLACE)
+ * Non-string entries in `extras` are silently dropped.
+ */
+export function mergeCapabilities(
+  defaults: string[],
+  extras: string[] | null | undefined,
+): string[] {
+  if (!extras || extras.length === 0) return defaults.slice();
+  const seen = new Set<string>(defaults);
+  const out = defaults.slice();
+  for (const e of extras) {
+    if (typeof e !== 'string') continue;
+    if (seen.has(e)) continue;
+    seen.add(e);
+    out.push(e);
+  }
+  return out;
+}
+
+/**
  * Boot-time presence integration.
  *
  * When mcp-server starts, register the SESSION_AGENT_ID into the
@@ -107,10 +131,12 @@ export function startPresence(
   // a registered project (see desktop-shell/project-queries.cjs); they
   // are NOT optional in production. Tests that assert specific shapes
   // should use `arrayContaining` instead of strict equality.
-  const capabilities = [
-    ...defaultPresenceCapabilities(ws),
-    ...(opts.capabilities ?? []),
-  ];
+  // Same merge helper is reused by toolRegisterProcess for the
+  // self-registration path so the two paths can never disagree.
+  const capabilities = mergeCapabilities(
+    defaultPresenceCapabilities(ws),
+    opts.capabilities,
+  );
 
   // Boot-time register. INSERT OR REPLACE semantics on the daemon side
   // make this idempotent across mcp-server restarts: re-registering the

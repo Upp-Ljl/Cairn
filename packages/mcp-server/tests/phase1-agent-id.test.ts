@@ -353,3 +353,122 @@ describe('phase 1c — process tools auto-default when agent_id fully omitted', 
     expect(r.agent_id).toBe(ws.agentId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 1d — toolRegisterProcess preserves system attribution tags on self-register
+// ---------------------------------------------------------------------------
+//
+// Real Agent Presence v2 invariant: an explicit `cairn.process.register`
+// call MUST NOT clobber the system-managed attribution tags
+// (client / cwd / git_root / pid / host / session) when targeting the
+// session's own agent_id. Without this guarantee, the desktop panel's
+// project attribution (capability-tag based) silently breaks the
+// moment an agent prompt template calls register({}).
+
+describe('phase 1d — toolRegisterProcess preserves attribution tags on self-register', () => {
+  let cairnRoot: string;
+  let ws: Workspace;
+
+  beforeEach(() => {
+    cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-p1d-'));
+    ws = openWorkspace({ cairnRoot });
+  });
+
+  afterEach(() => {
+    ws.db.close();
+    rmSync(cairnRoot, { recursive: true, force: true });
+  });
+
+  it('boot-time presence sets attribution tags; later register({}) preserves them', async () => {
+    const { startPresence } = await import('../src/presence.js');
+    const { getProcess } = await import('../../daemon/dist/storage/repositories/processes.js');
+    const handle = startPresence(ws, { installBeforeExitHandler: false });
+    try {
+      const before = getProcess(ws.db, ws.agentId)!;
+      const requiredPrefixes = ['client:', 'cwd:', 'git_root:', 'pid:', 'host:', 'session:'];
+      for (const prefix of requiredPrefixes) {
+        expect(
+          before.capabilities!.some(c => typeof c === 'string' && c.startsWith(prefix)),
+        ).toBe(true);
+      }
+
+      // Now simulate the bug scenario: an agent prompt calls register({}) explicitly.
+      // Pre-fix this would INSERT OR REPLACE with capabilities=null and wipe tags.
+      toolRegisterProcess(ws, {});
+
+      const after = getProcess(ws.db, ws.agentId)!;
+      for (const prefix of requiredPrefixes) {
+        expect(
+          after.capabilities!.some(c => typeof c === 'string' && c.startsWith(prefix)),
+        ).toBe(true);
+      }
+      // Specifically: session id, git_root, host should match the workspace.
+      expect(after.capabilities).toEqual(
+        expect.arrayContaining([
+          `git_root:${ws.gitRoot}`,
+          `host:${ws.host}`,
+          `session:${ws.sessionId}`,
+        ]),
+      );
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('register({}) for the session agent merges system tags with caller-provided extras', () => {
+    toolRegisterProcess(ws, { capabilities: ['custom-feature', 'another'] });
+    const row = ws.db
+      .prepare('SELECT capabilities FROM processes WHERE agent_id = ?')
+      .get(ws.agentId) as { capabilities: string };
+    const caps = JSON.parse(row.capabilities) as string[];
+    // System tags survive:
+    expect(caps).toEqual(
+      expect.arrayContaining([
+        `git_root:${ws.gitRoot}`,
+        `cwd:${ws.cwd}`,
+        `session:${ws.sessionId}`,
+      ]),
+    );
+    // Caller extras present:
+    expect(caps).toEqual(expect.arrayContaining(['custom-feature', 'another']));
+  });
+
+  it('register for a peer agent_id does NOT inherit ws system tags', () => {
+    // Registering some OTHER agent — we should not synthesize attribution
+    // tags for a process we don't represent. capabilities passes through.
+    const peerId = 'peer-agent-different';
+    toolRegisterProcess(ws, {
+      agent_id: peerId,
+      agent_type: 'worker',
+      capabilities: ['feature-x'],
+    });
+    const row = ws.db
+      .prepare('SELECT capabilities FROM processes WHERE agent_id = ?')
+      .get(peerId) as { capabilities: string };
+    const caps = JSON.parse(row.capabilities) as string[];
+    expect(caps).toEqual(['feature-x']);
+    // ws's system tags must NOT be present — that would be misattribution.
+    expect(caps.some(c => typeof c === 'string' && c.startsWith('git_root:'))).toBe(false);
+    expect(caps.some(c => typeof c === 'string' && c.startsWith('session:'))).toBe(false);
+  });
+
+  it('register({}) is idempotent — system tags don\'t duplicate across repeated calls', () => {
+    toolRegisterProcess(ws, {});
+    toolRegisterProcess(ws, {});
+    toolRegisterProcess(ws, {});
+    const row = ws.db
+      .prepare('SELECT capabilities FROM processes WHERE agent_id = ?')
+      .get(ws.agentId) as { capabilities: string };
+    const caps = JSON.parse(row.capabilities) as string[];
+    // Each system-tag prefix appears at most once.
+    const counts = new Map<string, number>();
+    for (const c of caps) {
+      if (typeof c !== 'string') continue;
+      const prefix = c.split(':')[0];
+      counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+    }
+    for (const prefix of ['client', 'cwd', 'git_root', 'pid', 'host', 'session']) {
+      expect(counts.get(prefix) ?? 0).toBeLessThanOrEqual(1);
+    }
+  });
+});
