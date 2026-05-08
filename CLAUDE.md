@@ -10,6 +10,37 @@ Cairn 是**主机级多 agent 协作内核**（host-level multi-agent coordinati
 
 W5 引入的 Task Capsule 是 Cairn 管理的一类 durable work item（`tasks` + `blockers` + `outcomes` 三表组合），是 OS primitive 之一，**不是** Cairn 本身——Cairn 不会因为加了 Task Capsule 就变成 task manager。任何文档 / commit message / pitch 写作都按这个 framing。完整 positioning 见 PRODUCT.md §0；不要漂回"Agent OS / solo task daemon / lead-subagent orchestrator"等模糊或错误措辞。
 
+## Agent Work Rules
+
+Claude 在本仓库工作时必须遵守的规则。新会话上来先读这一节，再做任何动作。
+
+### Gates
+
+- **多阶段 / >30min 任务先写 checklist**。开工前先写 ≤5 行验收 checklist：目标 / 不变量 / 验证命令或 dogfood / 不做什么 / 完成标准。结束时逐项自评，未达标先修。
+- **改 IPC / 跨进程 / SQLite state / desktop-shell / DSL eval / MCP tool / filesystem 行为时，单测绿不算完成**。必须跑真实 dogfood 或 smoke，并在报告里给出具体命令与结果。Day-by-day plan 实施同此约束。
+- **写 docs / pitch / README / PRODUCT / PR 描述前自检定位漂移**：是否把 Cairn 写成 agent / Cursor clone / Jira clone / task daemon / orchestrator / plain MCP service？命中任一则先改再交付。canonical 定位见 PRODUCT.md §0 / §1.3。
+
+### Decision Rules
+
+- **可逆 / 局部 / 5 分钟内能撤销**的实现细节由 agent 自决，但需在最终报告里说明（哪些选择 / 为什么）。
+- **不可逆 / 影响 git 历史 / 外部系统 / 产品定位 / 安全边界 / license / release / push** 的决策必须**先问用户**。包括：force push / amend 已 push commit / 改 origin / 删 branch / 改 LICENSE / 打 tag / npm publish / 改 PRODUCT.md / 改反定义 / 引入新 npm dep。
+
+### Delegation Rules
+
+- 开工前判断**读写集**。读任务可并行（多 subagent / Read 并发）；写任务只有**文件集合不重叠**时才能并行。
+- **关键路径上的阻塞任务不交给 subagent 等结果**——主 agent 自己做关键路径。subagent 用于：独立调研、并行读、辅助 schema check、并行测试 / smoke 验证、文档审计。
+- subagent 报告必须包含：**修改了哪些文件、运行了哪些命令、测试结果、残余风险**。主 agent 接到报告后必须验证（trust but verify），不能直接转述。
+
+### Reporting Rules
+
+- 交付代码或文档时，**先列关键文件路径和 commit hash**，再解释内容。
+- 报告必须明确：
+  - 测试是否跑过 + 命令 + 结果
+  - dogfood 是否跑过 + 哪个脚本 + 结果
+  - **是否 push**（默认未 push）
+  - **是否触碰 unrelated dirty files**（默认不碰）
+- 不模糊用词："已完成"必须有验证证据；"应该可以"不算交付。
+
 ## 新会话起手入口
 
 不熟悉 repo 的新 session：先读 `README.md`（30 秒上手）→ `PRODUCT.md` §0 + §1（定位 + 反定义）→ `ARCHITECTURE.md` §1+§4（系统图 + state objects）→ 当前活跃 plan（`docs/superpowers/plans/2026-05-28-w5-phase4-closure.md` 或下一个）。Phase 1+2+3 demo 证据见 `docs/superpowers/demos/README.md`。再回头读本文（CLAUDE.md）拿 push / TLS / 测试命令等本地约定。
