@@ -187,8 +187,27 @@ function renderSummary(summary) {
     return;
   }
 
-  setSummaryCell(document.getElementById('s-agents'),
-    summary.agents_active);
+  // L2 active-agents cell: show "MCP X · Claude Y" when any Claude is
+  // attributed to this project, otherwise just the MCP count. The cell
+  // CSS expects a number-or-"—" — for the dual-source case we put the
+  // composite string and add the same severity classes manually.
+  const sAgents = document.getElementById('s-agents');
+  const mcpCount = summary.agents_active || 0;
+  const claudeBusy = summary.claude_busy || 0;
+  const claudeIdle = summary.claude_idle || 0;
+  const claudeLive = claudeBusy + claudeIdle;
+  if (claudeLive > 0 || (summary.claude_total || 0) > 0) {
+    sAgents.classList.remove('zero', 'warn', 'alert');
+    sAgents.innerHTML =
+      `<span class="${mcpCount === 0 ? 'zero' : ''}">MCP ${mcpCount}</span>` +
+      `<span style="color:#445;padding:0 4px">·</span>` +
+      `<span class="${claudeLive === 0 ? 'zero' : ''}">Claude ${claudeLive}</span>` +
+      ((summary.claude_dead || 0) > 0
+        ? ` <span style="color:#666;font-size:0.85em">(+${summary.claude_dead} dead)</span>`
+        : '');
+  } else {
+    setSummaryCell(sAgents, mcpCount);
+  }
 
   // tasks: present three numbers in one cell, color by worst (alert if any FAIL,
   // warn if blocked/review, zero otherwise).
@@ -1012,9 +1031,26 @@ function renderProjectCard(p) {
   const s = p.summary || {};
   const state = s.health || 'idle';
   const dbBasename = shortBasename(p.db_path) + (p.db_path.includes('.cairn') ? ' (.cairn)' : '');
+  // Agents row shows MCP and Claude counts side by side when any Claude
+  // session attributes here. Format: "agents MCP X (+Y stale) · Claude B/I"
+  // — dropping the Claude segment entirely when claude_total is 0 keeps
+  // the card uncluttered for users without Claude.
+  const claudeTotal = s.claude_total || 0;
+  const claudeBusy  = s.claude_busy  || 0;
+  const claudeIdle  = s.claude_idle  || 0;
+  const claudeDead  = s.claude_dead  || 0;
+  let agentsCell =
+    `agents <span style="color:#778;font-size:0.86em">MCP</span> ${countCell(s.agents_active, 'idle')}` +
+    (s.agents_stale ? `<span style="color:#888;font-size:0.85em">(+${s.agents_stale} stale)</span>` : '');
+  if (claudeTotal > 0) {
+    agentsCell +=
+      `<span class="sep">·</span>` +
+      `<span style="color:#778;font-size:0.86em">Claude</span> ` +
+      `${countCell(claudeBusy + claudeIdle, claudeBusy + claudeIdle === 0 ? 'idle' : '')}` +
+      (claudeDead ? `<span style="color:#888;font-size:0.85em">(+${claudeDead} dead)</span>` : '');
+  }
   const counts =
-    `agents ${countCell(s.agents_active, 'idle')}` +
-    (s.agents_stale ? `(+${s.agents_stale} stale)` : '') +
+    agentsCell +
     `<span class="sep">·</span>` +
     `tasks ${countCell(s.tasks_running, '')} / ${countCell(s.tasks_blocked, 'warn')} / ${countCell(s.tasks_waiting_review, 'warn')}` +
     `<span class="sep">·</span>` +
@@ -1050,8 +1086,13 @@ function renderProjectCard(p) {
 
 function renderUnassignedCard(u) {
   const total = u.total_rows || 0;
+  const claudeTotal = u.claude_total || 0;
   const sub =
-    `agents ${u.agents}` +
+    `agents <span style="color:#778;font-size:0.86em">MCP</span> ${u.agents}` +
+    (claudeTotal > 0
+      ? `<span class="sep">·</span><span style="color:#778;font-size:0.86em">Claude</span> ${(u.claude_busy || 0) + (u.claude_idle || 0)}`
+        + ((u.claude_dead || 0) ? `<span style="color:#888;font-size:0.85em">(+${u.claude_dead} dead)</span>` : '')
+      : '') +
     `<span class="sep">·</span>tasks ${u.tasks}` +
     `<span class="sep">·</span>block ${u.blockers}` +
     `<span class="sep">·</span>outcome ${u.outcomes}` +

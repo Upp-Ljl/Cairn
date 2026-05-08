@@ -94,32 +94,48 @@ console.log('==> Part A: synthetic fixture');
 const projInside  = process.platform === 'win32' ? 'C:\\fake\\projects\\cairn'  : '/fake/projects/cairn';
 const projOther   = process.platform === 'win32' ? 'C:\\fake\\projects\\other'  : '/fake/projects/other';
 
-// We pin a deterministic clock so the stale-by-age case is unambiguous.
-const NOW       = 1_800_000_000_000; // arbitrary fixed wallclock for normalization
+// Deterministic clock for status derivation tests. Note: status no
+// longer depends on `updatedAt` age — stale-by-age was removed when we
+// realized Claude only refreshes `updatedAt` on activity, so a quiet
+// pid-alive session is genuinely just busy/idle, not stale.
+const NOW       = 1_800_000_000_000;
 const FRESH_AT  = NOW - 10_000;      // 10 s ago
-const STALE_AT  = NOW - 5 * 60_000;  // 5 min ago — well past STALE_THRESHOLD_MS
+const OLD_AT    = NOW - 5 * 60_000;  // 5 min ago — exercises the "old but alive" path
 
 const sessionsDir = uniqTmpDir('sessions');
 
-// 1. busy inside project
+// 1. busy inside project (fresh updatedAt)
 const busyFile = writeSessionFile(sessionsDir, '11111.json', {
   pid: ALIVE_PID, sessionId: 'busy-uuid-aaaa-bbbb-cccc-dddd', cwd: projInside,
   startedAt: NOW - 60_000, version: '2.1.133', kind: 'interactive',
   entrypoint: 'cli', status: 'busy', updatedAt: FRESH_AT,
 });
 
-// 2. idle inside project
+// 2. idle inside project (fresh updatedAt)
 const idleFile = writeSessionFile(sessionsDir, '22222.json', {
   pid: ALIVE_PID, sessionId: 'idle-uuid-aaaa-bbbb-cccc-dddd', cwd: projInside,
   startedAt: NOW - 60_000, version: '2.1.133', kind: 'interactive',
   entrypoint: 'cli', status: 'idle', updatedAt: FRESH_AT,
 });
 
-// 3. stale (alive pid, ancient updatedAt) inside project
-const staleFile = writeSessionFile(sessionsDir, '33333.json', {
-  pid: ALIVE_PID, sessionId: 'stale-uuid-aaaa-bbbb-cccc-dddd', cwd: projInside,
+// 3. alive pid + ancient updatedAt + status=idle.
+//    Earlier draft promoted this to "stale". New rule: trust Claude's
+//    status verbatim while pid is alive. This row must surface as IDLE,
+//    not stale, so a user keeping a quiet Claude terminal open between
+//    turns doesn't see the panel mark it stale.
+const oldIdleFile = writeSessionFile(sessionsDir, '33333.json', {
+  pid: ALIVE_PID, sessionId: 'oldid-uuid-aaaa-bbbb-cccc-dddd', cwd: projInside,
   startedAt: NOW - 60_000, version: '2.1.133', kind: 'interactive',
-  entrypoint: 'cli', status: 'busy', updatedAt: STALE_AT,
+  entrypoint: 'cli', status: 'idle', updatedAt: OLD_AT,
+});
+
+// 3b. alive pid + ancient updatedAt + status=busy. Same rule — trust
+//     Claude verbatim. (Real-world: a long-running tool call where Claude
+//     wrote `busy` and hasn't refreshed updatedAt yet.)
+const oldBusyFile = writeSessionFile(sessionsDir, '33334.json', {
+  pid: ALIVE_PID, sessionId: 'oldbz-uuid-aaaa-bbbb-cccc-dddd', cwd: projInside,
+  startedAt: NOW - 60_000, version: '2.1.133', kind: 'interactive',
+  entrypoint: 'cli', status: 'busy', updatedAt: OLD_AT,
 });
 
 // 4. dead pid (file says busy, but pid is gone)
@@ -142,29 +158,33 @@ const outsideFile = writeSessionFile(sessionsDir, '66666.json', {
 const rows = adapter.scanClaudeSessions({ sessionsDir, now: NOW });
 console.log(`  scanned ${rows.length} rows from ${sessionsDir}`);
 
-// Skip-not-crash: malformed file is parsed-then-dropped. We expect 5 valid
-// rows (1..4 + 6); the malformed file (#5) silently disappears.
-eq(rows.length, 5, 'malformed JSON is skipped silently → 5 valid rows');
+// Skip-not-crash: malformed file is parsed-then-dropped. We expect 6 valid
+// rows (1, 2, 3, 3b, 4, 6); the malformed file (#5) silently disappears.
+eq(rows.length, 6, 'malformed JSON is skipped silently → 6 valid rows');
 
-const byPid = new Map(rows.map(r => [r.pid, r]));
-const busy   = byPid.get(ALIVE_PID) ? rows.find(r => r.session_id?.startsWith('busy'))   : null;
-const idle   = rows.find(r => r.session_id?.startsWith('idle'));
-const stale  = rows.find(r => r.session_id?.startsWith('stale'));
-const dead   = rows.find(r => r.session_id?.startsWith('dead'));
+const busy    = rows.find(r => r.session_id?.startsWith('busy'));
+const idle    = rows.find(r => r.session_id?.startsWith('idle'));
+const oldIdle = rows.find(r => r.session_id?.startsWith('oldid'));
+const oldBusy = rows.find(r => r.session_id?.startsWith('oldbz'));
+const dead    = rows.find(r => r.session_id?.startsWith('dead'));
 const outside = rows.find(r => r.session_id?.startsWith('outsd'));
 
 ok(!!busy,    'busy row present');
 ok(!!idle,    'idle row present');
-ok(!!stale,   'stale row present');
+ok(!!oldIdle, 'old-idle row present');
+ok(!!oldBusy, 'old-busy row present');
 ok(!!dead,    'dead row present');
 ok(!!outside, 'outside row present');
 
-// ---- Status derivation ----
+// ---- Status derivation: pid alive → preserve Claude's status verbatim ----
 eq(busy?.status,  'busy',  'busy row → status=busy');
 eq(idle?.status,  'idle',  'idle row → status=idle');
-eq(stale?.status, 'stale', 'stale row → status=stale');
-eq(stale?.stale_reason, 'updated_too_old', 'stale row → stale_reason=updated_too_old');
-ok(stale?.raw_status === 'busy', 'stale row preserves raw_status="busy"');
+// THE FIX: alive pid + old updatedAt + idle → still idle (was 'stale' in v1)
+eq(oldIdle?.status, 'idle', 'alive pid + old updatedAt + idle → status=idle (NOT stale)');
+ok(!oldIdle?.stale_reason, 'old-idle has no stale_reason (pid is alive, status is recognized)');
+ok(!oldIdle?.raw_status,   'old-idle does not set raw_status (no promotion happened)');
+eq(oldBusy?.status, 'busy', 'alive pid + old updatedAt + busy → status=busy (NOT stale)');
+ok(oldIdle?.age_ms > 60_000, 'old-idle still exposes age_ms (≈ 5min) for "last active" UI');
 eq(dead?.status,  'dead',  'dead row → status=dead');
 eq(dead?.stale_reason,  'pid_not_alive', 'dead row → stale_reason=pid_not_alive');
 eq(outside?.status, 'busy', 'outside row → status=busy (outside is independent of attribution)');
@@ -180,14 +200,15 @@ const projUnknown   = { project_root: '(unknown)' };
 
 ok( adapter.attributeClaudeSessionToProject(busy,    projInsideObj), 'busy attributed to inside project');
 ok( adapter.attributeClaudeSessionToProject(idle,    projInsideObj), 'idle attributed to inside project');
-ok( adapter.attributeClaudeSessionToProject(stale,   projInsideObj), 'stale attributed to inside project');
+ok( adapter.attributeClaudeSessionToProject(oldIdle, projInsideObj), 'old-idle attributed to inside project');
+ok( adapter.attributeClaudeSessionToProject(oldBusy, projInsideObj), 'old-busy attributed to inside project');
 ok( adapter.attributeClaudeSessionToProject(dead,    projInsideObj), 'dead attributed to inside project (state ≠ attribution)');
 ok(!adapter.attributeClaudeSessionToProject(outside, projInsideObj), 'outside NOT attributed to inside project');
 ok(!adapter.attributeClaudeSessionToProject(busy,    projUnknown),   '"(unknown)" project root never matches');
 
 // partition + unassigned helpers
 const { matched, rest } = adapter.partitionByProject(rows, projInsideObj);
-eq(matched.length, 4, 'partitionByProject: 4 rows match inside project (busy/idle/stale/dead)');
+eq(matched.length, 5, 'partitionByProject: 5 rows match inside project (busy/idle/old-idle/old-busy/dead)');
 eq(rest.length,    1, 'partitionByProject: 1 row remains (outside)');
 
 const unattributed = adapter.unassignedClaudeSessions(rows, [projInsideObj]);
@@ -196,6 +217,20 @@ ok(unattributed[0].session_id.startsWith('outsd'), 'unassigned row is the outsid
 
 const unattributedBoth = adapter.unassignedClaudeSessions(rows, [projInsideObj, projOtherObj]);
 eq(unattributedBoth.length, 0, 'with both projects registered, nothing is unassigned');
+
+// ---- summarizeClaudeRows (powers L1 cards + tray tooltip) ----
+const projSummary = adapter.summarizeClaudeRows(matched);
+eq(projSummary.busy,  2, 'summarize: 2 busy rows attributed to inside project (busy + old-busy)');
+eq(projSummary.idle,  2, 'summarize: 2 idle rows attributed to inside project (idle + old-idle)');
+eq(projSummary.dead,  1, 'summarize: 1 dead row attributed to inside project');
+eq(projSummary.total, 5, 'summarize: 5 total attributed rows');
+ok(projSummary.last_activity_at >= FRESH_AT,
+   'summarize: last_activity_at picks up the freshest row');
+const emptySummary = adapter.summarizeClaudeRows([]);
+eq(emptySummary.total, 0, 'summarize: empty input → all-zero summary');
+eq(emptySummary.last_activity_at, 0, 'summarize: empty input → last_activity_at=0');
+const messySummary = adapter.summarizeClaudeRows([null, undefined, { status: 'busy', updated_at: NOW }]);
+eq(messySummary.busy, 1, 'summarize: tolerates null/undefined entries without throwing');
 
 // ---- Path normalization edge: cwd inside subdir ----
 const subdir = path.join(projInside, 'packages', 'daemon', 'src');

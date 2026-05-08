@@ -48,16 +48,30 @@ const os = require('os');
 const projectQueries = require('../project-queries.cjs');
 
 // ---------------------------------------------------------------------------
-// Tunables (no UI; live in code so the adapter has one knob to grep for)
+// Status semantics (no tunables — Claude updatedAt is "last activity",
+// not a heartbeat, so age does NOT promote a row to stale)
 // ---------------------------------------------------------------------------
-
-/**
- * STALE threshold. If `now - updatedAt > STALE_THRESHOLD_MS` we override
- * the file's `status` with `stale`, regardless of whether Claude wrote
- * "busy" or "idle". Picked at 90s (≈ Cairn MCP heartbeat ttl × 1.5);
- * tunable here, not exposed to UI per scope rules.
- */
-const STALE_THRESHOLD_MS = 90 * 1000;
+//
+// Earlier draft promoted any row with `now - updatedAt > 90s` to `stale`.
+// That was wrong: Claude only refreshes updatedAt on actual session
+// activity (turn / tool use). An idle terminal that the user is keeping
+// open between turns will go quiet for minutes at a time and is not
+// stale in any user-meaningful sense — its pid is alive and the file's
+// `status` (busy/idle) reflects what Claude wants the user to see.
+//
+// Current rule:
+//   1. no pid                           → unknown
+//   2. pid does not exist on this box   → dead
+//   3. pid alive + recognized status    → busy / idle verbatim
+//   4. pid alive + unknown status       → unknown
+//
+// `'stale'` is kept in the status union as a reserved value for a future
+// explicit rule (e.g. "Claude updatedAt is older than the file's own mtime
+// by N hours" → file is wedged). It is never produced today.
+//
+// The user-facing "last active" timeline is rendered from `updated_at` /
+// `age_ms` in the UI — those fields are still emitted so the panel can
+// say "BUSY · last active 8m ago" without lying about the row's state.
 
 const SOURCE = 'claude-code/session-file';
 const CONFIDENCE = 'medium-high';
@@ -165,15 +179,19 @@ function readSessionFile(filePath, now) {
  * Split out so the adapter is unit-testable without touching the disk.
  *
  * Status precedence (highest first):
- *   1. dead   — pid does not exist on this box (process.kill(pid,0) ESRCH)
- *   2. stale  — updatedAt is older than STALE_THRESHOLD_MS
+ *   1. unknown — pid field missing / not an integer
+ *   2. dead    — pid does not exist on this box (process.kill(pid,0) ESRCH)
  *   3. busy / idle — verbatim from the file
- *   4. unknown— file did not provide a recognizable status string
+ *   4. unknown — pid alive but status is not "busy" or "idle"
  *
- * Even when we promote to dead/stale we preserve the original Claude-side
- * value as `raw_status`, so callers can render "stale (was busy)" if
- * useful. `stale_reason` is a short tag explaining why we promoted —
- * "pid_not_alive" / "updated_too_old" / "no_pid".
+ * `updated_at` does NOT influence status — Claude only refreshes it on
+ * activity, so a quiet pid-alive session is genuinely just busy/idle, not
+ * stale. We surface `updated_at` + `age_ms` separately so the UI can say
+ * "BUSY · last active 12m ago".
+ *
+ * `stale_reason` is now only set for the non-busy/idle paths
+ * (`no_pid` for case 1, `pid_not_alive` for case 2). Field reserved on
+ * the row type so a future explicit-stale rule has a place to land.
  *
  * @param {object} parsed
  * @param {{file:string, now:number}} ctx
@@ -201,15 +219,16 @@ function normalizeRow(parsed, ctx) {
     if (liveness === 'dead') {
       status = 'dead';
       staleReason = 'pid_not_alive';
-    } else if (ageMs != null && ageMs > STALE_THRESHOLD_MS) {
-      status = 'stale';
-      staleReason = 'updated_too_old';
     } else if (rawStatus === 'busy' || rawStatus === 'idle') {
+      // Pid alive + Claude wrote a value we recognize → trust it
+      // verbatim, regardless of how long ago `updatedAt` was. Claude
+      // updates that field only on activity, so an old `updatedAt`
+      // is information about cadence, not state.
       status = rawStatus;
     } else {
-      // Unknown raw status (Claude introduced a new state we don't model
-      // yet) but pid is alive — render as idle so the row still surfaces
-      // without panicking the user.
+      // Pid alive but Claude wrote a new status string we don't model
+      // yet (e.g. some future "compacting"). Surface as unknown so the
+      // user sees the row but no inference is implied.
       status = 'unknown';
     }
   }
@@ -349,14 +368,37 @@ function unassignedClaudeSessions(rows, projects) {
   });
 }
 
+/**
+ * Bucket a row list by status. Used by L1 project cards + tray to fold
+ * Claude rows into the per-project / global summary without reaching into
+ * row internals at the renderer level. Returns plain ints (zeros included)
+ * so callers can safely do arithmetic.
+ *
+ * Keys mirror the status union: busy / idle / dead / unknown / stale.
+ * `total` is the sum across all buckets.
+ *
+ * @param {ClaudeSessionRow[]} rows
+ * @returns {{busy:number, idle:number, dead:number, unknown:number, stale:number, total:number, last_activity_at:number}}
+ */
+function summarizeClaudeRows(rows) {
+  const out = { busy: 0, idle: 0, dead: 0, unknown: 0, stale: 0, total: 0, last_activity_at: 0 };
+  if (!Array.isArray(rows)) return out;
+  for (const r of rows) {
+    const s = (r && r.status) || 'unknown';
+    if (s in out) out[s]++;
+    out.total++;
+    if (Number.isFinite(r && r.updated_at) && r.updated_at > out.last_activity_at) {
+      out.last_activity_at = r.updated_at;
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
 module.exports = {
-  // Constants (testing exposes these so smoke can build deterministic
-  // updated_at timestamps relative to the threshold).
-  STALE_THRESHOLD_MS,
   SOURCE,
   CONFIDENCE,
   // Path helpers (exposed for smoke).
@@ -370,4 +412,5 @@ module.exports = {
   attributeClaudeSessionToProject,
   partitionByProject,
   unassignedClaudeSessions,
+  summarizeClaudeRows,
 };

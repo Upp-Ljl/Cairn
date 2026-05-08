@@ -508,14 +508,18 @@ function refreshTray() {
   // shouldn't drive the tray to alert just because random untagged
   // rows exist in the DB).
   let worst = 'idle';
-  let totalAgents = 0, totalBlockers = 0, totalFail = 0, totalConflicts = 0;
+  let mcpAgents = 0, totalBlockers = 0, totalFail = 0, totalConflicts = 0;
   let aggAvailable = false;
+
+  // Single Claude scan for the whole tray refresh — partitioned per
+  // project below so the tooltip shows attributed Claude session count.
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+  let claudeAttributed = 0;
 
   for (const p of reg.projects) {
     const entry = ensureDbHandle(p.db_path);
     if (!entry) continue;
     aggAvailable = true;
-    // Real Agent Presence v2: attribution = hints ∪ capability matches.
     const agentIds = projectQueries.resolveProjectAgentIds(
       entry.db, entry.tables, p,
     );
@@ -524,15 +528,22 @@ function refreshTray() {
     );
     if (s.health === 'alert') worst = 'alert';
     else if (s.health === 'warn' && worst !== 'alert') worst = 'warn';
-    totalAgents    += s.agents_active;
+    mcpAgents      += s.agents_active;
     totalBlockers  += s.blockers_open;
     totalFail      += s.outcomes_failed + s.tasks_failed;
     totalConflicts += s.conflicts_open;
+
+    const { matched } = claudeSessionScan.partitionByProject(claudeAll, p);
+    const c = claudeSessionScan.summarizeClaudeRows(matched);
+    // Tray "agents" = busy + idle Claude sessions (presence). Dead/unknown
+    // are not surfaced in the tooltip — they don't represent live work.
+    claudeAttributed += c.busy + c.idle;
   }
 
   // Fallback: no registry projects — show legacy queryProjectSummary
   // against the default DB so the tray is still meaningful for users
-  // who haven't configured anything yet.
+  // who haven't configured anything yet. Claude rows still surface
+  // (claudeAttributed remains 0; show the global busy+idle instead).
   if (!aggAvailable) {
     const fallbackEntry = activeDbEntry();
     if (fallbackEntry) {
@@ -540,11 +551,16 @@ function refreshTray() {
         fallbackEntry.db, fallbackEntry.tables, activeDbPath(),
       );
       worst = deriveTrayState(s);
-      totalAgents    = s.agents_active;
+      mcpAgents      = s.agents_active;
       totalBlockers  = s.blockers_open;
       totalFail      = s.outcomes_failed;
       totalConflicts = s.conflicts_open;
       aggAvailable   = s.available;
+      // Without registered projects, surface global Claude live count
+      // so the tooltip is non-empty when the user has only Claude.
+      const cAll = claudeSessionScan.summarizeClaudeRows(claudeAll);
+      claudeAttributed = cAll.busy + cAll.idle;
+      if (claudeAttributed > 0) aggAvailable = true;
     }
   }
 
@@ -556,9 +572,10 @@ function refreshTray() {
   if (!aggAvailable) {
     tray.setToolTip('Cairn — DB unavailable');
   } else {
+    const claudePart = claudeAttributed > 0 ? ` + ${claudeAttributed} Claude` : '';
     tray.setToolTip(
-      `Cairn — ${totalAgents} agents · ${totalBlockers} blockers · ` +
-      `${totalFail} FAIL · ${totalConflicts} conflicts`,
+      `Cairn — ${mcpAgents} MCP${claudePart} · ` +
+      `${totalBlockers} blockers · ${totalFail} FAIL · ${totalConflicts} conflicts`,
     );
   }
 }
@@ -587,8 +604,23 @@ function createTray() {
 /**
  * Build the L1 Projects-list payload: per-project scoped summary +
  * one Unassigned bucket per unique db_path.
+ *
+ * Real Agent Presence step 2: Claude Code session-file rows are folded
+ * into each project's summary (and the unassigned bucket) so the L1 card
+ * can show "agents MCP X · Claude Y" without the panel needing to make
+ * a second IPC round-trip. Claude rows do not impersonate MCP rows: the
+ * counts go into separate `claude_*` fields, never into `agents_active`.
+ *
+ * `last_activity_at` for a project incorporates Claude updated_at too,
+ * so the L1 "last activity 8m ago" line stays accurate when only Claude
+ * was active.
  */
 function getProjectsList() {
+  // One scan per IPC call. Each row is a small JSON read; cost is
+  // dominated by directory enumeration, which is bounded by the number
+  // of live Claude sessions (typically < 10). No caching needed yet.
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+
   const projects = reg.projects.map(p => {
     const entry = ensureDbHandle(p.db_path);
     if (!entry) {
@@ -598,11 +630,14 @@ function getProjectsList() {
         last_opened_at: p.last_opened_at, summary: null,
       };
     }
-    // Real Agent Presence v2: attribution = hints ∪ capability matches.
     const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, p);
     const summary = projectQueries.queryProjectScopedSummary(
       entry.db, entry.tables, p.db_path, agentIds,
     );
+
+    const { matched: claudeForP } = claudeSessionScan.partitionByProject(claudeAll, p);
+    foldClaudeIntoSummary(summary, claudeForP);
+
     return {
       id: p.id, label: p.label, project_root: p.project_root,
       db_path: p.db_path, agent_id_hints: p.agent_id_hints,
@@ -610,21 +645,49 @@ function getProjectsList() {
     };
   });
 
-  // One Unassigned bucket per unique db_path that registry references.
-  // Attribution union for the bucket is computed across every project
-  // pointing at that db_path (capability matches + hint matches).
+  // One Unassigned bucket per unique db_path. Claude rows whose cwd
+  // matches no registered project attach to the *primary* (first) bucket
+  // only — same single-attach rule as get-unassigned-detail, so a
+  // multi-DB user doesn't see the same Claude row counted twice.
+  const claudeUnassigned = claudeSessionScan.unassignedClaudeSessions(claudeAll, reg.projects);
+  const dbPaths = registry.uniqueDbPaths(reg);
   const unassigned = [];
-  for (const dbPath of registry.uniqueDbPaths(reg)) {
+  for (const dbPath of dbPaths) {
     const entry = ensureDbHandle(dbPath);
     if (!entry) continue;
     const attributed = projectQueries.resolveAttributedAgentIdsForDb(
       entry.db, entry.tables, reg.projects, dbPath,
     );
     const u = projectQueries.queryUnassignedSummary(entry.db, entry.tables, dbPath, attributed);
+    const isPrimaryBucket = dbPaths[0] === dbPath;
+    foldClaudeIntoSummary(u, isPrimaryBucket ? claudeUnassigned : []);
     unassigned.push(u);
   }
 
   return { projects, unassigned };
+}
+
+/**
+ * Mutate `summary` in place to add Claude-Code presence counts.
+ * Adds: `claude_busy`, `claude_idle`, `claude_dead`, `claude_unknown`,
+ * `claude_total` (always; zero when none). Also bumps `last_activity_at`
+ * if any Claude row is more recent than the existing value.
+ *
+ * Kept here (orchestration layer) rather than in project-queries.cjs
+ * because Claude is a non-DB source and we want project-queries.cjs to
+ * stay strictly about the Cairn SQLite schema.
+ */
+function foldClaudeIntoSummary(summary, claudeRows) {
+  if (!summary) return;
+  const c = claudeSessionScan.summarizeClaudeRows(claudeRows);
+  summary.claude_busy    = c.busy;
+  summary.claude_idle    = c.idle;
+  summary.claude_dead    = c.dead;
+  summary.claude_unknown = c.unknown;
+  summary.claude_total   = c.total;
+  if (c.last_activity_at && c.last_activity_at > (summary.last_activity_at || 0)) {
+    summary.last_activity_at = c.last_activity_at;
+  }
 }
 
 ipcMain.handle('get-projects-list', () => getProjectsList());
@@ -780,13 +843,17 @@ ipcMain.handle('get-project-summary', () => {
   const proj = activeProject();
   if (proj) {
     const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
-    return projectQueries.queryProjectScopedSummary(
+    const summary = projectQueries.queryProjectScopedSummary(
       entry.db, entry.tables, proj.db_path, agentIds,
     );
+    // Fold Claude rows into the L2 summary so the active-project card
+    // shows "agents MCP X · Claude Y" identically to L1.
+    const claudeAll = claudeSessionScan.scanClaudeSessions();
+    const { matched } = claudeSessionScan.partitionByProject(claudeAll, proj);
+    foldClaudeIntoSummary(summary, matched);
+    return summary;
   }
-  // No project selected — fall back to the legacy unscoped summary
-  // (so the panel never shows a misleading per-project zero-state when
-  // nothing is selected yet).
+  // No project selected — fall back to the legacy unscoped summary.
   return queries.queryProjectSummary(entry.db, entry.tables, activeDbPath());
 });
 
