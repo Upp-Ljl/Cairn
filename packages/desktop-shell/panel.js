@@ -798,12 +798,22 @@ function setupMenu() {
   const addProj    = document.getElementById('menu-add-project');
   const openLegacy = document.getElementById('menu-open-legacy');
   const plAddBtn   = document.getElementById('pl-add-btn');
+  const closeBtn   = document.getElementById('close-btn');
 
   btn.addEventListener('click', e => {
     e.stopPropagation();
     pop.classList.toggle('open');
   });
   document.addEventListener('click', () => pop.classList.remove('open'));
+
+  // Custom titlebar close button → main slides the panel out and hides it.
+  // Never quits; tray + marker remain entry points.
+  if (closeBtn) {
+    closeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (window.cairn && window.cairn.hidePanel) window.cairn.hidePanel();
+    });
+  }
 
   back.addEventListener('click', async () => {
     pop.classList.remove('open');

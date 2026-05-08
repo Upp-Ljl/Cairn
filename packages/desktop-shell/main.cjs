@@ -274,16 +274,131 @@ function createPetWindow() {
   petWindow.on('closed', () => { petWindow = null; });
 }
 
-function createPanelWindow() {
-  if (panelWindow) {
-    if (!panelWindow.isVisible()) panelWindow.show();
-    panelWindow.focus();
+// ---------------------------------------------------------------------------
+// Frameless side-panel geometry + slide animation (Day 4)
+// ---------------------------------------------------------------------------
+//
+// Goal: the panel reads as a real desktop side-panel — frameless,
+// right-edge attached, full work-area height, slides in/out from the
+// right. The custom titlebar lives in panel.html (-webkit-app-region:
+// drag); main owns geometry + animation + show/hide lifecycle.
+//
+// Animation: 12 steps × 20ms = 240ms total. easeOutCubic.
+// On Windows setBounds in a tight setInterval is occasionally janky on
+// composited displays; if we ever observe it we can fall back to
+// instant show/hide by setting PANEL_ANIM_STEPS = 1 — same code path.
+
+const PANEL_WIDTH      = 500;
+const PANEL_ANIM_STEPS = 12;
+const PANEL_ANIM_MS    = 240;
+
+/** @type {NodeJS.Timeout|null} */
+let panelAnimTimer = null;
+
+function rightEdgeBounds() {
+  const wa = screen.getPrimaryDisplay().workArea;
+  return {
+    x: wa.x + wa.width - PANEL_WIDTH,
+    y: wa.y,
+    width: PANEL_WIDTH,
+    height: wa.height,
+  };
+}
+
+function offscreenBounds() {
+  const wa = screen.getPrimaryDisplay().workArea;
+  return {
+    x: wa.x + wa.width, // entirely off the right edge
+    y: wa.y,
+    width: PANEL_WIDTH,
+    height: wa.height,
+  };
+}
+
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+function cancelPanelAnim() {
+  if (panelAnimTimer) {
+    clearInterval(panelAnimTimer);
+    panelAnimTimer = null;
+  }
+}
+
+function animatePanelTo(targetX, doneFn) {
+  if (!panelWindow) return;
+  cancelPanelAnim();
+  const start = panelWindow.getBounds();
+  const dx = targetX - start.x;
+  if (PANEL_ANIM_STEPS <= 1 || dx === 0) {
+    panelWindow.setBounds({ x: targetX, y: start.y, width: start.width, height: start.height });
+    if (doneFn) doneFn();
     return;
   }
+  let step = 0;
+  panelAnimTimer = setInterval(() => {
+    step++;
+    const t = step / PANEL_ANIM_STEPS;
+    const x = Math.round(start.x + dx * easeOutCubic(t));
+    try {
+      panelWindow.setBounds({ x, y: start.y, width: start.width, height: start.height });
+    } catch (_e) { /* window may have been destroyed mid-animation */ }
+    if (step >= PANEL_ANIM_STEPS) {
+      cancelPanelAnim();
+      try {
+        if (panelWindow) {
+          panelWindow.setBounds({ x: targetX, y: start.y, width: start.width, height: start.height });
+        }
+      } catch (_e) {}
+      if (doneFn) doneFn();
+    }
+  }, PANEL_ANIM_MS / PANEL_ANIM_STEPS);
+}
+
+function showPanelSlide() {
+  if (!panelWindow) {
+    createPanelWindow(); // ready-to-show will trigger this same path
+    return;
+  }
+  cancelPanelAnim();
+  const onR = rightEdgeBounds();
+  const off = offscreenBounds();
+  // Make sure we start fully off-screen before show, otherwise the OS
+  // briefly paints the panel at its last position.
+  panelWindow.setBounds(off);
+  if (!panelWindow.isVisible()) panelWindow.show();
+  panelWindow.focus();
+  animatePanelTo(onR.x);
+}
+
+function hidePanelSlide() {
+  if (!panelWindow || !panelWindow.isVisible()) return;
+  cancelPanelAnim();
+  const off = offscreenBounds();
+  animatePanelTo(off.x, () => {
+    if (panelWindow) {
+      try { panelWindow.hide(); } catch (_e) {}
+    }
+  });
+}
+
+function createPanelWindow() {
+  if (panelWindow) {
+    showPanelSlide();
+    return;
+  }
+  // Start off-screen; ready-to-show triggers slide-in to right-edge.
+  const off = offscreenBounds();
   panelWindow = new BrowserWindow({
-    width: 480,
-    height: 600,
-    title: 'Cairn — Project Control Surface',
+    x: off.x, y: off.y, width: off.width, height: off.height,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,         // tray + marker are the entry points
+    show: false,
+    title: 'Cairn',
+    backgroundColor: '#1a1a1a',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -292,18 +407,23 @@ function createPanelWindow() {
   });
   panelWindow.loadFile('panel.html');
 
-  // Tray-aware close: pressing the OS close button hides the window but
-  // keeps the app alive. Quit must go through the tray menu (or `app.quit()`
-  // wired via isQuitting). Without this, closing the panel would orphan
-  // the tray in a confusing "icon stays but nothing happens on click"
-  // state — see plan §10 R14.
+  panelWindow.once('ready-to-show', () => {
+    showPanelSlide();
+  });
+
+  // Alt-F4 / programmatic .close() must hide instead of destroy, so the
+  // tray + marker remain meaningful entry points and quit only runs via
+  // the tray Quit item (which flips isQuitting).
   panelWindow.on('close', (e) => {
     if (!isQuitting && tray) {
       e.preventDefault();
-      panelWindow.hide();
+      hidePanelSlide();
     }
   });
-  panelWindow.on('closed', () => { panelWindow = null; });
+  panelWindow.on('closed', () => {
+    cancelPanelAnim();
+    panelWindow = null;
+  });
 }
 
 function createLegacyWindow() {
@@ -330,15 +450,16 @@ function createLegacyWindow() {
 // ---------------------------------------------------------------------------
 
 function togglePanel() {
-  if (panelWindow && panelWindow.isVisible() && panelWindow.isFocused()) {
-    panelWindow.hide();
-    return;
-  }
   if (!panelWindow) {
     createPanelWindow();
-  } else {
-    if (!panelWindow.isVisible()) panelWindow.show();
+    return;
+  }
+  if (panelWindow.isVisible() && panelWindow.isFocused()) {
+    hidePanelSlide();
+  } else if (panelWindow.isVisible()) {
     panelWindow.focus();
+  } else {
+    showPanelSlide();
   }
 }
 
@@ -677,10 +798,17 @@ ipcMain.handle('get-active-lanes', () => {
 });
 
 ipcMain.on('open-inspector', () => {
-  // Legacy "open-inspector" channel from preview.html now opens the
-  // legacy Inspector (renamed). Existing callers (pet click handler) keep
-  // working without changes.
-  createLegacyWindow();
+  // Day 4: the floating marker (preview.html) now toggles the side
+  // panel instead of opening the legacy Inspector — same gesture as
+  // tray click. Channel name kept for preview.js compatibility (no
+  // preload churn). Legacy Inspector is reachable via tray right-click
+  // menu and the panel's overflow menu.
+  togglePanel();
+});
+
+// Custom titlebar close button → slide out + hide. Never quits.
+ipcMain.on('cairn:hide-panel', () => {
+  hidePanelSlide();
 });
 
 // ---------------------------------------------------------------------------
@@ -788,6 +916,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  cancelPanelAnim();
   if (trayPollTimer) {
     clearInterval(trayPollTimer);
     trayPollTimer = null;

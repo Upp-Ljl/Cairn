@@ -43,6 +43,7 @@ const api = {
   getDbPath:         () => ipcRenderer.invoke('get-db-path'),
   setDbPath:         (path) => ipcRenderer.invoke('set-db-path', path),
   openLegacyInspector: () => ipcRenderer.send('open-legacy-inspector'),
+  hidePanel:           () => ipcRenderer.send('cairn:hide-panel'),
 
   // ---- Legacy (inspector-legacy.html + preview.html pet) ----
   getState:           () => ipcRenderer.invoke('get-state'),

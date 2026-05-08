@@ -17,19 +17,33 @@
     font-size: 12px;
     line-height: 1.45;
     overflow: hidden;
+    /* Day 4: side panel sits flush against the right edge — single
+       hairline border on the left to read as "attached drawer". */
+    border-left: 1px solid #2a2a2a;
   }
 
   #app { display: flex; flex-direction: column; height: 100vh; }
 
-  /* Header — workspace label + DB path + menu */
+  /* Header doubles as the custom titlebar (frame:false). The bar itself
+     is draggable; interactive children (buttons, dropdown, etc.) opt
+     out via -webkit-app-region: no-drag. */
   #header {
-    padding: 8px 12px;
+    padding: 6px 12px;
     background: #0f0f0f;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid #2a2a2a;
     display: flex;
-    align-items: baseline;
-    gap: 12px;
+    align-items: center;
+    gap: 10px;
     flex: 0 0 auto;
+    -webkit-app-region: drag;
+    user-select: none;
+    height: 32px;
+  }
+  #header button,
+  #header input,
+  #menu-pop,
+  #menu-pop * {
+    -webkit-app-region: no-drag;
   }
   #workspace-label {
     color: #7af;
@@ -55,6 +69,19 @@
     flex: 0 0 auto;
   }
   #menu-btn:hover { border-color: #7af; color: #7af; }
+  /* Close (×) button — slides the panel out + hides; never quits. */
+  #close-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: #888;
+    cursor: pointer;
+    padding: 0 6px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 18px;
+    flex: 0 0 auto;
+  }
+  #close-btn:hover { color: #f77; border-color: #432; background: #1a0e0e; }
 
   /* Inline menu dropdown (poor-man's, no native menus needed Day 1) */
   #menu-pop {
@@ -499,7 +526,8 @@
   <div id="header">
     <span id="workspace-label">Cairn — Projects</span>
     <span id="db-path"></span>
-    <button id="menu-btn" type="button">⋯</button>
+    <button id="menu-btn" type="button" title="Menu">⋯</button>
+    <button id="close-btn" type="button" title="Hide panel (Esc)">×</button>
     <div id="menu-pop">
       <button id="menu-back-to-projects" type="button" hidden>← Back to projects</button>
       <button id="menu-add-project" type="button">Add project…</button>
