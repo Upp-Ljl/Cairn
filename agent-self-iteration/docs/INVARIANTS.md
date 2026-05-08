@@ -154,6 +154,26 @@ disabling by default is allowed; deleting the code path is forbidden):
 Removing any of these safeguards by automated /self-improve is forbidden.
 Tightening defaults (e.g. lowering `STUCK_THRESHOLD` to 2) is allowed.
 
+## I13 — UI rendering is opt-in and soft-fails
+
+`scripts/render_ui.py` and the `UI_RENDER` driver path exist to extend
+the loop with multimodal visual audit. Two rules MUST hold:
+
+- **Opt-in by default.** `UI_RENDER` defaults to `0`. Turning the
+  feature on must remain a deliberate user choice — never silently on.
+  Adding chromium download / pip install steps to the default path is
+  forbidden.
+
+- **Soft-fail.** If `playwright` is not installed (`render_ui.py`
+  exits with code 2), or Chromium fails to launch, or the URL/file is
+  unreachable, the driver MUST log the skip and continue the loop in
+  text-only mode. The reviewer must still produce a verdict. UI render
+  failures must NEVER abort the run or cause a `status:render_error`.
+
+The premise is "visual audit is additive". If your audit is gated on
+visual perception only and the renderer fails, surface that limitation
+in `notes` — but the loop still has to converge.
+
 ## I12 — Signal output truncation must keep the failure tail
 
 Token-saving signal truncation in the script (`truncate_signal`) MUST

@@ -70,6 +70,31 @@ should still surface improvement opportunities. For most projects,
 include at least 1–2 optimization-flavored dimensions on top of the
 correctness ones:
 
+**Special case: visual / UI projects.** If the project contains HTML,
+CSS, JSX/TSX, Vue/Svelte components, or any other rendering surface,
+the orchestrator may render the UI to PNG screenshots and pass them
+to the reviewer (multimodal). When you see a UI project, the manifest
+should include 1–3 **visual dimensions** the reviewer can audit from
+screenshots — distinct from text-only checks like contrast-number-
+matches-WCAG. Visual dimensions are things like:
+- `visual_hierarchy` — does the rendered page guide the eye correctly
+  (size/weight/spacing creating clear focal points)
+- `spacing_rhythm` — are paddings/margins consistent and breathable
+- `typography` — type-scale ratios sensible; line-length comfortable;
+  vertical rhythm coherent
+- `color_palette` — palette feels intentional; sufficient distinction
+  between primary/secondary/accent; dark-mode parity if relevant
+- `alignment_grid` — elements snap to a sensible grid; no off-by-pixel
+  drift between rows
+- `interaction_affordance` — clickable things look clickable; hover/
+  focus states visible; primary action obvious
+- `responsive_polish` — does the layout *feel* right at mobile widths,
+  not just "doesn't horizontal-scroll"
+
+These visual dimensions complement (not replace) the code-readable
+ones. A UI project's manifest typically has both — e.g., `semantic_html`
++ `visual_hierarchy`, or `keyboard_nav` + `interaction_affordance`.
+
 - *Performance/scalability axes* — hot path complexity; allocation
   count; N+1 calls; concurrency bottleneck; latency budget; memory
   growth; cache hit rate.
@@ -126,6 +151,12 @@ MANIFEST: {"domain":"social_deduction_game","summary":"LLM-driven werewolf game;
 
 ```
 MANIFEST: {"domain":"web_a11y","summary":"Static HTML/CSS page; 'done' is automated a11y checker emits zero errors","dimensions":[{"name":"semantic_html","rationale":"Screen readers depend on landmarks","checks":["headings form a hierarchy","main/nav/footer landmarks present","buttons not divs"]},{"name":"keyboard_nav","rationale":"Non-mouse users must reach every control","checks":["tab order matches visual order","focus indicators visible","no positive tabindex"]},{"name":"contrast","rationale":"Required by WCAG AA","checks":["text contrast >= 4.5:1","interactive contrast >= 3:1"]},{"name":"alt_text","rationale":"Image content must have textual alternative","checks":["non-decorative images have alt","decorative images have empty alt"]},{"name":"responsive","rationale":"Page must work on mobile widths","checks":["meta viewport present","no horizontal scroll at 360px"]}]}
+```
+
+**A landing page being audited for visual design (multimodal — needs UI_RENDER=1):**
+
+```
+MANIFEST: {"domain":"static_landing_page","summary":"Marketing landing page; 'done' is the rendered hero+content+CTA section reads as polished and intentional, not just code-correct","dimensions":[{"name":"visual_hierarchy","rationale":"User's eye should land on the headline, then the CTA, in that order","checks":["headline is the largest type on screen","CTA has highest visual weight after headline","secondary copy doesn't compete with primary"]},{"name":"spacing_rhythm","rationale":"Unbalanced padding/margin makes a page feel cheap even when colors and content are fine","checks":["section padding feels generous, not cramped","consistent vertical rhythm between sections","no orphan whitespace breaking the flow"]},{"name":"typography","rationale":"Type-scale + line-length carry most of the perceived quality","checks":["max line-length under ~75ch for body copy","type-scale ratios are coherent (e.g., 1.25 or 1.333 modular)","weights and tracking match the headline's intent"]},{"name":"color_palette","rationale":"Whether the palette feels intentional vs. random is a major polish signal","checks":["palette has clear primary/accent distinction","background+foreground combinations feel deliberate","no clashing hue jumps mid-page"]},{"name":"interaction_affordance","rationale":"CTAs that don't look clickable lose conversions","checks":["primary CTA is unambiguously a button (color/shape/contrast)","hover/focus state visible at the rendered viewport","links visually distinct from body text"]},{"name":"responsive_polish","rationale":"Mobile is most traffic; 'works at 375px' is not the same as 'feels good at 375px'","checks":["touch targets ≥44px","no awkward text-wrap orphans on mobile","spacing scales down without going cramped"]}]}
 ```
 
 **A Python library with mixed correctness + perf concerns:**

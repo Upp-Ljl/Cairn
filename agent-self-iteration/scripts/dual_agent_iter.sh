@@ -43,6 +43,15 @@
 #   MAX_DIFF_LINES            — cumulative line-change cap (0 = disabled). Default: 0.
 #   STUCK_THRESHOLD           — bail when N iters in a row leave content unchanged. Default: 3.
 #   MAX_SIGNAL_TAIL           — red signal output truncated to last N lines. Default: 80.
+#   UI_RENDER                 — "1" → render screenshots before each reviewer call so
+#                                multimodal reviewer can perform a visual audit.
+#                                Default: 0. Requires `playwright` Python module + chromium.
+#   UI_URL                    — URL to render (preferred over UI_FILE). Default: empty.
+#   UI_FILE                   — local file path; rendered as file:// URI when UI_URL unset.
+#                                Default: <work_dir>/index.html if it exists.
+#   UI_VIEWPORTS              — comma-separated WxH list. Default: "1280x800,375x812".
+#   UI_WAIT_MS                — ms to wait after load before screenshot. Default: 600.
+#   UI_FULL_PAGE              — "1" → capture full scroll, not just viewport. Default: 0.
 #   LOG_FILE                  — append per-iteration trace here. Default: stderr.
 #   PROMPT_DIR                — where to drop prompt files. Default: a tmp dir.
 #   PROJECT_ROOT              — where .claude/agents/ live. Default: this script's parent's parent.
@@ -78,8 +87,25 @@ REVIEWER_COUNCIL="${REVIEWER_COUNCIL:-1}"
 MAX_DIFF_LINES="${MAX_DIFF_LINES:-0}"
 STUCK_THRESHOLD="${STUCK_THRESHOLD:-3}"
 MAX_SIGNAL_TAIL="${MAX_SIGNAL_TAIL:-80}"
+UI_RENDER="${UI_RENDER:-0}"
+UI_URL="${UI_URL:-}"
+UI_FILE="${UI_FILE:-}"
+UI_VIEWPORTS="${UI_VIEWPORTS:-1280x800,375x812}"
+UI_WAIT_MS="${UI_WAIT_MS:-600}"
+UI_FULL_PAGE="${UI_FULL_PAGE:-0}"
 LOG_FILE="${LOG_FILE:-/dev/stderr}"
 PROMPT_DIR="${PROMPT_DIR:-$(mktemp -d -t dual-agent.XXXXXX)}"
+
+# UI_FILE auto-detect: if UI_RENDER=1 but no URL/FILE provided, look for
+# common static-site entrypoints in WORK_DIR.
+if [ "$UI_RENDER" = "1" ] && [ -z "$UI_URL" ] && [ -z "$UI_FILE" ]; then
+  for candidate in index.html public/index.html dist/index.html src/index.html; do
+    if [ -f "$WORK_DIR/$candidate" ]; then
+      UI_FILE="$WORK_DIR/$candidate"
+      break
+    fi
+  done
+fi
 
 # Validate claude CLI
 if ! command -v claude >/dev/null 2>&1; then
@@ -307,6 +333,52 @@ verify_signal_was_run() {
   signal_head=$(printf '%s' "$SIGNAL_CMD" | awk '{print $1}')
   if ! printf '%s' "$exec_summary" | grep -q "$signal_head"; then
     log "# WARNING: executor's commands_run does not mention '$signal_head' (signal may not have been verified locally)"
+  fi
+}
+
+# ============================================================================
+# Visual rendering: render screenshots for the reviewer's multimodal audit.
+# Returns the screenshot directory path on success, or empty string on
+# soft-fail (driver continues without screenshots).
+# Args: $1 = iteration number (used to namespace the output dir)
+# ============================================================================
+render_ui_for_iteration() {
+  local iter="$1"
+  if [ "$UI_RENDER" != "1" ]; then
+    printf ''
+    return 0
+  fi
+  if [ -z "$UI_URL" ] && [ -z "$UI_FILE" ]; then
+    log "# UI_RENDER=1 but neither UI_URL nor UI_FILE resolved — skipping render"
+    printf ''
+    return 0
+  fi
+  local shots_dir="$PROMPT_DIR/iter${iter}_shots"
+  local render_args=()
+  if [ -n "$UI_URL" ]; then
+    render_args+=(--url "$UI_URL")
+  else
+    render_args+=(--file "$UI_FILE")
+  fi
+  render_args+=(--out "$shots_dir" --viewports "$UI_VIEWPORTS" --wait "$UI_WAIT_MS")
+  [ "$UI_FULL_PAGE" = "1" ] && render_args+=(--full-page)
+
+  log "--- rendering UI screenshots → $shots_dir ---"
+  local render_log="$shots_dir/render.log"
+  mkdir -p "$shots_dir"
+  python3 "$PROJECT_ROOT/scripts/render_ui.py" "${render_args[@]}" \
+    >>"$render_log" 2>&1
+  local rc=$?
+  cat "$render_log" >>"$LOG_FILE" 2>/dev/null || true
+  if [ "$rc" = "0" ]; then
+    log "# UI screenshots written to $shots_dir"
+    printf '%s' "$shots_dir"
+  elif [ "$rc" = "2" ]; then
+    log "# UI render skipped (playwright not installed)"
+    printf ''
+  else
+    log "# UI render failed (rc=$rc); reviewer will run text-only"
+    printf ''
   fi
 }
 
@@ -638,6 +710,29 @@ EXEC_EOF
     break
   fi
 
+  # Visual: render the UI to PNG screenshots before the reviewer runs so
+  # the multimodal reviewer can perform a visual audit. Soft-fails when
+  # playwright isn't installed — loop continues with text-only review.
+  SHOTS_DIR=$(render_ui_for_iteration "$ITER")
+  SCREENSHOTS_BLOCK=""
+  if [ -n "$SHOTS_DIR" ] && [ -d "$SHOTS_DIR" ]; then
+    # List PNGs the renderer produced so the reviewer knows what to read.
+    SHOT_LIST=$(find "$SHOTS_DIR" -maxdepth 1 -name '*.png' -type f | sort | tr '\n' ' ')
+    if [ -n "$SHOT_LIST" ]; then
+      SCREENSHOTS_BLOCK="
+SCREENSHOTS (rendered for visual audit; use the Read tool on each PNG —
+Claude Code's Read tool returns image content directly to you):
+$(printf '%s\n' "$SHOT_LIST" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/  - /')
+
+For each screenshot, evaluate the visual dimensions in the MANIFEST
+(visual hierarchy, spacing rhythm, typography, color, alignment,
+responsive polish, interaction affordance — whichever the profiler named).
+When you raise an issue grounded in a screenshot, cite the file basename
+in 'where' (e.g., 'desktop_1280x800.png:hero section').
+"
+    fi
+  fi
+
   # ----- REVIEWER (single or council) -----
   COUNCIL_DIR="$PROMPT_DIR/iter${ITER}_council"
   mkdir -p "$COUNCIL_DIR"
@@ -667,7 +762,7 @@ $CHANGED_FILES
 
 Latest signal output:
 $TRUNCATED_SIGNAL
-
+${SCREENSHOTS_BLOCK}
 Recurring issue classes (these have been flagged 2+ consecutive iterations.
 Do NOT re-flag the same class without genuine new evidence — move on or
 admit exhaustion):
@@ -683,13 +778,21 @@ REV_EOF
   } > "$REV_PROMPT_FILE"
   log "--- reviewer prompt: $REV_PROMPT_FILE ---"
 
+  # Build the reviewer's --add-dir args. Always include WORK_DIR; if we
+  # rendered screenshots, also grant access to that dir so the reviewer's
+  # Read tool can open the PNGs.
+  REV_ADD_DIRS=(--add-dir "$WORK_DIR")
+  if [ -n "$SHOTS_DIR" ] && [ -d "$SHOTS_DIR" ]; then
+    REV_ADD_DIRS+=(--add-dir "$SHOTS_DIR")
+  fi
+
   # Dispatch N reviewers in parallel.
   COUNCIL_PIDS=()
   i=1
   while [ "$i" -le "$REVIEWER_COUNCIL" ]; do
     (
       claude -p "$(< "$REV_PROMPT_FILE")" \
-        --add-dir "$WORK_DIR" \
+        "${REV_ADD_DIRS[@]}" \
         --model "$MODEL" \
         > "$COUNCIL_DIR/reviewer_${i}.raw" 2>&1
       # Extract verdict.

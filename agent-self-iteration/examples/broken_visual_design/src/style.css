@@ -1,0 +1,116 @@
+/* Deliberately bad: the loop's job is to fix the visual quality of this page.
+   Every problem here is a visual one — semantic HTML is mostly fine, the
+   issues are spacing, hierarchy, type, and color. */
+
+body {
+  font-family: Arial;
+  background: #fff;
+  color: #999;
+  margin: 0;
+}
+
+.hero {
+  padding: 5px;
+  background: linear-gradient(45deg, hotpink, yellow, lime);
+}
+
+.hero .eyebrow {
+  font-size: 28px;
+  font-weight: bold;
+  color: cyan;
+}
+
+.hero h1 {
+  font-size: 14px;
+  color: #ccc;
+  font-weight: 100;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.hero h2 {
+  font-size: 80px;
+  font-weight: 900;
+  color: black;
+  text-decoration: underline;
+  margin: 0;
+}
+
+.hero p {
+  font-size: 11px;
+  line-height: 1.0;
+  color: #aaa;
+}
+
+.hero a {
+  font-size: 9px;
+  color: blue;
+  text-decoration: underline;
+  margin-right: 2px;
+}
+
+.features {
+  padding: 2px;
+  background: #f0f0f0;
+}
+
+.features h3 {
+  font-size: 13px;
+  text-transform: lowercase;
+  color: #888;
+}
+
+.grid {
+  display: block;
+}
+
+.card {
+  display: inline-block;
+  width: 90px;
+  padding: 1px;
+  margin: 1px;
+  border: 1px dashed red;
+  vertical-align: top;
+}
+
+.card h4 {
+  font-size: 11px;
+  font-weight: 100;
+  margin: 0;
+}
+
+.card p {
+  font-size: 9px;
+  margin: 0;
+  color: #bbb;
+}
+
+.cta {
+  background: #ffff00;
+  padding: 1px;
+}
+
+.cta p {
+  font-size: 18px;
+  display: inline;
+}
+
+.cta a {
+  font-size: 8px;
+  color: white;
+  background: white;
+  padding: 1px;
+  text-decoration: none;
+}
+
+.footer {
+  background: black;
+  color: #222;
+  font-size: 7px;
+  padding: 1px;
+}
+
+.footer a {
+  color: #333;
+  margin-left: 1px;
+}

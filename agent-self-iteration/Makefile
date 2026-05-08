@@ -39,6 +39,8 @@ self-test:
 	@test -f .claude/agents/reviewer.md && echo "reviewer.md: present"
 	@test -f .claude/agents/profiler.md && echo "profiler.md: present"
 	@test -f .claude/agents/validator.md && echo "validator.md: present"
+	@test -f scripts/render_ui.py && echo "render_ui.py: present"
+	@python3 -m py_compile scripts/render_ui.py && echo "render_ui.py: syntax OK"
 	@test -f .claude/agents/self-improver.md && echo "self-improver.md: present"
 	@test -f .claude/commands/auto-iter.md && echo "auto-iter.md: present"
 	@test -f .claude/commands/self-improve.md && echo "self-improve.md: present"

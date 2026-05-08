@@ -332,6 +332,64 @@ This gives you a hard ceiling on edits, a 2-of-2 reviewer agreement
 requirement before exit, and a no-op signal that lets the reviewer drive
 the loop entirely (with the budget + council preventing collapse).
 
+## Visual / multimodal UI audit (`UI_RENDER=1`)
+
+For projects that have a rendering surface (HTML/CSS/JSX/Vue/Svelte),
+the loop can render the UI to PNG screenshots before each reviewer
+call so the reviewer (multimodal) can perform a real visual audit —
+not just code-level inspection.
+
+```bash
+UI_RENDER=1 \
+UI_FILE=examples/broken_visual_design/.baseline-src/index.html \
+UI_VIEWPORTS="1280x800,375x812" \
+SIGNAL_CMD=":" \
+bash scripts/dual_agent_iter.sh /tmp/copy-of-page-to-edit
+```
+
+Or for a running dev server:
+
+```bash
+UI_RENDER=1 \
+UI_URL=http://localhost:3000 \
+UI_VIEWPORTS="1280x800,768x1024,375x812" \
+SIGNAL_CMD="npm run lint --silent" \
+bash scripts/dual_agent_iter.sh ~/my-app
+```
+
+**How it works:**
+1. After each iteration's executor edits, before the reviewer fires,
+   the driver runs `scripts/render_ui.py` (Playwright + headless
+   Chromium) to render PNGs at each requested viewport size into
+   `<PROMPT_DIR>/iter${N}_shots/`.
+2. The reviewer prompt gets a `SCREENSHOTS:` block listing those PNG
+   paths, and is instructed to use the Read tool on each one (Claude
+   Code's Read tool returns image content directly to the reviewer's
+   multimodal context).
+3. The reviewer's verdict can now cite a screenshot in the `where`
+   field (e.g. `"where": "desktop_1280x800.png — hero section"`).
+
+**Soft-fail on missing dependency:** if `playwright` isn't installed
+or chromium fails to launch, the renderer logs a skip and the loop
+continues with text-only review. UI_RENDER is purely additive — it
+never blocks a run.
+
+**Install (one-time):**
+```bash
+pip install playwright
+python3 -m playwright install chromium
+```
+
+**Cost note:** multimodal reviewer calls are more expensive than
+text-only by ~5–10k tokens per screenshot read. With
+`REVIEWER_COUNCIL=N` and M viewports, that's N×M extra image reads
+per iter. Budget accordingly.
+
+**Demo:** see `examples/broken_visual_design/` — a deliberately
+miscalibrated marketing landing page (clashing palette, inverted
+visual hierarchy, illegible CTA, invisible footer) that the loop is
+expected to fix from screenshots alone.
+
 ## Self-improvement (`/self-improve` meta-loop)
 
 `/self-improve` is a meta-loop: it runs the regression suite, dispatches

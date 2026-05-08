@@ -36,6 +36,33 @@ For each manifest dimension, run the `checks` listed under it. If a check
 fails, raise an issue tagged with that `dimension.name`. Be specific in the
 `where` field — file path and a line range when possible.
 
+# Visual / multimodal audit (when SCREENSHOTS section is present)
+
+The orchestrator may have rendered the project's UI to PNG screenshots
+before invoking you. If your prompt contains a `SCREENSHOTS:` section
+listing PNG paths, you MUST inspect those images **before** ruling on
+any visual dimension in the manifest. Use the `Read` tool on each PNG
+— Claude Code's Read tool returns image bytes directly to your context
+as multimodal input.
+
+Visual dimensions (e.g. `visual_hierarchy`, `spacing_rhythm`,
+`typography`, `color_palette`, `interaction_affordance`,
+`responsive_polish`) are **only** audited via the screenshots, not from
+HTML/CSS source alone — code can technically validate but still look
+broken on the rendered page. When you raise an issue grounded in a
+screenshot, cite the file basename in `where` (e.g.,
+`"where": "desktop_1280x800.png — hero section"`).
+
+When screenshots disagree with the code-level audit (e.g. CSS contrast
+calculation says 4.5:1 passes, but the rendered page feels washed out
+because the foreground is anti-aliased over a busy background), trust
+the screenshot — that is the user's actual experience.
+
+If no SCREENSHOTS section is present and the manifest contains visual
+dimensions, you must still attempt them from code reading + describe
+the inferred visual outcome in `notes` so the executor knows the
+audit was code-only.
+
 # When the manifest is missing or trivial
 
 If the loop is running without a MANIFEST (rare — the orchestrator falls back

@@ -782,5 +782,57 @@ grep -q '"domain":"fenced"' "$PROMPT_DIR13/manifest.json" || { echo "FAIL: code-
 echo "  -> JSON extractor tolerated code fences and pulled out manifest"
 
 echo ""
+
+# ---------- TEST 14: UI_RENDER soft-fails when playwright absent ----------
+# Verifies that turning UI rendering on without the dependency installed
+# does NOT crash the loop — driver logs the skip and continues text-only.
+echo "=== TEST 14: UI_RENDER=1 without playwright → graceful skip ==="
+T14_TMP="$TEST_TMP/test14"
+mkdir -p "$T14_TMP/src" "$T14_TMP/tests"
+echo "ui-render skip test" > "$T14_TMP/TASK.md"
+cat > "$T14_TMP/src/index.html" <<'EOF'
+<!DOCTYPE html><html><body><h1>hi</h1></body></html>
+EOF
+cat > "$T14_TMP/src/x.py" <<'EOF'
+def x(): return 1
+EOF
+cat > "$T14_TMP/tests/test_x.py" <<'EOF'
+import sys; from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from x import x
+def test_x(): assert x()==1
+EOF
+
+LOG14="$TEST_TMP/test14.log"
+PROMPT_DIR14="$TEST_TMP/prompts14"
+# Use the original stub_dir which already supports validator+everything.
+# Force UI_RENDER=1 with a UI_FILE pointing at index.html. Since playwright
+# is (likely) not in this environment, render_ui.py will exit 2 and the
+# driver should log "UI render skipped" and proceed.
+SUMMARY14=$(PATH="$STUB_DIR:$PATH" \
+            SKIP_PROFILE=1 \
+            UI_RENDER=1 \
+            UI_FILE="$T14_TMP/src/index.html" \
+            MAX_ITER=1 QUIET_STREAK=1 \
+            SIGNAL_CMD="python3 -m pytest -q" \
+            LOG_FILE="$LOG14" PROMPT_DIR="$PROMPT_DIR14" PROJECT_ROOT="$ROOT" \
+            bash "$ROOT/scripts/dual_agent_iter.sh" "$T14_TMP" 2>&1 | tail -1)
+echo "  summary: $SUMMARY14"
+
+# The loop must complete without crashing (any terminal status is fine).
+echo "$SUMMARY14" | grep -qE '"status":"(exhausted|max_iter_reached|stuck|diff_budget_exceeded)"' \
+  || { echo "FAIL: driver did not produce a summary line on UI_RENDER=1 with missing playwright"; exit 1; }
+
+# The skip path must be logged (either "skipped (playwright not installed)"
+# or "wrote screenshots" if the user happens to have playwright installed).
+if grep -q "UI render skipped\|UI screenshots written" "$LOG14"; then
+  echo "  -> UI render path resolved gracefully (skipped or rendered)"
+else
+  echo "FAIL: neither skip nor success message in log"
+  grep -E "UI |render" "$LOG14" | head
+  exit 1
+fi
+
+echo ""
 echo "ALL SMOKE TESTS PASSED"
 echo "Logs at: $TEST_TMP"
