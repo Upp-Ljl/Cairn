@@ -99,9 +99,21 @@ let currentView = 'projects'; // 'projects' | 'project'
 let selectedProject = null;
 
 function setView(name, projectMeta) {
+  // A view switch means the L2 task drill-down is no longer valid:
+  // task_ids belong to a particular project's DB attribution, so a
+  // selection from project A must not bleed into project B (or into
+  // the L1 list, where the next entry will repopulate it from a
+  // possibly-different project anyway). Always reset.
+  const nextProjectId = (name === 'project' && projectMeta) ? projectMeta.id : null;
+  const prevProjectId = selectedProject ? selectedProject.id : null;
+  if (name !== 'project' || nextProjectId !== prevProjectId) {
+    clearTaskSelection();
+  }
   currentView = name;
   if (name === 'project') {
     selectedProject = projectMeta || null;
+  } else {
+    selectedProject = null;
   }
   document.getElementById('view-projects-list').hidden = (name !== 'projects');
   document.getElementById('view-project').hidden       = (name !== 'project');
@@ -218,6 +230,11 @@ function renderRunLog(events) {
 let selectedTaskId = null;
 /** @type {Object|null} */
 let selectedTaskDetail = null;
+
+function clearTaskSelection() {
+  selectedTaskId = null;
+  selectedTaskDetail = null;
+}
 
 function renderTaskDetail(detail) {
   if (!detail) return '<div class="tk-detail">detail unavailable</div>';

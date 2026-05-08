@@ -21,6 +21,30 @@ const { app, BrowserWindow, ipcMain, screen, dialog, Menu, Tray, nativeImage } =
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
+
+/**
+ * Resolve `dir` to its git toplevel if `dir` is inside a git work tree.
+ * Mirrors mcp-server's workspace canonicalization (sha1(host:topLevel))
+ * so a project_root saved by desktop-shell yields the same SESSION_AGENT_ID
+ * mcp-server will compute when run from the same directory. Returns the
+ * input unchanged on any error or timeout (1s).
+ */
+function canonicalizeToGitToplevel(dir) {
+  if (!dir || typeof dir !== 'string') return dir;
+  try {
+    const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: dir,
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+      encoding: 'utf8',
+    });
+    const top = (out || '').trim();
+    if (top) return path.normalize(top);
+  } catch (_e) { /* not a git repo, git missing, or timeout — fall through */ }
+  return dir;
+}
 
 const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
@@ -511,6 +535,12 @@ ipcMain.handle('add-project', async (_e, input) => {
     }
     project_root = result.filePaths[0];
   }
+  // Canonicalize: if the chosen folder lives inside a git work tree,
+  // promote it to the toplevel so the auto-derived agent_id_hint matches
+  // the SESSION_AGENT_ID mcp-server boots with from anywhere in the tree.
+  // No-op (and silent) if git is missing, the dir isn't a repo, or the
+  // probe times out at 1s.
+  project_root = canonicalizeToGitToplevel(project_root);
   if (!db_path) {
     // Default: <project_root>/.cairn/cairn.db if it exists, else ~/.cairn/cairn.db
     const local = path.join(project_root, '.cairn', 'cairn.db');

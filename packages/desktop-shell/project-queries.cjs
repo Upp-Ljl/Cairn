@@ -265,7 +265,15 @@ function queryProjectScopedSummary(db, tables, dbPath, hints) {
 function computeHealth(s) {
   if ((s.conflicts_open || 0) > 0 || (s.outcomes_failed || 0) > 0 || (s.tasks_failed || 0) > 0) {
     s.health = 'alert';
-  } else if ((s.blockers_open || 0) > 0 || (s.tasks_waiting_review || 0) > 0) {
+  } else if (
+    (s.blockers_open || 0) > 0
+    || (s.tasks_waiting_review || 0) > 0
+    || (s.agents_stale || 0) > 0
+  ) {
+    // Stale agents (ACTIVE rows with expired heartbeat past STALE_GRACE_FACTOR)
+    // mean a runner that claimed presence but stopped heartbeating without a
+    // clean shutdown. That is not "idle" — surface as warn so the project
+    // card and tray reflect "something is off" instead of green.
     s.health = 'warn';
   } else {
     s.health = 'idle';
