@@ -49,6 +49,7 @@ function canonicalizeToGitToplevel(dir) {
 const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
+const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -703,14 +704,35 @@ ipcMain.handle('add-hint', (_e, id, agentId) => {
 });
 
 // L2 Sessions tab — presence rows attributed to the active project.
+//
+// Composition (Real Agent Presence step 2, 2026-05-08):
+//   1. MCP rows from Cairn's `processes` table, filtered by hints ∪
+//      capability matches (project-queries.cjs).
+//   2. Claude Code session-file rows from ~/.claude/sessions/<pid>.json,
+//      filtered by `cwd ⊆ project_root` (claude-code-session-scan.cjs).
+// Both flows are read-only. MCP rows keep their existing schema; Claude
+// rows carry a `source: "claude-code/session-file"` tag so the renderer
+// can pick the right row template. We do NOT write Claude rows into the
+// processes table — that would be a fake heartbeat the daemon never
+// asked for, and it would survive past the Claude session's lifetime.
 ipcMain.handle('get-project-sessions', () => {
   const proj = activeProject();
   if (!proj) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
   const entry = ensureDbHandle(proj.db_path);
   if (!entry) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
-  // Attribution v2: hints ∪ capability-matched session agent_ids.
   const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
-  return projectQueries.queryProjectScopedSessions(entry.db, entry.tables, agentIds);
+  const mcp = projectQueries.queryProjectScopedSessions(entry.db, entry.tables, agentIds);
+
+  // Claude Code: scan host-level session files, attribute by cwd.
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+  const { matched: claudeForProject } = claudeSessionScan.partitionByProject(claudeAll, proj);
+
+  return {
+    available: mcp.available || claudeAll.length > 0,
+    ts: mcp.ts,
+    sessions: mcp.sessions,                 // existing MCP rows (schema unchanged)
+    claude_sessions: claudeForProject,      // new: Claude rows for this project
+  };
 });
 
 // Unassigned drill-down — keyed by db_path so a user inspecting one DB's
@@ -723,7 +745,23 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
   const attributed = projectQueries.resolveAttributedAgentIdsForDb(
     entry.db, entry.tables, reg.projects, dbPath,
   );
-  return projectQueries.queryUnassignedDetail(entry.db, entry.tables, dbPath, attributed);
+  const detail = projectQueries.queryUnassignedDetail(entry.db, entry.tables, dbPath, attributed);
+
+  // Claude Code: surface sessions whose cwd is in NO registered project.
+  // This is global (not per-db) so we only attach when the user is on
+  // the *first* Unassigned card — otherwise duplicate cards on multi-DB
+  // setups would each show the same Claude rows. Heuristic: attach to
+  // the bucket whose db_path equals the first registry db_path, or the
+  // single bucket when there is only one. Day-1 simplification; the
+  // panel doesn't yet model "Claude sessions are not really a per-DB
+  // thing" but this avoids duplication today.
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+  const claudeUnassigned = claudeSessionScan.unassignedClaudeSessions(claudeAll, reg.projects);
+  const dbPaths = registry.uniqueDbPaths(reg);
+  const isPrimaryBucket = dbPaths.length === 0
+    || dbPaths[0] === dbPath;
+  detail.claude_sessions = isPrimaryBucket ? claudeUnassigned : [];
+  return detail;
 });
 
 // ---------------------------------------------------------------------------

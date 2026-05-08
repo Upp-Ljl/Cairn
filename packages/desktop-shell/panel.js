@@ -607,7 +607,7 @@ function renderSessionRow(sess, opts) {
     `<div class="sess" data-agent="${escapeHtml(sess.agent_id)}">` +
       `<div class="sess-line1">` +
         `<span class="sess-state s-${escapeHtml(stateLabel)}">${escapeHtml(stateLabel)}</span>` +
-        `<span class="sess-id"><code>${escapeHtml(sess.agent_id)}</code> <span class="at-type">@${escapeHtml(sess.agent_type)}</span></span>` +
+        `<span class="sess-id"><code>${escapeHtml(sess.agent_id)}</code> <span class="at-type">@${escapeHtml(sess.agent_type)}</span> <span class="sess-source s-mcp">MCP</span></span>` +
         `<span class="sess-meta">${escapeHtml(heartbeatTxt)}</span>` +
       `</div>` +
       `<div class="sess-line2">${renderCapChips(sess.capabilities)}</div>` +
@@ -615,6 +615,91 @@ function renderSessionRow(sess, opts) {
       (actions.length ? `<div class="sess-actions">${actions.join('')}</div>` : '') +
     `</div>`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code session rows (Real Agent Presence step 2)
+// ---------------------------------------------------------------------------
+//
+// Different shape than MCP rows. Renderer is intentionally a separate
+// function rather than overloading renderSessionRow, because:
+//   - Claude rows have no agent_id / agent_type / owns_tasks /
+//     capabilities — those are MCP-specific.
+//   - The state vocabulary differs (busy/idle/stale/dead/unknown vs
+//     ACTIVE/STALE/DEAD/OTHER), and conflating them in one function
+//     would force the reader to keep two parallel mental models.
+//   - Claude rows are read-only with no Cairn agent_id, so neither
+//     "filter Tasks tab" nor "Add to project…" actions apply.
+
+function shortPathInProject(absPath, projectRoot) {
+  if (!absPath) return '?';
+  // Cosmetic: normalize separators in the user-facing string only.
+  const norm  = absPath.replace(/\\/g, '/');
+  if (projectRoot) {
+    const root = projectRoot.replace(/\\/g, '/');
+    const rootCmp = (typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent || ''))
+      ? root.toLowerCase() : root;
+    const normCmp = (typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent || ''))
+      ? norm.toLowerCase() : norm;
+    if (normCmp === rootCmp) return '· (project root)';
+    if (normCmp.startsWith(rootCmp + '/')) return '·/' + norm.slice(root.length + 1);
+  }
+  // No project context — fall back to the trailing two segments.
+  const parts = norm.split('/').filter(Boolean);
+  return parts.length <= 2 ? norm : '…/' + parts.slice(-2).join('/');
+}
+
+function renderClaudeSessionRow(row, opts) {
+  const projectRoot = opts && opts.projectRoot;
+  // status (lowercase) → display badge state (uppercase).
+  const display = (row.status || 'unknown').toUpperCase(); // BUSY | IDLE | STALE | DEAD | UNKNOWN
+  const sid = row.session_id ? row.session_id.slice(0, 8) : '?';
+  const cwdShort = shortPathInProject(row.cwd, projectRoot);
+  const ageTxt = row.updated_at ? relTimeMs(row.updated_at) : '?';
+  // Show raw_status as a hint when we promoted to stale/dead, e.g.
+  // "STALE (was busy)".
+  const rawHint = row.raw_status ? ` <span style="color:#666">(was ${escapeHtml(row.raw_status)})</span>` : '';
+  const pidTxt = row.pid != null ? `pid ${row.pid}` : 'no pid';
+  const verTxt = row.version ? ` · ${escapeHtml(row.version)}` : '';
+  const reasonTxt = row.stale_reason && (display === 'STALE' || display === 'DEAD')
+    ? ` <span style="color:#666">[${escapeHtml(row.stale_reason)}]</span>`
+    : '';
+  // No data-agent attribute — Claude rows are read-only with no Cairn
+  // agent_id. Click is not wired to any per-row action for now.
+  return (
+    `<div class="sess" data-claude-pid="${escapeHtml(String(row.pid || ''))}">` +
+      `<div class="sess-line1">` +
+        `<span class="sess-state s-${escapeHtml(display)}">${escapeHtml(display)}</span>` +
+        `<span class="sess-id"><code>claude:${escapeHtml(sid)}</code> ${rawHint}<span class="sess-source s-claude">Claude Code</span></span>` +
+        `<span class="sess-meta">${escapeHtml(ageTxt)}</span>` +
+      `</div>` +
+      `<div class="sess-line2" style="margin-left:78px">` +
+        `<code>${escapeHtml(cwdShort)}</code>` +
+      `</div>` +
+      `<div class="sess-line3" style="margin-left:78px">` +
+        `${escapeHtml(pidTxt)}${verTxt}${reasonTxt}` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+function renderClaudeSessionsBlock(rows, opts) {
+  if (!rows || !rows.length) return '';
+  // Group: BUSY / IDLE / STALE / DEAD/UNKNOWN — same dramaturgy as MCP.
+  const groups = { BUSY: [], IDLE: [], STALE: [], OTHER: [] };
+  for (const r of rows) {
+    const st = (r.status || 'unknown').toUpperCase();
+    if      (st === 'BUSY')  groups.BUSY.push(r);
+    else if (st === 'IDLE')  groups.IDLE.push(r);
+    else if (st === 'STALE') groups.STALE.push(r);
+    else                     groups.OTHER.push(r);
+  }
+  let out = `<div class="sess-group-title">CLAUDE CODE SESSIONS (${rows.length})</div>`;
+  for (const k of ['BUSY', 'IDLE', 'STALE', 'OTHER']) {
+    if (!groups[k].length) continue;
+    out += groups[k].map(r => renderClaudeSessionRow(r, opts)).join('');
+  }
+  return out;
 }
 
 let lastSessions = [];
@@ -626,12 +711,17 @@ function renderSessions(payload) {
     return;
   }
   const sessions = payload.sessions || [];
+  const claudeSessions = payload.claude_sessions || [];
   lastSessions = sessions;
-  if (!sessions.length) {
-    el.innerHTML = '<div class="placeholder">no sessions matched this project\'s hints<br>add a hint to start attributing presence rows</div>';
+  if (!sessions.length && !claudeSessions.length) {
+    el.innerHTML = (
+      '<div class="placeholder">no sessions matched this project<br>'
+      + 'open Claude Code or an MCP-enabled agent in this project\'s folder to see live presence here'
+      + '</div>'
+    );
     return;
   }
-  // Group: ACTIVE / STALE / OTHER (DEAD or IDLE).
+  // MCP rows: group ACTIVE / STALE / OTHER (DEAD or IDLE).
   const groups = { ACTIVE: [], STALE: [], OTHER: [] };
   for (const s of sessions) {
     if (s.computed_state === 'ACTIVE')      groups.ACTIVE.push(s);
@@ -639,17 +729,26 @@ function renderSessions(payload) {
     else                                    groups.OTHER.push(s);
   }
   let html = '';
-  if (groups.ACTIVE.length) {
-    html += `<div class="sess-group-title">ACTIVE (${groups.ACTIVE.length})</div>`;
-    html += groups.ACTIVE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+  if (sessions.length) {
+    html += `<div class="sess-group-title">CAIRN MCP SESSIONS (${sessions.length})</div>`;
+    if (groups.ACTIVE.length) {
+      html += `<div class="sess-group-title">ACTIVE (${groups.ACTIVE.length})</div>`;
+      html += groups.ACTIVE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+    }
+    if (groups.STALE.length) {
+      html += `<div class="sess-group-title alert">STALE (${groups.STALE.length})</div>`;
+      html += groups.STALE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+    }
+    if (groups.OTHER.length) {
+      html += `<div class="sess-group-title">DEAD / IDLE (${groups.OTHER.length})</div>`;
+      html += groups.OTHER.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+    }
   }
-  if (groups.STALE.length) {
-    html += `<div class="sess-group-title alert">STALE (${groups.STALE.length})</div>`;
-    html += groups.STALE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
-  }
-  if (groups.OTHER.length) {
-    html += `<div class="sess-group-title">DEAD / IDLE (${groups.OTHER.length})</div>`;
-    html += groups.OTHER.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+  // Claude Code rows: rendered as a separate block to keep the source
+  // boundary visible and avoid faking a Cairn agent_id we don't have.
+  if (claudeSessions.length) {
+    const projectRoot = selectedProject ? selectedProject.project_root : null;
+    html += renderClaudeSessionsBlock(claudeSessions, { projectRoot });
   }
   el.innerHTML = html;
 
@@ -686,8 +785,10 @@ function renderUnassignedDetail(detail) {
 
   titleEl.textContent = `Unassigned · ${detail.total_rows || 0} row${detail.total_rows === 1 ? '' : 's'} not matched by any project's hints`;
   dbEl.textContent    = `DB: ${detail.db_path}`;
+  const claudeCount = (detail.claude_sessions || []).length;
   countsEl.innerHTML  =
     `agents <b>${detail.agents.length}</b>` +
+    (claudeCount ? `<span class="sep">·</span>claude <b>${claudeCount}</b>` : '') +
     `<span class="sep">·</span>tasks ${detail.tasks}` +
     `<span class="sep">·</span>blockers ${detail.blockers}` +
     `<span class="sep">·</span>outcomes ${detail.outcomes}` +
@@ -695,13 +796,24 @@ function renderUnassignedDetail(detail) {
     `<span class="sep">·</span>conflicts ${detail.conflicts}` +
     `<span class="sep">·</span>dispatches ${detail.dispatches}`;
 
-  if (!detail.agents.length) {
+  const claudeRows = detail.claude_sessions || [];
+  if (!detail.agents.length && !claudeRows.length) {
     listEl.innerHTML = '<div class="placeholder">no unassigned agents — every presence row in this DB belongs to some registered project</div>';
     return;
   }
-  listEl.innerHTML = detail.agents
-    .map(s => renderSessionRow(s, { allowAddTo: true }))
-    .join('');
+  let html = '';
+  if (detail.agents.length) {
+    html += detail.agents.map(s => renderSessionRow(s, { allowAddTo: true })).join('');
+  }
+  // Claude rows whose cwd matches no registered project. We don't offer
+  // "Add to project" for them — Claude sessions don't carry a Cairn
+  // agent_id, so a hint won't help. Surfacing them is itself the value:
+  // user sees "I have a Claude Code running outside any registered
+  // project" and decides whether to register that project.
+  if (claudeRows.length) {
+    html += renderClaudeSessionsBlock(claudeRows, { projectRoot: null });
+  }
+  listEl.innerHTML = html;
 
   listEl.querySelectorAll('.sess-actions a[data-act="add-to-project"]').forEach(a => {
     a.addEventListener('click', ev => {

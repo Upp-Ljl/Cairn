@@ -485,6 +485,24 @@
   .sess-state.s-STALE  { background: #3a2a10; color: #ec8; }
   .sess-state.s-DEAD   { background: #2a2a2a; color: #888; }
   .sess-state.s-OTHER  { background: #222;    color: #777; }
+  /* Claude Code session-file adapter — busy/idle/stale/dead/unknown */
+  .sess-state.s-BUSY    { background: #1a3a1a; color: #7e7; }
+  .sess-state.s-IDLE    { background: #20272f; color: #9ac; }
+  .sess-state.s-UNKNOWN { background: #222;    color: #888; }
+  /* Source badge on the right of the row's first line */
+  .sess-source {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 0 5px;
+    border-radius: 2px;
+    background: #20242a;
+    color: #88a;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    vertical-align: 1px;
+  }
+  .sess-source.s-mcp     { background: #1f2a1f; color: #8b8; }
+  .sess-source.s-claude  { background: #1f1f2e; color: #aab; }
   .sess-id { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sess-id .at-type { color: #88a; }
   .sess-meta { color: #666; font-size: 0.85em; text-align: right; }
