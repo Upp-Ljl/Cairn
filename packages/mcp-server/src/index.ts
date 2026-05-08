@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { openWorkspace } from './workspace.js';
+import { startPresence } from './presence.js';
 import { toolWriteScratch, toolReadScratch, toolListScratch, toolDeleteScratch } from './tools/scratchpad.js';
 import { toolCreateCheckpoint, toolListCheckpoints } from './tools/checkpoint.js';
 import { toolRewindPreview, toolRewindTo } from './tools/rewind.js';
@@ -17,6 +18,11 @@ import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCance
 import { toolEvaluateOutcome, toolTerminalFailOutcome } from './tools/outcomes.js';
 
 const ws = openWorkspace();
+
+// Boot-time presence so panel readers can see this mcp-server session
+// in the processes table without depending on the host agent's prompt
+// template. See presence.ts for scope (no orchestration, no new tool).
+startPresence(ws);
 
 const server = new Server(
   { name: 'cairn-mcp', version: '0.0.1' },
