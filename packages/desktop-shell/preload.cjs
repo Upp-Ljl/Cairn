@@ -24,7 +24,16 @@ const MUTATIONS_ENABLED = (() => {
 })();
 
 const api = {
-  // ---- Day 1: panel ----
+  // ---- Project-Aware Live Panel: L1 + project registry ----
+  getProjectsList:    () => ipcRenderer.invoke('get-projects-list'),
+  selectProject:      (id) => ipcRenderer.invoke('select-project', id),
+  getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
+  addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),
+  removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
+  renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
+  addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),
+
+  // ---- panel views (active-project routed; deprecated set-db-path) ----
   getProjectSummary: () => ipcRenderer.invoke('get-project-summary'),
   getTasksList:      () => ipcRenderer.invoke('get-tasks-list'),
   getTaskDetail:     (taskId) => ipcRenderer.invoke('get-task-detail', taskId),

@@ -245,44 +245,153 @@
     flex: 0 0 auto;
   }
   #footer.bad { color: #f77; }
+
+  /* L1 — Projects list */
+  #view-projects-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 0;
+  }
+  .pl-section-title {
+    padding: 6px 12px 3px;
+    color: #666;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: #0f0f0f;
+    border-bottom: 1px solid #1e1e1e;
+  }
+  .pcard {
+    padding: 8px 12px;
+    border-bottom: 1px solid #1e1e1e;
+    cursor: pointer;
+  }
+  .pcard:hover { background: #181818; }
+  .pcard-line1 {
+    display: grid;
+    grid-template-columns: 16px 1fr 60px;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .health-dot { font-size: 0.95rem; line-height: 1; text-align: center; }
+  .health-dot.alert { color: #f77; }
+  .health-dot.warn  { color: #ec8; }
+  .health-dot.idle  { color: #555; }
+  .pcard-label { color: #ddd; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pcard-act   { color: #666; font-size: 0.85em; text-align: right; }
+  .pcard-line2 {
+    margin-left: 24px;
+    color: #888;
+    font-size: 0.85em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pcard-line3 {
+    margin-left: 24px;
+    color: #555;
+    font-size: 0.8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pcard-counts {
+    margin-left: 24px;
+    color: #aaa;
+    font-size: 0.85em;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pcard-counts .alert { color: #f77; }
+  .pcard-counts .warn  { color: #ec8; }
+  .pcard-counts .zero  { color: #555; }
+  .pcard-counts .sep   { color: #333; padding: 0 4px; }
+  .pcard-actions {
+    margin-left: 24px;
+    margin-top: 4px;
+    font-size: 0.78rem;
+    color: #555;
+  }
+  .pcard-actions a {
+    color: #666;
+    cursor: pointer;
+    margin-right: 12px;
+  }
+  .pcard-actions a:hover { color: #7af; }
+  .uacard { background: #161616; }
+  .uacard .health-dot.unassigned { color: #779; }
+  .pl-add {
+    padding: 10px 12px;
+    text-align: center;
+    color: #888;
+    cursor: pointer;
+    border-top: 1px solid #1e1e1e;
+    background: #131313;
+  }
+  .pl-add:hover { color: #7af; background: #161616; }
+  .pl-empty {
+    padding: 24px 12px;
+    color: #666;
+    text-align: center;
+    font-style: italic;
+  }
 </style>
 </head>
 <body>
 <div id="app">
+  <!--
+    The panel has two top-level views:
+      L1 = #view-projects-list  (default; project cards + Unassigned)
+      L2 = #view-project        (Quick-Slice surface, scoped to selectedProject)
+    Header / footer are shared. The header changes labels per view;
+    the menu lives in the header.
+  -->
   <div id="header">
-    <span id="workspace-label">workspace: …</span>
-    <span id="db-path">DB: …</span>
+    <span id="workspace-label">Cairn — Projects</span>
+    <span id="db-path"></span>
     <button id="menu-btn" type="button">⋯</button>
     <div id="menu-pop">
-      <button id="menu-switch-db" type="button">Switch DB / workspace…</button>
+      <button id="menu-back-to-projects" type="button" hidden>← Back to projects</button>
+      <button id="menu-add-project" type="button">Add project…</button>
       <button id="menu-open-legacy" type="button">Open Legacy Inspector</button>
     </div>
   </div>
 
-  <div id="summary">
-    <div class="row"><span class="k">active agents</span>          <span class="v zero" id="s-agents">—</span></div>
-    <div class="row"><span class="k">tasks running/blocked/review</span><span class="v zero" id="s-tasks">—</span></div>
-    <div class="row"><span class="k">open blockers</span>          <span class="v zero" id="s-blockers">—</span></div>
-    <div class="row"><span class="k">failed outcomes</span>        <span class="v zero" id="s-fail">—</span></div>
-    <div class="row"><span class="k">open conflicts</span>         <span class="v zero" id="s-conflicts">—</span></div>
-    <div class="row"><span class="k">dispatches (last 1h)</span>   <span class="v zero" id="s-dispatch">—</span></div>
-    <div id="summary-meta">loading…</div>
-  </div>
-
-  <div id="tabs">
-    <button class="tab active" data-tab="runlog" type="button">Run Log</button>
-    <button class="tab"        data-tab="tasks"  type="button">Tasks</button>
-  </div>
-
-  <div id="view-body">
-    <div id="view-runlog" class="view">
-      <div id="runlog-list">
-        <div class="placeholder">loading…</div>
-      </div>
+  <!-- L1 -->
+  <div id="view-projects-list">
+    <div id="projects-list-body">
+      <div class="placeholder">loading…</div>
     </div>
-    <div id="view-tasks" class="view" hidden>
-      <div id="tasks-list">
-        <div class="placeholder">loading…</div>
+    <div class="pl-add" id="pl-add-btn">＋ Add project…</div>
+  </div>
+
+  <!-- L2 (hidden by default; revealed when user picks a project) -->
+  <div id="view-project" hidden>
+    <div id="summary">
+      <div class="row"><span class="k">active agents</span>          <span class="v zero" id="s-agents">—</span></div>
+      <div class="row"><span class="k">tasks running/blocked/review</span><span class="v zero" id="s-tasks">—</span></div>
+      <div class="row"><span class="k">open blockers</span>          <span class="v zero" id="s-blockers">—</span></div>
+      <div class="row"><span class="k">failed outcomes</span>        <span class="v zero" id="s-fail">—</span></div>
+      <div class="row"><span class="k">open conflicts</span>         <span class="v zero" id="s-conflicts">—</span></div>
+      <div class="row"><span class="k">dispatches (last 1h)</span>   <span class="v zero" id="s-dispatch">—</span></div>
+      <div id="summary-meta">loading…</div>
+    </div>
+
+    <div id="tabs">
+      <button class="tab active" data-tab="runlog" type="button">Run Log</button>
+      <button class="tab"        data-tab="tasks"  type="button">Tasks</button>
+    </div>
+
+    <div id="view-body">
+      <div id="view-runlog" class="view">
+        <div id="runlog-list">
+          <div class="placeholder">loading…</div>
+        </div>
+      </div>
+      <div id="view-tasks" class="view" hidden>
+        <div id="tasks-list">
+          <div class="placeholder">loading…</div>
+        </div>
       </div>
     </div>
   </div>

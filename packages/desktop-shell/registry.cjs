@@ -1,0 +1,353 @@
+'use strict';
+
+/**
+ * Project registry for the desktop-shell.
+ *
+ * Persists at `~/.cairn/projects.json`. Each entry describes a logical
+ * project the user has registered with Cairn. Several distinct projects
+ * may share the same db_path (mcp-server defaults to the global
+ * `~/.cairn/cairn.db` for every cwd), so the canonical identity of a
+ * project is `project_root`, not `db_path`. The `agent_id_hints` field
+ * is the per-project filter used by project-queries.cjs to attribute
+ * rows in the shared DB back to this project.
+ *
+ * Schema v2:
+ *   {
+ *     "version": 2,
+ *     "projects": [
+ *       {
+ *         "id": "...",
+ *         "label": "...",
+ *         "project_root": "D:\\lll\\cairn",   // identity
+ *         "db_path": "C:\\Users\\jushi\\.cairn\\cairn.db",  // data source
+ *         "agent_id_hints": ["cairn-6eb0e3c955f4"],         // attribution
+ *         "added_at": 1715140000000,
+ *         "last_opened_at": 1715180000000
+ *       }
+ *     ]
+ *   }
+ *
+ * Migration:
+ *   v0 = no file. Bootstrap from legacy `~/.cairn/desktop-shell.json.dbPath`
+ *        if present, into a single entry with `project_root='(unknown)'`
+ *        and empty hints (the user adds hints via the panel).
+ *   v1 (older Quick Slice draft, never shipped) = same fields minus
+ *        project_root + agent_id_hints. Treated as v0 for migration.
+ *
+ * desktop-shell is the only writer to this file. The daemon never
+ * reads or writes it. mcp-server never reads or writes it.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+
+const REGISTRY_PATH       = path.join(os.homedir(), '.cairn', 'projects.json');
+const LEGACY_PREFS_PATH   = path.join(os.homedir(), '.cairn', 'desktop-shell.json');
+const DEFAULT_DB_PATH     = path.join(os.homedir(), '.cairn', 'cairn.db');
+const REGISTRY_VERSION    = 2;
+
+/**
+ * @typedef {Object} ProjectRegistryEntry
+ * @property {string} id              Stable identifier (random; persists across renames)
+ * @property {string} label           Display name (user-editable; default = basename of project_root)
+ * @property {string} project_root    Absolute path to the project root directory (canonical identity)
+ * @property {string} db_path         Absolute path to the SQLite file storing this project's data
+ * @property {string[]} agent_id_hints  Agent IDs whose rows belong to this project
+ * @property {number} added_at        unix ms
+ * @property {number} last_opened_at  unix ms
+ */
+
+// ---------------------------------------------------------------------------
+// Identity helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the SESSION_AGENT_ID that mcp-server would assign to a
+ * workspace whose canonical path is `canonicalPath`. Mirrors the formula
+ * in `packages/mcp-server/src/workspace.ts`:
+ *   sha1(hostname() + ':' + canonicalPath).slice(0, 12), prefixed
+ *   with "cairn-".
+ *
+ * NOTE: mcp-server first tries `git rev-parse --show-toplevel` and falls
+ * back to raw cwd. We don't shell out from desktop-shell, so the caller
+ * should pass the git toplevel (or the project_root) when known.
+ *
+ * @param {string} canonicalPath
+ * @returns {string}
+ */
+function deriveAgentIdHint(canonicalPath) {
+  const raw = os.hostname() + ':' + canonicalPath;
+  const hash = crypto.createHash('sha1').update(raw).digest('hex');
+  return 'cairn-' + hash.slice(0, 12);
+}
+
+function newProjectId() {
+  // Short random id; not cryptographic. Stable across renames so callers
+  // can pass it through IPC instead of relying on label/path.
+  return 'p_' + crypto.randomBytes(6).toString('hex');
+}
+
+function defaultLabelFor(projectRoot) {
+  if (!projectRoot || projectRoot === '(unknown)') return '(unknown)';
+  const base = path.basename(projectRoot);
+  return base || projectRoot;
+}
+
+// ---------------------------------------------------------------------------
+// File IO
+// ---------------------------------------------------------------------------
+
+function ensureCairnDir() {
+  try { fs.mkdirSync(path.dirname(REGISTRY_PATH), { recursive: true }); } catch (_e) {}
+}
+
+/**
+ * Atomic write: write to temp + rename. Avoids torn writes if the panel
+ * crashes mid-save.
+ */
+function atomicWriteJson(filePath, obj) {
+  ensureCairnDir();
+  const tmp = filePath + '.tmp.' + crypto.randomBytes(4).toString('hex');
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+  fs.renameSync(tmp, filePath);
+}
+
+/**
+ * Read the registry file, returning an empty v2 shape if it doesn't
+ * exist or is malformed. Never throws into the caller.
+ */
+function readRegistryFile() {
+  try {
+    if (!fs.existsSync(REGISTRY_PATH)) return null;
+    const raw = fs.readFileSync(REGISTRY_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function readLegacyPrefs() {
+  try {
+    if (!fs.existsSync(LEGACY_PREFS_PATH)) return null;
+    const raw = fs.readFileSync(LEGACY_PREFS_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap / migration
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed an initial registry from whatever signal we can find on disk.
+ * Used when projects.json doesn't exist yet (first run, or upgrading
+ * from Quick Slice).
+ *
+ * Sources (in priority order):
+ *   1. Legacy `desktop-shell.json.dbPath` — create one entry pointing
+ *      at that DB, with project_root='(unknown)' (user assigns hints
+ *      via panel later).
+ *   2. Otherwise — empty registry. Panel will show "no projects
+ *      registered yet. Add project…".
+ *
+ * The legacy `desktop-shell.json` file is left in place so users
+ * downgrading to a Quick Slice-era build don't break.
+ *
+ * @returns {{ version: number, projects: ProjectRegistryEntry[] }}
+ */
+function bootstrapInitialRegistry() {
+  const now = Date.now();
+  const legacy = readLegacyPrefs();
+  const legacyDb = legacy && typeof legacy.dbPath === 'string' && legacy.dbPath.trim()
+    ? legacy.dbPath
+    : null;
+
+  if (legacyDb) {
+    return {
+      version: REGISTRY_VERSION,
+      projects: [{
+        id: 'legacy-default',
+        label: '(legacy default)',
+        project_root: '(unknown)',
+        db_path: legacyDb,
+        agent_id_hints: [],
+        added_at: now,
+        last_opened_at: now,
+      }],
+    };
+  }
+
+  return { version: REGISTRY_VERSION, projects: [] };
+}
+
+/**
+ * Load the registry, performing one-time migration if needed.
+ * Persists the migrated result to disk so subsequent loads are cheap.
+ *
+ * @returns {{ version: number, projects: ProjectRegistryEntry[] }}
+ */
+function loadRegistry() {
+  const existing = readRegistryFile();
+
+  if (existing && existing.version === REGISTRY_VERSION && Array.isArray(existing.projects)) {
+    return existing;
+  }
+
+  // No file or older shape → bootstrap and persist.
+  const fresh = bootstrapInitialRegistry();
+  saveRegistry(fresh);
+  return fresh;
+}
+
+function saveRegistry(reg) {
+  if (!reg || typeof reg !== 'object') return;
+  const out = {
+    version: REGISTRY_VERSION,
+    projects: Array.isArray(reg.projects) ? reg.projects : [],
+  };
+  atomicWriteJson(REGISTRY_PATH, out);
+}
+
+// ---------------------------------------------------------------------------
+// CRUD helpers (the panel calls these via IPC)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a fresh registry entry. Auto-derives a default agent_id_hint
+ * from the project_root using mcp-server's SESSION_AGENT_ID formula
+ * (so a project_root that is also the git toplevel will match
+ * out-of-the-box).
+ *
+ * @param {{ project_root: string, db_path?: string, label?: string, agent_id_hints?: string[] }} input
+ * @returns {ProjectRegistryEntry}
+ */
+function makeProjectEntry(input) {
+  const now = Date.now();
+  const project_root = input.project_root && input.project_root.trim()
+    ? input.project_root
+    : '(unknown)';
+  const db_path = input.db_path && input.db_path.trim()
+    ? input.db_path
+    : DEFAULT_DB_PATH;
+  const hints = Array.isArray(input.agent_id_hints) && input.agent_id_hints.length > 0
+    ? input.agent_id_hints.slice()
+    : (project_root === '(unknown)' ? [] : [deriveAgentIdHint(project_root)]);
+  return {
+    id: newProjectId(),
+    label: input.label && input.label.trim() ? input.label : defaultLabelFor(project_root),
+    project_root,
+    db_path,
+    agent_id_hints: hints,
+    added_at: now,
+    last_opened_at: now,
+  };
+}
+
+function addProject(reg, input) {
+  const entry = makeProjectEntry(input);
+  const next = { version: REGISTRY_VERSION, projects: [...reg.projects, entry] };
+  saveRegistry(next);
+  return { reg: next, entry };
+}
+
+function removeProject(reg, id) {
+  const next = {
+    version: REGISTRY_VERSION,
+    projects: reg.projects.filter(p => p.id !== id),
+  };
+  saveRegistry(next);
+  return next;
+}
+
+function renameProject(reg, id, label) {
+  if (!label || !String(label).trim()) return reg;
+  const next = {
+    version: REGISTRY_VERSION,
+    projects: reg.projects.map(p =>
+      p.id === id ? { ...p, label: String(label) } : p),
+  };
+  saveRegistry(next);
+  return next;
+}
+
+function addHint(reg, id, agentId) {
+  if (!agentId) return reg;
+  const next = {
+    version: REGISTRY_VERSION,
+    projects: reg.projects.map(p => {
+      if (p.id !== id) return p;
+      if (p.agent_id_hints.includes(agentId)) return p;
+      return { ...p, agent_id_hints: [...p.agent_id_hints, agentId] };
+    }),
+  };
+  saveRegistry(next);
+  return next;
+}
+
+function touchProject(reg, id) {
+  const now = Date.now();
+  const next = {
+    version: REGISTRY_VERSION,
+    projects: reg.projects.map(p =>
+      p.id === id ? { ...p, last_opened_at: now } : p),
+  };
+  saveRegistry(next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation helpers (used by main.cjs to plan DB connections)
+// ---------------------------------------------------------------------------
+
+function uniqueDbPaths(reg) {
+  const set = new Set();
+  for (const p of reg.projects) set.add(p.db_path);
+  return [...set];
+}
+
+/**
+ * Map of db_path → all hints across all registry projects sharing that
+ * db_path. project-queries.cjs uses this to compute Unassigned per DB.
+ *
+ * @returns {Map<string, Set<string>>}
+ */
+function hintsByDbPath(reg) {
+  const out = new Map();
+  for (const p of reg.projects) {
+    if (!out.has(p.db_path)) out.set(p.db_path, new Set());
+    for (const h of p.agent_id_hints) out.get(p.db_path).add(h);
+  }
+  return out;
+}
+
+module.exports = {
+  // paths
+  REGISTRY_PATH,
+  LEGACY_PREFS_PATH,
+  DEFAULT_DB_PATH,
+  REGISTRY_VERSION,
+  // identity
+  deriveAgentIdHint,
+  defaultLabelFor,
+  // load / save
+  loadRegistry,
+  saveRegistry,
+  // crud
+  makeProjectEntry,
+  addProject,
+  removeProject,
+  renameProject,
+  addHint,
+  touchProject,
+  // aggregation
+  uniqueDbPaths,
+  hintsByDbPath,
+};

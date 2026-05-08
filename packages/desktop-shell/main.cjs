@@ -23,6 +23,8 @@ const os = require('os');
 const fs = require('fs');
 
 const queries = require('./queries.cjs');
+const registry = require('./registry.cjs');
+const projectQueries = require('./project-queries.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -51,9 +53,12 @@ const TRAY_IMAGES = {
 // ---------------------------------------------------------------------------
 // Config + flags
 // ---------------------------------------------------------------------------
-
-const PREFS_PATH = path.join(os.homedir(), '.cairn', 'desktop-shell.json');
-const DEFAULT_DB_PATH = path.join(os.homedir(), '.cairn', 'cairn.db');
+//
+// Project-Aware Live Panel: persistent state lives in the project
+// registry (`~/.cairn/projects.json`, owned by registry.cjs).
+// The Quick-Slice-era `~/.cairn/desktop-shell.json` is read once at
+// boot for migration (registry.bootstrapInitialRegistry) and never
+// written by this build — keeping it in place lets users downgrade.
 
 const MUTATIONS_ENABLED = process.env.CAIRN_DESKTOP_ENABLE_MUTATIONS === '1';
 if (MUTATIONS_ENABLED) {
@@ -65,35 +70,39 @@ const argv = process.argv.slice(1); // [0] is the executable / .
 const LEGACY_MODE = argv.includes('--legacy');
 
 // ---------------------------------------------------------------------------
-// Prefs (workspace / DB path persistence)
+// SQLite connection state — multi-DB (one read handle per unique db_path)
 // ---------------------------------------------------------------------------
+//
+// Project-Aware Live Panel rule (plan §3.1):
+//   - identity is project_root, NOT db_path
+//   - multiple projects may share the same db_path
+//   - desktop-shell is the only writer to ~/.cairn/projects.json;
+//     it never writes to the SQLite DB
+//
+// State:
+//   reg            : current registry (loaded at boot, mutated via IPC)
+//   dbHandles      : Map<dbPath, { db, tables }> — one read handle per
+//                    unique db_path, shared by every project pointing at it
+//   selectedProjectId : the project currently shown in L2 (null = L1
+//                       projects-list view; also the default boot state)
+//
+// Legacy + Quick-Slice IPC handlers (getState, getProjectSummary,
+// queryRunLogEvents, etc.) read from the *active* db handle, which
+// follows selectedProjectId. When no project is selected, they fall
+// back to the default DB path so the pet sprite + legacy Inspector
+// keep working.
 
-function readPrefs() {
-  try {
-    if (!fs.existsSync(PREFS_PATH)) return {};
-    return JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8')) || {};
-  } catch (_e) {
-    return {};
-  }
-}
+/** @type {{ version: number, projects: registry.ProjectRegistryEntry[] }} */
+let reg = { version: registry.REGISTRY_VERSION, projects: [] };
 
-function writePrefs(prefs) {
-  try {
-    fs.mkdirSync(path.dirname(PREFS_PATH), { recursive: true });
-    fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2), 'utf8');
-  } catch (_e) {
-    // Non-fatal — prefs are convenience, not correctness.
-  }
-}
+/** @type {Map<string, { db: any, tables: Set<string> }>} */
+const dbHandles = new Map();
 
-// ---------------------------------------------------------------------------
-// SQLite connection state
-// ---------------------------------------------------------------------------
+/** @type {Map<string, any>} writeDb handles (mutation flag only) */
+const writeHandles = new Map();
 
-let dbPath = null;       // currently open db file (absolute)
-let db = null;           // read-only better-sqlite3 handle
-let writeDb = null;      // lazy write handle (mutation flag only)
-let tables = new Set();  // cached table-presence for current connection
+/** @type {string|null} */
+let selectedProjectId = null;
 
 function openReadDb(p) {
   const Database = require('better-sqlite3');
@@ -101,53 +110,102 @@ function openReadDb(p) {
 }
 
 function openWriteDb(p) {
-  if (writeDb && dbPath === p) return writeDb;
+  if (writeHandles.has(p)) return writeHandles.get(p);
   const Database = require('better-sqlite3');
-  writeDb = new Database(p, { fileMustExist: true });
-  return writeDb;
+  const handle = new Database(p, { fileMustExist: true });
+  writeHandles.set(p, handle);
+  return handle;
+}
+
+/** Ensure WAL mode for a db file (idempotent). */
+function ensureWalMode(p) {
+  try {
+    const Database = require('better-sqlite3');
+    const init = new Database(p);
+    init.pragma('journal_mode = WAL');
+    init.close();
+  } catch (_e) { /* mcp-server will WAL-init on its own write */ }
 }
 
 /**
- * Open (or re-open) the read-only handle for the given DB path. Closes any
- * previous handles to avoid file-descriptor leaks across project switches.
+ * Make sure a read handle exists for `p`. Returns the handle entry, or
+ * null if the file is missing / unreadable.
  */
-function connectDb(targetPath) {
-  // Close previous handles cleanly
-  try { if (db) db.close(); } catch (_e) {}
-  try { if (writeDb) writeDb.close(); } catch (_e) {}
-  db = null;
-  writeDb = null;
-  tables = new Set();
-  dbPath = targetPath;
-
-  if (!targetPath || !fs.existsSync(targetPath)) {
+function ensureDbHandle(p) {
+  if (!p) return null;
+  if (dbHandles.has(p)) return dbHandles.get(p);
+  if (!fs.existsSync(p)) {
     // eslint-disable-next-line no-console
-    console.log(`cairn pet: db not found at ${targetPath}`);
-    return false;
+    console.log(`cairn: db not found at ${p}`);
+    return null;
   }
-
-  // Ensure WAL mode once with a transient RW handle. mcp-server already does
-  // this on first write; we do it defensively in case the desktop opens an
-  // existing file before any writer has touched it.
+  ensureWalMode(p);
   try {
-    const Database = require('better-sqlite3');
-    const init = new Database(targetPath);
-    init.pragma('journal_mode = WAL');
-    init.close();
-  } catch (_e) { /* fall through; mcp-server will WAL-init eventually */ }
-
-  try {
-    db = openReadDb(targetPath);
-    tables = queries.getTables(db);
+    const handle = openReadDb(p);
+    const entry = { db: handle, tables: queries.getTables(handle) };
+    dbHandles.set(p, entry);
     // eslint-disable-next-line no-console
-    console.log(`cairn pet: db connected ${targetPath} (${tables.size} tables)`);
-    return true;
+    console.log(`cairn: db connected ${p} (${entry.tables.size} tables)`);
+    return entry;
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.error(`cairn pet: db open failed: ${e.message}`);
-    db = null;
-    return false;
+    console.error(`cairn: db open failed: ${e.message}`);
+    return null;
   }
+}
+
+/**
+ * Close a read handle if no remaining registry project still points
+ * at it. Call after registry mutations.
+ */
+function gcDbHandles() {
+  const stillReferenced = new Set(registry.uniqueDbPaths(reg));
+  for (const [p, entry] of dbHandles.entries()) {
+    if (!stillReferenced.has(p)) {
+      try { entry.db.close(); } catch (_e) {}
+      dbHandles.delete(p);
+    }
+  }
+  for (const [p, w] of writeHandles.entries()) {
+    if (!stillReferenced.has(p)) {
+      try { w.close(); } catch (_e) {}
+      writeHandles.delete(p);
+    }
+  }
+}
+
+function openAllRegistryDbs() {
+  for (const p of registry.uniqueDbPaths(reg)) ensureDbHandle(p);
+}
+
+/**
+ * Resolve the "active" db handle for legacy / non-project IPC calls.
+ * Routes through selectedProjectId if set; otherwise falls back to the
+ * default DB path (so pet sprite + legacy Inspector continue working
+ * even when the user is on the L1 view).
+ */
+function activeDbEntry() {
+  if (selectedProjectId) {
+    const proj = reg.projects.find(p => p.id === selectedProjectId);
+    if (proj) return ensureDbHandle(proj.db_path);
+  }
+  // Fallback: first registry entry, or the default DB.
+  if (reg.projects.length > 0) return ensureDbHandle(reg.projects[0].db_path);
+  return ensureDbHandle(registry.DEFAULT_DB_PATH);
+}
+
+function activeDbPath() {
+  if (selectedProjectId) {
+    const proj = reg.projects.find(p => p.id === selectedProjectId);
+    if (proj) return proj.db_path;
+  }
+  if (reg.projects.length > 0) return reg.projects[0].db_path;
+  return registry.DEFAULT_DB_PATH;
+}
+
+function activeProject() {
+  if (!selectedProjectId) return null;
+  return reg.projects.find(p => p.id === selectedProjectId) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,13 +357,60 @@ function buildTrayTooltip(summary) {
 
 function refreshTray() {
   if (!tray) return;
-  const summary = queries.queryProjectSummary(db, tables, dbPath);
-  const state = deriveTrayState(summary);
-  if (state !== lastTrayState) {
-    tray.setImage(TRAY_IMAGES[state]);
-    lastTrayState = state;
+  // Aggregate across all registered projects: tray reflects the worst
+  // health across them. Unassigned buckets are not counted (they
+  // shouldn't drive the tray to alert just because random untagged
+  // rows exist in the DB).
+  let worst = 'idle';
+  let totalAgents = 0, totalBlockers = 0, totalFail = 0, totalConflicts = 0;
+  let aggAvailable = false;
+
+  for (const p of reg.projects) {
+    const entry = ensureDbHandle(p.db_path);
+    if (!entry) continue;
+    aggAvailable = true;
+    const s = projectQueries.queryProjectScopedSummary(
+      entry.db, entry.tables, p.db_path, p.agent_id_hints,
+    );
+    if (s.health === 'alert') worst = 'alert';
+    else if (s.health === 'warn' && worst !== 'alert') worst = 'warn';
+    totalAgents    += s.agents_active;
+    totalBlockers  += s.blockers_open;
+    totalFail      += s.outcomes_failed + s.tasks_failed;
+    totalConflicts += s.conflicts_open;
   }
-  tray.setToolTip(buildTrayTooltip(summary));
+
+  // Fallback: no registry projects — show legacy queryProjectSummary
+  // against the default DB so the tray is still meaningful for users
+  // who haven't configured anything yet.
+  if (!aggAvailable) {
+    const fallbackEntry = activeDbEntry();
+    if (fallbackEntry) {
+      const s = queries.queryProjectSummary(
+        fallbackEntry.db, fallbackEntry.tables, activeDbPath(),
+      );
+      worst = deriveTrayState(s);
+      totalAgents    = s.agents_active;
+      totalBlockers  = s.blockers_open;
+      totalFail      = s.outcomes_failed;
+      totalConflicts = s.conflicts_open;
+      aggAvailable   = s.available;
+    }
+  }
+
+  if (worst !== lastTrayState) {
+    tray.setImage(TRAY_IMAGES[worst]);
+    lastTrayState = worst;
+  }
+
+  if (!aggAvailable) {
+    tray.setToolTip('Cairn — DB unavailable');
+  } else {
+    tray.setToolTip(
+      `Cairn — ${totalAgents} agents · ${totalBlockers} blockers · ` +
+      `${totalFail} FAIL · ${totalConflicts} conflicts`,
+    );
+  }
 }
 
 function createTray() {
@@ -326,65 +431,196 @@ function createTray() {
 }
 
 // ---------------------------------------------------------------------------
-// IPC — panel / Day 1 channels
+// IPC — Project-Aware (L1 + project-scoped views)
 // ---------------------------------------------------------------------------
 
-ipcMain.handle('get-project-summary', () =>
-  queries.queryProjectSummary(db, tables, dbPath)
-);
+/**
+ * Build the L1 Projects-list payload: per-project scoped summary +
+ * one Unassigned bucket per unique db_path.
+ */
+function getProjectsList() {
+  const hintsByDb = registry.hintsByDbPath(reg);
+  const projects = reg.projects.map(p => {
+    const entry = ensureDbHandle(p.db_path);
+    if (!entry) {
+      return {
+        id: p.id, label: p.label, project_root: p.project_root,
+        db_path: p.db_path, agent_id_hints: p.agent_id_hints,
+        last_opened_at: p.last_opened_at, summary: null,
+      };
+    }
+    const summary = projectQueries.queryProjectScopedSummary(
+      entry.db, entry.tables, p.db_path, p.agent_id_hints,
+    );
+    return {
+      id: p.id, label: p.label, project_root: p.project_root,
+      db_path: p.db_path, agent_id_hints: p.agent_id_hints,
+      last_opened_at: p.last_opened_at, summary,
+    };
+  });
 
-ipcMain.handle('get-tasks-list', () =>
-  queries.queryTasksList(db, tables)
-);
+  // One Unassigned bucket per unique db_path that registry references.
+  // (DB paths with no registered project are not surfaced here — user
+  // must register at least one project against that DB to see it.)
+  const unassigned = [];
+  for (const p of registry.uniqueDbPaths(reg)) {
+    const entry = ensureDbHandle(p);
+    if (!entry) continue;
+    const allHints = hintsByDb.get(p) || new Set();
+    const u = projectQueries.queryUnassignedSummary(entry.db, entry.tables, p, allHints);
+    unassigned.push(u);
+  }
 
-ipcMain.handle('get-task-detail', (_e, taskId) =>
-  queries.queryTaskDetail(db, tables, taskId)
-);
+  return { projects, unassigned };
+}
 
-ipcMain.handle('get-run-log-events', () =>
-  queries.queryRunLogEvents(db, tables)
-);
+ipcMain.handle('get-projects-list', () => getProjectsList());
 
-ipcMain.handle('get-db-path', () => dbPath);
+ipcMain.handle('select-project', (_e, projectId) => {
+  if (projectId === null) {
+    selectedProjectId = null;
+    return { ok: true, selected: null };
+  }
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: `project not found: ${projectId}` };
+  selectedProjectId = projectId;
+  // Touch last_opened_at so L1 sort can prefer recently-used.
+  reg = registry.touchProject(reg, projectId);
+  return { ok: true, selected: { id: proj.id, label: proj.label } };
+});
 
-ipcMain.handle('set-db-path', async (_e, requestedPath) => {
-  let target = requestedPath;
-  if (!target) {
-    // No explicit path — open a file picker rooted on the current DB's dir
-    const startDir = dbPath ? path.dirname(dbPath) : path.dirname(DEFAULT_DB_PATH);
+ipcMain.handle('get-selected-project', () => {
+  const proj = activeProject();
+  return proj
+    ? { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path, agent_id_hints: proj.agent_id_hints }
+    : null;
+});
+
+ipcMain.handle('add-project', async (_e, input) => {
+  let project_root = input && typeof input.project_root === 'string' ? input.project_root : '';
+  let db_path      = input && typeof input.db_path === 'string'      ? input.db_path      : '';
+  const label      = input && typeof input.label === 'string'        ? input.label        : '';
+
+  if (!project_root) {
     const result = await dialog.showOpenDialog({
-      title: 'Select Cairn workspace DB',
-      defaultPath: startDir,
-      properties: ['openFile'],
-      filters: [{ name: 'Cairn DB', extensions: ['db'] }],
+      title: 'Choose project root folder',
+      properties: ['openDirectory'],
     });
     if (result.canceled || !result.filePaths.length) {
       return { ok: false, error: 'cancelled' };
     }
-    target = result.filePaths[0];
+    project_root = result.filePaths[0];
+  }
+  if (!db_path) {
+    // Default: <project_root>/.cairn/cairn.db if it exists, else ~/.cairn/cairn.db
+    const local = path.join(project_root, '.cairn', 'cairn.db');
+    db_path = fs.existsSync(local) ? local : registry.DEFAULT_DB_PATH;
   }
 
-  const ok = connectDb(target);
-  if (!ok) {
-    return { ok: false, error: `failed to open ${target}` };
+  const result = registry.addProject(reg, { project_root, db_path, label });
+  reg = result.reg;
+  ensureDbHandle(db_path); // open the handle eagerly so L1 can render
+  return { ok: true, entry: result.entry };
+});
+
+ipcMain.handle('remove-project', (_e, id) => {
+  if (selectedProjectId === id) selectedProjectId = null;
+  reg = registry.removeProject(reg, id);
+  gcDbHandles();
+  return { ok: true };
+});
+
+ipcMain.handle('rename-project', (_e, id, label) => {
+  reg = registry.renameProject(reg, id, label);
+  return { ok: true };
+});
+
+ipcMain.handle('add-hint', (_e, id, agentId) => {
+  reg = registry.addHint(reg, id, agentId);
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------------------
+// IPC — panel views (legacy + Quick-Slice; route through active project)
+// ---------------------------------------------------------------------------
+//
+// These channels don't take a projectId and continue working as in
+// Quick Slice. They route to the active project's db_path (or default
+// if no project selected). For project-scoped summary they apply the
+// active project's hints; for Run Log / Tasks they currently return
+// DB-wide data (per-project filtering for those is Day 3+ work).
+
+ipcMain.handle('get-project-summary', () => {
+  const entry = activeDbEntry();
+  if (!entry) return projectQueries.queryProjectScopedSummary(null, new Set(), activeDbPath(), []);
+  const proj = activeProject();
+  if (proj) {
+    return projectQueries.queryProjectScopedSummary(
+      entry.db, entry.tables, proj.db_path, proj.agent_id_hints,
+    );
   }
-  const prefs = readPrefs();
-  prefs.dbPath = target;
-  writePrefs(prefs);
-  return { ok: true, dbPath: target };
+  // No project selected — fall back to the legacy unscoped summary
+  // (so the panel never shows a misleading per-project zero-state when
+  // nothing is selected yet).
+  return queries.queryProjectSummary(entry.db, entry.tables, activeDbPath());
+});
+
+ipcMain.handle('get-tasks-list', () => {
+  const entry = activeDbEntry();
+  if (!entry) return [];
+  return queries.queryTasksList(entry.db, entry.tables);
+});
+
+ipcMain.handle('get-task-detail', (_e, taskId) => {
+  const entry = activeDbEntry();
+  if (!entry) return null;
+  return queries.queryTaskDetail(entry.db, entry.tables, taskId);
+});
+
+ipcMain.handle('get-run-log-events', () => {
+  const entry = activeDbEntry();
+  if (!entry) return [];
+  return queries.queryRunLogEvents(entry.db, entry.tables);
+});
+
+ipcMain.handle('get-db-path', () => activeDbPath());
+
+ipcMain.handle('set-db-path', async (_e, _requestedPath) => {
+  // Project-Aware reframe: there's no "current DB path" any more —
+  // a project's db_path is fixed at registry-add time. Tell the
+  // renderer to use add-project instead.
+  return {
+    ok: false,
+    error: 'set-db-path is deprecated; use add-project (with project_root) instead',
+  };
 });
 
 ipcMain.on('open-legacy-inspector', () => createLegacyWindow());
 
 // ---------------------------------------------------------------------------
-// IPC — legacy / pet channels (unchanged shape)
+// IPC — legacy / pet channels (unchanged shape; routed to active DB)
 // ---------------------------------------------------------------------------
 
-ipcMain.handle('get-state',             () => queries.queryLegacyState(db, tables));
-ipcMain.handle('get-active-agents',     () => queries.queryActiveAgents(db, tables));
-ipcMain.handle('get-open-conflicts',    () => queries.queryOpenConflicts(db, tables));
-ipcMain.handle('get-recent-dispatches', () => queries.queryRecentDispatches(db, tables));
-ipcMain.handle('get-active-lanes',      () => queries.queryActiveLanes(db, tables));
+ipcMain.handle('get-state', () => {
+  const e = activeDbEntry();
+  return queries.queryLegacyState(e ? e.db : null, e ? e.tables : new Set());
+});
+ipcMain.handle('get-active-agents', () => {
+  const e = activeDbEntry();
+  return queries.queryActiveAgents(e ? e.db : null, e ? e.tables : new Set());
+});
+ipcMain.handle('get-open-conflicts', () => {
+  const e = activeDbEntry();
+  return queries.queryOpenConflicts(e ? e.db : null, e ? e.tables : new Set());
+});
+ipcMain.handle('get-recent-dispatches', () => {
+  const e = activeDbEntry();
+  return queries.queryRecentDispatches(e ? e.db : null, e ? e.tables : new Set());
+});
+ipcMain.handle('get-active-lanes', () => {
+  const e = activeDbEntry();
+  return queries.queryActiveLanes(e ? e.db : null, e ? e.tables : new Set());
+});
 
 ipcMain.on('open-inspector', () => {
   // Legacy "open-inspector" channel from preview.html now opens the
@@ -405,9 +641,10 @@ ipcMain.on('cairn:mutations-enabled?', (event) => {
 
 if (MUTATIONS_ENABLED) {
   ipcMain.handle('resolve-conflict', (_e, conflictId, resolution) => {
-    if (!dbPath) return { ok: false, error: 'no DB connected' };
+    const targetDbPath = activeDbPath();
+    if (!targetDbPath) return { ok: false, error: 'no DB connected' };
     try {
-      const wdb = openWriteDb(dbPath);
+      const wdb = openWriteDb(targetDbPath);
       const resolutionText = resolution || 'resolved via Inspector';
       const now = Date.now();
       const result = wdb.prepare(`
@@ -455,10 +692,14 @@ ipcMain.on('do-drag', (_e, { mouseX, mouseY }) => {
 // ---------------------------------------------------------------------------
 
 app.whenReady().then(() => {
-  // Resolve initial DB path: prefs > default
-  const prefs = readPrefs();
-  const initialPath = prefs.dbPath || DEFAULT_DB_PATH;
-  connectDb(initialPath);
+  // Load (or bootstrap) the registry, then open one read handle per
+  // unique db_path. The legacy desktop-shell.json is read by registry
+  // bootstrap if projects.json doesn't exist yet, producing a single
+  // legacy-default entry pointing at the old dbPath.
+  reg = registry.loadRegistry();
+  openAllRegistryDbs();
+  // No project selected at boot — panel opens to L1 view.
+  selectedProjectId = null;
 
   // Tray comes up first so the app has a persistent entry point even if
   // the user immediately closes the panel.
@@ -477,7 +718,7 @@ app.whenReady().then(() => {
   console.log(
     `cairn desktop-shell ready — mode=${LEGACY_MODE ? 'legacy' : 'panel'} ` +
     `mutations=${MUTATIONS_ENABLED ? 'on(dev)' : 'off'} ` +
-    `tray=on db=${dbPath}`
+    `tray=on projects=${reg.projects.length} dbs=${dbHandles.size}`
   );
 });
 
@@ -501,4 +742,13 @@ app.on('before-quit', () => {
     try { tray.destroy(); } catch (_e) {}
     tray = null;
   }
+  // Close every read + write handle to release file locks on Windows.
+  for (const entry of dbHandles.values()) {
+    try { entry.db.close(); } catch (_e) {}
+  }
+  dbHandles.clear();
+  for (const w of writeHandles.values()) {
+    try { w.close(); } catch (_e) {}
+  }
+  writeHandles.clear();
 });

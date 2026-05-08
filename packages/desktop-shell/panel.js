@@ -91,14 +91,53 @@ function escapeHtml(s) {
 }
 
 // ---------------------------------------------------------------------------
+// View state — Project-Aware (L1 default; L2 when selectedProject is set)
+// ---------------------------------------------------------------------------
+
+let currentView = 'projects'; // 'projects' | 'project'
+/** @type {{id:string,label:string,project_root:string,db_path:string}|null} */
+let selectedProject = null;
+
+function setView(name, projectMeta) {
+  currentView = name;
+  if (name === 'project') {
+    selectedProject = projectMeta || null;
+  }
+  document.getElementById('view-projects-list').hidden = (name !== 'projects');
+  document.getElementById('view-project').hidden       = (name !== 'project');
+  // Back-button menu item visible only in project view.
+  const backBtn = document.getElementById('menu-back-to-projects');
+  if (backBtn) backBtn.hidden = (name !== 'project');
+  // Re-render header label
+  renderHeaderForView();
+  // Force an immediate poll to populate the new view fast.
+  poll().catch(() => {});
+}
+
+function renderHeaderForView() {
+  const wl = document.getElementById('workspace-label');
+  const dp = document.getElementById('db-path');
+  if (currentView === 'projects') {
+    wl.textContent = 'Cairn — Projects';
+    dp.textContent = '';
+  } else if (currentView === 'project' && selectedProject) {
+    wl.textContent = selectedProject.label || '(project)';
+    dp.textContent = `DB: ${shortBasename(selectedProject.db_path)}`;
+  } else {
+    wl.textContent = 'Cairn';
+    dp.textContent = '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Renderers
 // ---------------------------------------------------------------------------
 
-function renderHeader(dbPath) {
-  document.getElementById('workspace-label').textContent =
-    `workspace: ${shortBasename(dbPath)}`;
-  document.getElementById('db-path').textContent =
-    `DB: ${dbPath || '(unknown)'}`;
+function renderHeader(_dbPath) {
+  // Header is now driven by view state, not by a single DB path.
+  // Kept as a no-op for callers; the actual update happens in
+  // renderHeaderForView (after view switches and on poll).
+  renderHeaderForView();
 }
 
 function renderSummary(summary) {
@@ -302,14 +341,168 @@ function setupTabs() {
 }
 
 // ---------------------------------------------------------------------------
-// Menu (Switch DB, Open Legacy Inspector)
+// L1 Projects-list renderer
+// ---------------------------------------------------------------------------
+
+function healthDot(state) {
+  const ch = state === 'alert' ? '●' : state === 'warn' ? '◐' : '○';
+  return `<span class="health-dot ${state || 'idle'}">${ch}</span>`;
+}
+
+function countCell(n, severity) {
+  const cls = (n === 0 || n == null) ? 'zero' : (severity || '');
+  return `<span class="${cls}">${n == null ? '—' : n}</span>`;
+}
+
+function renderProjectsList(payload) {
+  const el = document.getElementById('projects-list-body');
+  if (!payload) {
+    el.innerHTML = '<div class="placeholder">no data</div>';
+    return;
+  }
+  const projects   = payload.projects   || [];
+  const unassigned = payload.unassigned || [];
+
+  if (projects.length === 0 && unassigned.length === 0) {
+    el.innerHTML =
+      '<div class="pl-empty">no projects registered yet — click <b>＋ Add project…</b> below to get started</div>';
+    return;
+  }
+
+  // Sort: alert > warn > idle, then by last_activity_at DESC.
+  const ordered = projects.slice().sort((a, b) => {
+    const order = { alert: 0, warn: 1, idle: 2 };
+    const ah = (a.summary && a.summary.health) || 'idle';
+    const bh = (b.summary && b.summary.health) || 'idle';
+    if (order[ah] !== order[bh]) return order[ah] - order[bh];
+    const la = (a.summary && a.summary.last_activity_at) || 0;
+    const lb = (b.summary && b.summary.last_activity_at) || 0;
+    return lb - la;
+  });
+
+  let html = '';
+  if (ordered.length > 0) {
+    html += `<div class="pl-section-title">PROJECTS (${ordered.length})</div>`;
+    for (const p of ordered) html += renderProjectCard(p);
+  }
+  if (unassigned.length > 0) {
+    html += `<div class="pl-section-title">UNASSIGNED (${unassigned.length})</div>`;
+    for (const u of unassigned) html += renderUnassignedCard(u);
+  }
+  el.innerHTML = html;
+
+  // Wire click handlers (on each row, bubble-style).
+  el.querySelectorAll('.pcard[data-project-id]').forEach(node => {
+    node.addEventListener('click', async ev => {
+      // Skip if user clicked an inline action link
+      if (ev.target.closest('.pcard-actions a')) return;
+      const id = node.getAttribute('data-project-id');
+      const proj = ordered.find(p => p.id === id);
+      if (!proj) return;
+      const res = await window.cairn.selectProject(id);
+      if (res && res.ok) {
+        setView('project', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
+      }
+    });
+  });
+
+  el.querySelectorAll('.pcard-actions a[data-action]').forEach(a => {
+    a.addEventListener('click', async ev => {
+      ev.stopPropagation();
+      const action = a.getAttribute('data-action');
+      const id = a.getAttribute('data-project-id');
+      if (action === 'remove') {
+        await window.cairn.removeProject(id);
+        poll().catch(() => {});
+      } else if (action === 'rename') {
+        const cur = ordered.find(p => p.id === id);
+        const next = prompt('New label:', cur ? cur.label : '');
+        if (next != null && next.trim()) {
+          await window.cairn.renameProject(id, next.trim());
+          poll().catch(() => {});
+        }
+      }
+    });
+  });
+}
+
+function renderProjectCard(p) {
+  const s = p.summary || {};
+  const state = s.health || 'idle';
+  const dbBasename = shortBasename(p.db_path) + (p.db_path.includes('.cairn') ? ' (.cairn)' : '');
+  const counts =
+    `agents ${countCell(s.agents_active, 'idle')}` +
+    (s.agents_stale ? `(+${s.agents_stale} stale)` : '') +
+    `<span class="sep">·</span>` +
+    `tasks ${countCell(s.tasks_running, '')} / ${countCell(s.tasks_blocked, 'warn')} / ${countCell(s.tasks_waiting_review, 'warn')}` +
+    `<span class="sep">·</span>` +
+    `block ${countCell(s.blockers_open, 'warn')}` +
+    `<span class="sep">·</span>` +
+    `FAIL ${countCell((s.outcomes_failed || 0) + (s.tasks_failed || 0), 'alert')}` +
+    `<span class="sep">·</span>` +
+    `conflict ${countCell(s.conflicts_open, 'alert')}`;
+  const lastAct = s.last_activity_at
+    ? relTimeMs(s.last_activity_at)
+    : '—';
+  const hintLine = (p.agent_id_hints && p.agent_id_hints.length)
+    ? `${p.agent_id_hints.length} hint${p.agent_id_hints.length === 1 ? '' : 's'}: ${p.agent_id_hints.slice(0, 2).map(h => h.slice(0, 16)).join(', ')}${p.agent_id_hints.length > 2 ? '…' : ''}`
+    : 'no hints — click Add hint in detail view';
+
+  return (
+    `<div class="pcard" data-project-id="${escapeHtml(p.id)}">` +
+      `<div class="pcard-line1">` +
+        healthDot(state) +
+        `<span class="pcard-label">${escapeHtml(p.label || '(project)')}</span>` +
+        `<span class="pcard-act">${escapeHtml(lastAct)}</span>` +
+      `</div>` +
+      `<div class="pcard-line2">${escapeHtml(p.project_root || '(unknown)')}</div>` +
+      `<div class="pcard-line3">DB: ${escapeHtml(dbBasename)} · ${escapeHtml(hintLine)}</div>` +
+      `<div class="pcard-counts">${counts}</div>` +
+      `<div class="pcard-actions">` +
+        `<a data-action="rename" data-project-id="${escapeHtml(p.id)}">rename</a>` +
+        `<a data-action="remove" data-project-id="${escapeHtml(p.id)}">remove</a>` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+function renderUnassignedCard(u) {
+  const total = u.total_rows || 0;
+  const sub =
+    `agents ${u.agents}` +
+    `<span class="sep">·</span>tasks ${u.tasks}` +
+    `<span class="sep">·</span>block ${u.blockers}` +
+    `<span class="sep">·</span>outcome ${u.outcomes}` +
+    `<span class="sep">·</span>ckpt ${u.checkpoints}` +
+    `<span class="sep">·</span>conflict ${u.conflicts}` +
+    `<span class="sep">·</span>disp ${u.dispatches}`;
+  const lastAct = u.last_activity_at ? relTimeMs(u.last_activity_at) : '—';
+
+  return (
+    `<div class="pcard uacard">` +
+      `<div class="pcard-line1">` +
+        `<span class="health-dot unassigned">◇</span>` +
+        `<span class="pcard-label">Unassigned</span>` +
+        `<span class="pcard-act">${escapeHtml(lastAct)}</span>` +
+      `</div>` +
+      `<div class="pcard-line2">DB: ${escapeHtml(u.db_path)}</div>` +
+      `<div class="pcard-line3">${total} row${total === 1 ? '' : 's'} not matched by any project's hints</div>` +
+      `<div class="pcard-counts">${sub}</div>` +
+    `</div>`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Menu (Add project / Back to projects / Open Legacy Inspector)
 // ---------------------------------------------------------------------------
 
 function setupMenu() {
-  const btn = document.getElementById('menu-btn');
-  const pop = document.getElementById('menu-pop');
-  const switchDb = document.getElementById('menu-switch-db');
+  const btn        = document.getElementById('menu-btn');
+  const pop        = document.getElementById('menu-pop');
+  const back       = document.getElementById('menu-back-to-projects');
+  const addProj    = document.getElementById('menu-add-project');
   const openLegacy = document.getElementById('menu-open-legacy');
+  const plAddBtn   = document.getElementById('pl-add-btn');
 
   btn.addEventListener('click', e => {
     e.stopPropagation();
@@ -317,22 +510,31 @@ function setupMenu() {
   });
   document.addEventListener('click', () => pop.classList.remove('open'));
 
-  switchDb.addEventListener('click', async () => {
+  back.addEventListener('click', async () => {
     pop.classList.remove('open');
-    const res = await window.cairn.setDbPath();
+    await window.cairn.selectProject(null);
+    setView('projects', null);
+  });
+
+  async function doAddProject() {
+    const res = await window.cairn.addProject({});
     if (res && res.ok) {
-      // Force an immediate poll with the new path
       poll().catch(() => {});
-    } else if (res && res.error) {
+    } else if (res && res.error && res.error !== 'cancelled') {
       const footer = document.getElementById('footer');
-      footer.textContent = `setDbPath failed: ${res.error}`;
+      footer.textContent = `addProject failed: ${res.error}`;
       footer.classList.add('bad');
       setTimeout(() => {
         footer.textContent = 'read-only · polling 1s · Cairn project control surface';
         footer.classList.remove('bad');
       }, 4000);
     }
+  }
+  addProj.addEventListener('click', () => {
+    pop.classList.remove('open');
+    doAddProject();
   });
+  if (plAddBtn) plAddBtn.addEventListener('click', doAddProject);
 
   openLegacy.addEventListener('click', () => {
     pop.classList.remove('open');
@@ -346,44 +548,42 @@ function setupMenu() {
 
 async function poll() {
   try {
-    // Always-on data
-    const summaryP = window.cairn.getProjectSummary();
-    const dbPathP  = window.cairn.getDbPath();
+    if (currentView === 'projects') {
+      // L1 view — fetch the projects list payload (per-project summaries
+      // + Unassigned buckets). Header and summary card are not used.
+      const payload = await window.cairn.getProjectsList();
+      renderProjectsList(payload);
+      renderHeaderForView();
+    } else {
+      // L2 view — Quick-Slice surface scoped to the active project.
+      const summaryP = window.cairn.getProjectSummary();
+      const dbPathP  = window.cairn.getDbPath();
 
-    // Active-tab data (fetched in parallel; inactive tab keeps last render
-    // so switching to it shows previous data instantly while the next
-    // poll refreshes).
-    const eventsP = activeTab === 'runlog'
-      ? window.cairn.getRunLogEvents()
-      : Promise.resolve(null);
-    const tasksP = activeTab === 'tasks'
-      ? window.cairn.getTasksList()
-      : Promise.resolve(null);
+      const eventsP = activeTab === 'runlog'
+        ? window.cairn.getRunLogEvents()
+        : Promise.resolve(null);
+      const tasksP = activeTab === 'tasks'
+        ? window.cairn.getTasksList()
+        : Promise.resolve(null);
+      const detailP = selectedTaskId
+        ? window.cairn.getTaskDetail(selectedTaskId)
+        : Promise.resolve(null);
 
-    // Refresh selected-task detail (if any) in parallel so inline
-    // expansion reflects fresh blocker/outcome state.
-    const detailP = selectedTaskId
-      ? window.cairn.getTaskDetail(selectedTaskId)
-      : Promise.resolve(null);
+      const [summary, _dbPath, events, tasks, detail] = await Promise.all([
+        summaryP, dbPathP, eventsP, tasksP, detailP,
+      ]);
 
-    const [summary, dbPath, events, tasks, detail] = await Promise.all([
-      summaryP, dbPathP, eventsP, tasksP, detailP,
-    ]);
+      renderHeaderForView();
+      renderSummary(summary);
 
-    renderHeader(dbPath);
-    renderSummary(summary);
-
-    if (events) renderRunLog(events);
-    if (tasks) {
-      lastTasks = tasks;
-      // Detail may have changed; refresh before render so inline shows fresh.
-      if (selectedTaskId) selectedTaskDetail = detail;
-      renderTasks(lastTasks);
-    } else if (selectedTaskId) {
-      // We're on Run Log tab but a previously-selected task is still
-      // expanded under Tasks. Update the detail in case Tasks tab gets
-      // reopened.
-      selectedTaskDetail = detail;
+      if (events) renderRunLog(events);
+      if (tasks) {
+        lastTasks = tasks;
+        if (selectedTaskId) selectedTaskDetail = detail;
+        renderTasks(lastTasks);
+      } else if (selectedTaskId) {
+        selectedTaskDetail = detail;
+      }
     }
 
     // Reset footer if it was showing an error
@@ -401,9 +601,17 @@ async function poll() {
 
 setupTabs();
 setupMenu();
+setView('projects', null);
 poll();
 setInterval(poll, 1000);
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') window.close();
+  if (e.key === 'Escape') {
+    // Esc on L2 returns to L1; Esc on L1 closes the panel.
+    if (currentView === 'project') {
+      window.cairn.selectProject(null).then(() => setView('projects', null));
+    } else {
+      window.close();
+    }
+  }
 });
