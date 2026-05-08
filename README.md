@@ -1,26 +1,25 @@
 # Cairn
 
-> Multi-agent collaboration kernel for your dev machine.
+> Local **project control surface** for agentic software work.
 
-![status](https://img.shields.io/badge/status-v0.1--dogfood-orange)
+![status](https://img.shields.io/badge/status-v0.1--MVP--QuickSlice-orange)
 ![node](https://img.shields.io/badge/node-%3E%3D24-green)
-![license](https://img.shields.io/badge/license-TBD-lightgrey)
+![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 ---
 
 ## 30-second summary
 
-> **Cairn is the host-level coordination kernel for multi-agent work.**
-> It gives agents and subagents durable shared state, conflict visibility, handoff packets, checkpoints, and outcome checks, so complex collaboration can survive failure, interruption, and handoff.
+> **Cairn is a local project control surface for agentic software work.** A desktop side panel + tray that shows what your AI coding agents are doing on this machine — running tasks, blocked questions, failed outcomes, conflicts between agents, recoverable checkpoints — so you stay in control of long-horizon AI coding without becoming the bottleneck.
 
-When you run Claude Code and Cursor side by side, or spawn three subagents from a single CC session, nothing in the current ecosystem handles how those agents coordinate. Each one assumes it is the only agent running: they share no file locks, no state, no message bus.
+You write code in **Cursor / Codex / Claude Code / Kiro**. Cairn does **not** replace those — it's the surface next to them that organizes the agent activity they produce. Each agent assumes it's the only one running: they share no file locks, no state, no message bus, no cross-session memory. Cairn fills that gap with a coordination kernel underneath, and surfaces it to you through a side panel that reads like Activity Monitor or `journalctl --follow`, not like Jira / Linear / Cursor.
 
-Cairn fills that gap. It is not another agent. It does not write code, does not decompose tasks, does not orchestrate a lead-subagent. Think of it the way you think of an OS relative to the apps running on it: Word and Excel don't coordinate with each other — the OS does. Cairn is that layer for Claude Code, Cursor, Aider, Cline, and the subagents they fork.
-
-- **Cairn does not write code.** It coordinates agents that do.
-- **8 host-level state objects.** processes / tasks / dispatch_requests / scratchpad / checkpoints / conflicts / blockers / outcomes — agent-readable / agent-writable through MCP, each surviving process death and cross-session handoff.
-- **Current status:** v0.1 **W5 Phase 3 closed loop delivered**. 28 MCP tools, 10 migrations (001-010), Task Capsule lifeline + Blockers + Outcomes DSL all live. **411 daemon tests / 329 mcp-server tests / 32-of-32 dogfood assertions** through real MCP stdio across 3 sessions. Desktop pet (Electron, `packages/desktop-shell/`) is the ambient status UI.
-- **What's next:** Phase 4 release polish (this batch) → external dogfood → v0.1 release decisions (npm publish / tag / LICENSE).
+- **Cairn does not write code.** It does not decompose tasks. It does not orchestrate a lead-subagent. It is not a Cursor clone, not a Jira/Linear clone, not a "plain MCP service".
+- **Two layers, one product:**
+  - **Product layer** — desktop side panel, tray status icon, ambient floating marker, Live Run Log. What the user sees.
+  - **Kernel layer** — host-level multi-agent coordination kernel; 8 host-level state objects (`processes` / `tasks` / `dispatch_requests` / `scratchpad` / `checkpoints` / `conflicts` / `blockers` / `outcomes`); 28 MCP tools; agent-readable / agent-writable. The supporting infrastructure.
+- **Current status:** **Product MVP Quick Slice delivered** (commit chain `3562f1f..4c24fb6`, on origin + mirror). Side panel + tray with 3-state status icon, Run Log over 5 event sources, Tasks list with inline detail, real DB read-only with `~/.cairn/cairn.db`. Kernel underneath: 28 MCP tools, 10 migrations (001-010), 411 daemon tests, 329 mcp-server tests, **32-of-32 cross-session dogfood assertions** through real MCP stdio.
+- **What's next:** Hardening — desktop write actions (gated on supervisor identity model + daemon-as-service), checkpoints view, scratchpad / subagent-result view, multi-day dogfood, cross-machine sync. No version-tier roadmap; see PRODUCT.md §6.3 / §10 Later.
 
 ---
 
@@ -352,52 +351,47 @@ See `docs/superpowers/demos/README.md` for the full Phase 1 / Phase 2 / Phase 3 
 
 ## What Cairn is not
 
-These are boundary definitions, not disclaimers. Any design or feature request that violates these can be vetoed directly by reference to this list.
+These are boundary definitions, not disclaimers. Any design or feature request that violates these can be vetoed directly by reference to this list. Authoritative version: PRODUCT.md §1.3.
 
-1. **Cairn is not an agent.** It does not execute development tasks, write code, open PRs, or edit files. For development work, use an agent. Not Cairn.
-
-2. **Cairn is not a dashboard.** You do not need to monitor 10 agents simultaneously in a grid view. That was an earlier design direction that was abandoned. The current UX model is ambient and CLI-first.
-
-3. **Cairn is not a desktop pet.** A v1 concept had an anthropomorphized desktop companion. v2 dropped it. The v0.2 Floating Marker is a static visual carrier for the Inspector channel, not an animated character.
-
-4. **Cairn is not an agent framework or SDK.** It is a product for end users, not a library for developers building agents.
-
-5. **Cairn is not another Claude Code skin.** Claude Code is one of Cairn's "applications." Cairn is the coordination kernel below it.
-
-6. **Cairn does not do cross-machine collaboration (v0.1).** Local-first. All data stays on your machine. Cross-machine sync is v0.3+.
-
-7. **Cairn does not proxy your agents' external calls.** There is no HTTP proxy, no Recorder/Classifier/Reverter pipeline, no compensation engine for SaaS API side effects. That was a previous product direction (pre-v2) that was replaced by the current host-level coordination kernel positioning.
+1. **Cairn is not a coding agent.** It does not write code, open PRs, or edit files.
+2. **Cairn is not a Cursor clone / IDE.** No code editor, no diff viewer, no inline completion.
+3. **Cairn is not another Claude Code skin.** Claude Code is one of Cairn's "applications" — Cairn is the coordination kernel below it.
+4. **Cairn is not a lead-subagent orchestrator.** It does not decompose tasks, dispatch agents, or substitute for agent reasoning.
+5. **Cairn is not a Jira / Linear / Asana / sprint-planning / Gantt / enterprise-PM clone.** No sprints, story points, kanban, burn-down, or resource allocation. The product surface organizes real agent activity, not synthetic ticket trees. The "AI PMO layer" framing is descriptive of where Cairn sits in your workflow — it is not a re-implementation of those tools.
+6. **Cairn is not a generic agent framework or SDK.** It is a product for end users, not a library for building agents.
+7. **Cairn is not a "plain MCP service".** MCP is how agents talk to Cairn; the product the user sees is the desktop side panel + tray.
+8. **Cairn does not do cross-machine collaboration in this Slice.** Local-first. All data stays on your machine. Multi-machine sync is Later.
+9. **Cairn does not proxy your agents' external calls.** No HTTP proxy, no Recorder/Classifier/Reverter pipeline, no compensation engine for SaaS API side effects. That was a pre-v2 direction that was replaced by the current positioning.
 
 ---
 
 ## Roadmap
 
-### v0.1 (delivered through W5 Phase 3)
+PRODUCT.md v3 §12 D10 retired the v0.2 / v0.3 version-tier roadmap. Two tracks now:
+
+### Delivered — kernel layer + Quick Slice
 
 - **W1+W2** ✅ — 8 MCP tools, SQLite persistence, git-stash checkpoint backend, task_id isolation. PoC-1 (SQLite concurrency) + PoC-2 (git hook latency) both PASS.
-- **W4 Phase 1-4** ✅ — four-capability v1: conflict detection (migration 004+006), process bus (4 tools), Dispatch NL (migration 005, 5 fallback rules R1/R2/R3/R4/R6), Inspector query (15 SQL templates), `cairn install` CLI, auto SESSION_AGENT_ID, conflict.resolve + Inspector resolve UI.
-- **W5 Phase 1** ✅ — Task Capsule lifeline: tasks table (migration 007 + 008) + 5 task tools.
-- **W5 Phase 2** ✅ — Blockers + resume_packet: blockers table (migration 009) + 3 task tools, cross-session handoff verified through real MCP stdio.
-- **W5 Phase 3** ✅ — Outcomes DSL + review/retry/terminal_fail closed loop: outcomes table (migration 010, UNIQUE(task_id)) + 3 outcomes tools + DSL stack with 7 deterministic primitives. **32/32 dogfood assertions PASS** through real MCP stdio across 3 sessions.
-- **Phase 4** ⏳ — release polish: documentation unification (this batch), CHANGELOG / RELEASE_NOTES, demos index, external dogfood expansion, release decisions (npm publish, LICENSE).
+- **W4 Phase 1-4** ✅ — four-capability v1: conflict detection (migration 004+006), process bus (4 tools), Dispatch NL (migration 005, 5 fallback rules R1/R2/R3/R4/R6), Inspector query (15 SQL templates), `cairn install` CLI, auto SESSION_AGENT_ID.
+- **W5 Phase 1+2+3** ✅ — Task Capsule lifeline + Blockers + resume_packet + Outcomes DSL closed loop. Migrations 007–010. **32/32 dogfood assertions PASS** through real MCP stdio across 3 sessions.
+- **Phase 4 docs unification** ✅ — README / CLAUDE / ARCHITECTURE / RELEASE_NOTES / demos index synced.
+- **PRODUCT.md v3 reframe** ✅ (commit `3562f1f`) — product-layer framing locked: project-scoped agent work side panel / project control surface; kernel-layer framing preserved as supporting evidence.
+- **Product MVP Quick Slice** ✅ (commits `f088b56`..`4c24fb6`) — `packages/desktop-shell/` upgraded from "pet only" to **panel + pet + tray**: project summary card, low-fidelity Live Run Log over 5 event sources, Tasks list with inline expansion, 3-state tray (idle / warn / alert) with tooltip, dogfood fixture script, dogfood report distinguishing real vs `cairn-demo-*` rows. Strict read-only by default; `CAIRN_DESKTOP_ENABLE_MUTATIONS=1` opts only the legacy Inspector's Resolve button into write mode.
 
-### v0.2
+### Later (no version tier; see PRODUCT.md §6.3 / §10.4)
 
-- **Floating Marker** — persistent ambient desktop UI (Electron; right-corner float panel with three visibility modes). `packages/desktop-shell/` already scaffolded in v0.1. This is the primary v0.2 UX investment.
-- **Path (b): Task tool wrapper** — stronger CC subagent integration for message reachability.
-- **Echo diff / reverse summary** — semantic diff between subagent original output and main agent restatement.
-- **Inspector panel UI** — conflict history, checkpoint timeline, scratchpad browser, outcomes status.
-- **Grader agent hook** (`GraderHook` interface already reserved in DSL types) — allow non-deterministic outcome verification while keeping the deterministic 7-primitive AND-evaluator as the default.
-- **DSL v2** — OR / NOT / nested combinators (v1 is AND-only by design).
-- **outcome_evaluations history table** — per-attempt audit log (v1 keeps only the latest evaluation per outcome by design).
-- L3–L5 checkpoint granularity (conversation truncation, tool call traces, agent internal state).
+Driven by dogfood feedback, not by date.
 
-### v0.3+
-
-- Cross-machine collaboration (multi-daemon sync, likely CRDT-based)
-- Non-MCP-aware agent integration (Cursor, Cline without `.mcp.json` — wrapper/sidecar path, pending D-1 research)
-- Large-concurrency optimization (N=50 SQLite ceiling documented in PoC-1, addressed here)
-- Multi-user shared daemon
+- **Hardening of the panel surface** — checkpoints view + path preview, scratchpad / subagent-result view, full task drill-down drawer (independent of inline expansion), agent-sessions view as its own tab, blockers + outcomes as their own dedicated views, multi-day dogfood with quantified coverage.
+- **Run Log high-fidelity** — true event sourcing (events table + triggers) so `processes` heartbeats / `scratchpad` writes / `checkpoints` events stop being dropped from the Run Log feed; live push instead of 1s polling; filter / grouping / search; replay.
+- **Mutation-on-desktop unlock** — answer blocker / rewind / dispatch / resolve conflict from the panel. Blocked on three prerequisites (PRODUCT.md §12 D9): a standalone daemon process with a stable IPC API, a supervisor-identity model in the audit trail, and dogfood evidence about which mutations actually save effort.
+- **Path (b) Task tool wrapper** for stronger Claude Code subagent integration; **path (c) fs / process hook** under research.
+- **Grader agent hook** (`GraderHook` interface already reserved in DSL types) for non-deterministic outcome verification; **DSL v2** combinators (OR / NOT / nesting); per-attempt outcome history table.
+- **L3–L5 checkpoint granularity** (conversation truncation, tool call traces, agent internal state) — needs host-LLM cooperation.
+- **Cross-machine / small-team sync.** Local-first stays the default; this is a separate product direction.
+- **Non-MCP-aware agent integration** (Cursor / Cline without `.mcp.json`).
+- **Large-concurrency optimization** (N=50 SQLite ceiling documented in PoC-1).
+- **Floating-marker schema drift fix** — current sprite rules query `lanes` (legacy schema); needs migration to the 8 host-level state objects.
 
 ---
 
@@ -407,7 +401,7 @@ A **cairn** (n.) is a stack of stones placed on a path to mark where someone has
 
 The name fits the function. Cairn marks the path your agents walked, records what they changed, and gives you a way back if the path was wrong. It does not walk the path for you.
 
-The v0.2 Floating Marker is the desktop expression of this same idea: a small, persistent marker on your screen that shows the state of your agent coordination layer, the way a cairn on a trail shows you how far you have come and whether you are still on course.
+The desktop side panel + tray + floating marker (`packages/desktop-shell/`) is the desktop expression of this same idea: a small, persistent marker on your screen that shows the state of your agent coordination layer, the way a cairn on a trail shows you how far you have come and whether you are still on course.
 
 ---
 
@@ -415,13 +409,17 @@ The v0.2 Floating Marker is the desktop expression of this same idea: a small, p
 
 | Document | Contents |
 |---|---|
-| [`PRODUCT.md`](PRODUCT.md) | Product definition v2: positioning, anti-definitions, four capabilities + Task Capsule + Outcomes, 8 host-level state objects, user stories, UX forms |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Implementation architecture: system diagram, process model, monorepo structure, SQLite schema, MCP tool list, ADRs, known technical debt |
-| [`CLAUDE.md`](CLAUDE.md) | Engineering conventions: push workflow, Node/SQLite version constraints, commit style, test commands, monorepo build rules, current 411 / 329 baselines |
-| [`RELEASE_NOTES.md`](RELEASE_NOTES.md) | v0.1 release narrative organized by 4 stories (Task Capsule / Blockers + Resume Packet / Outcomes DSL / Coordination Kernel positioning); verified evidence and known limitations |
-| [`docs/superpowers/demos/README.md`](docs/superpowers/demos/README.md) | Phase 1 / Phase 2 / Phase 3 dogfood index — real MCP stdio cross-process evidence, not just unit tests |
-| [`docs/cairn-subagent-protocol.md`](docs/cairn-subagent-protocol.md) | Subagent ↔ scratchpad naming + structure convention (paste-ready prompt template) |
-| [`docs/superpowers/plans/`](docs/superpowers/plans/) | Weekly plans, PoC result reports, pre-implementation validation tracking |
+| [`PRODUCT.md`](PRODUCT.md) | Product definition **v3** (project control surface / agent work side panel; AI PMO layer as auxiliary framing): positioning, 9 anti-definitions, 5 capabilities + Task Capsule + Outcomes, 8 host-level state objects, US-P1..P5 user stories, UX form (panel / tray / floating marker / Live Run Log), Product MVP scope + Later. |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Implementation architecture: system diagram, process model, monorepo structure (daemon / mcp-server / desktop-shell), SQLite schema, MCP tool list, ADRs (incl. ADR-8 Electron over Tauri), known technical debt. |
+| [`CLAUDE.md`](CLAUDE.md) | Agent Work Rules + engineering conventions: push workflow, Node/SQLite version constraints, commit style, test commands, monorepo build rules, current 411 / 329 baselines, desktop-shell read-only-by-default boundary. |
+| [`packages/desktop-shell/README.md`](packages/desktop-shell/README.md) | Quick Slice usage: launch / tray behavior / Switch DB / mutation flag / dogfood script. |
+| [`packages/desktop-shell/SCHEMA_NOTES.md`](packages/desktop-shell/SCHEMA_NOTES.md) | Live DB schema reference for the 6 host-level tables the panel reads (column names + indexes + Run Log time anchors). |
+| [`docs/superpowers/plans/2026-05-08-product-mvp-side-panel.md`](docs/superpowers/plans/2026-05-08-product-mvp-side-panel.md) | Product MVP Quick Slice plan (3-day Day-by-day, 5 locked decisions, 17 risks, Later Hardening list). |
+| [`docs/superpowers/demos/MVP-quick-slice-desktop-dogfood.md`](docs/superpowers/demos/MVP-quick-slice-desktop-dogfood.md) | Quick Slice desktop dogfood report (real-vs-fixture labels, US-P1..P5 coverage). |
+| [`RELEASE_NOTES.md`](RELEASE_NOTES.md) | v0.1 release narrative organized by 4 stories (Task Capsule / Blockers + Resume Packet / Outcomes DSL / Coordination Kernel positioning); verified evidence and known limitations. |
+| [`docs/superpowers/demos/README.md`](docs/superpowers/demos/README.md) | W5 Phase 1 / Phase 2 / Phase 3 dogfood index — real MCP stdio cross-process evidence. |
+| [`docs/cairn-subagent-protocol.md`](docs/cairn-subagent-protocol.md) | Subagent ↔ scratchpad naming + structure convention (paste-ready prompt template). |
+| [`docs/superpowers/plans/`](docs/superpowers/plans/) | Weekly plans, PoC result reports, pre-implementation validation tracking. |
 
 ---
 
@@ -433,6 +431,16 @@ Commit conventions follow [Conventional Commits](https://www.conventionalcommits
 
 ## License
 
-No LICENSE file is present in the repository yet. The codebase is source-available. Do not distribute or use in production without explicit permission from the authors.
+Apache License 2.0 — see [`LICENSE`](LICENSE) at the repo root.
 
-<!-- TODO for user: decide on license (MIT / Apache 2.0 / source-available with eventual open-source) and add a LICENSE file at repo root. The old README listed "likely Apache 2.0 for core, commercial for enterprise features" as TBD — that decision is still open. -->
+```
+Copyright 2026 The Cairn Contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+```
+
+The Apache-2.0 grant includes an explicit patent license, which is the relevant differentiator for infrastructure that is intended to be embedded by AI coding agents and their host tools. See `RELEASE_DECISIONS.md` for the rationale.
