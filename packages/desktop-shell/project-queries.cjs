@@ -428,9 +428,170 @@ function queryUnassignedSummary(db, tables, dbPath, allHints) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Sessions (per-project) + Unassigned detail (Day 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute owns_tasks bucket for a set of agents in one query, keyed by
+ * agent_id. Returns Map<agent_id, {RUNNING, BLOCKED, WAITING_REVIEW, DONE, FAILED}>.
+ * agents not seen by this query simply absent from the map; callers
+ * should default missing buckets to all-zeros.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Set<string>} tables
+ * @param {string[]} agentIds
+ * @returns {Map<string, {RUNNING:number,BLOCKED:number,WAITING_REVIEW:number,DONE:number,FAILED:number}>}
+ */
+function computeOwnsTasksByAgent(db, tables, agentIds) {
+  const out = new Map();
+  if (!db || !tables.has('tasks') || !agentIds.length) return out;
+  try {
+    const inList = sqlInList(agentIds);
+    const rows = db.prepare(`
+      SELECT created_by_agent_id AS agent_id, state, COUNT(*) AS n
+        FROM tasks
+       WHERE created_by_agent_id IN ${inList}
+       GROUP BY created_by_agent_id, state
+    `).all(...agentIds);
+    for (const r of rows) {
+      if (!out.has(r.agent_id)) {
+        out.set(r.agent_id, { RUNNING: 0, BLOCKED: 0, WAITING_REVIEW: 0, DONE: 0, FAILED: 0 });
+      }
+      const bucket = out.get(r.agent_id);
+      // Other states (PENDING / READY_TO_RESUME / CANCELLED) collapse to none
+      // of the displayed buckets — sessions tab shows the 5 most useful.
+      if (r.state in bucket) bucket[r.state] = r.n;
+    }
+  } catch (_e) { /* graceful empty */ }
+  return out;
+}
+
+function deriveSessionState(row, now) {
+  if (row.status === 'DEAD') return 'DEAD';
+  const ttl = row.heartbeat_ttl || 60000;
+  const expired = (now - (row.last_heartbeat || 0)) > ttl * STALE_GRACE_FACTOR;
+  if (row.status === 'ACTIVE' && expired) return 'STALE';
+  if (row.status === 'ACTIVE') return 'ACTIVE';
+  return 'OTHER'; // IDLE or anything else
+}
+
+function parseCapabilities(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch (_e) { return []; }
+}
+
+function emptySessionPayload() {
+  return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
+}
+
+/**
+ * Sessions (presence rows) belonging to a project, attributed by
+ * agent_id_hints. Used by the L2 Sessions tab.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string[]} hints
+ * @returns {{available:boolean, sessions:Array, ts:number}}
+ */
+function queryProjectScopedSessions(db, tables, hints) {
+  const out = emptySessionPayload();
+  if (!db || !tables.has('processes')) return out;
+  out.available = true;
+  const hintArr = Array.isArray(hints) ? hints : [];
+  if (hintArr.length === 0) return out;
+
+  let rows = [];
+  try {
+    const inList = sqlInList(hintArr);
+    rows = db.prepare(`
+      SELECT agent_id, agent_type, capabilities, status, registered_at, last_heartbeat, heartbeat_ttl
+        FROM processes
+       WHERE agent_id IN ${inList}
+       ORDER BY last_heartbeat DESC
+    `).all(...hintArr);
+  } catch (_e) { return out; }
+
+  const ownsMap = computeOwnsTasksByAgent(db, tables, rows.map(r => r.agent_id));
+  const now = Date.now();
+  out.sessions = rows.map(r => ({
+    agent_id: r.agent_id,
+    agent_type: r.agent_type || '?',
+    status: r.status,
+    computed_state: deriveSessionState(r, now),
+    registered_at: r.registered_at,
+    last_heartbeat: r.last_heartbeat,
+    heartbeat_ttl: r.heartbeat_ttl || 60000,
+    capabilities: parseCapabilities(r.capabilities),
+    owns_tasks: ownsMap.get(r.agent_id) || { RUNNING: 0, BLOCKED: 0, WAITING_REVIEW: 0, DONE: 0, FAILED: 0 },
+  }));
+  return out;
+}
+
+/**
+ * Detail view for an Unassigned bucket. Includes the same scalar counts
+ * as queryUnassignedSummary plus a list of unassigned agents (process
+ * rows whose agent_id is in NO project's hints) — that list is the
+ * primary signal users want when looking at Unassigned (which agent
+ * should I add to which project?).
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string} dbPath
+ * @param {Set<string>} allHints   union of hints across every project on this db_path
+ * @returns {object}
+ */
+function queryUnassignedDetail(db, tables, dbPath, allHints) {
+  const summary = queryUnassignedSummary(db, tables, dbPath, allHints);
+  const out = {
+    ...summary,
+    agents: [],
+  };
+  if (!db || !tables.has('processes')) return out;
+
+  const hintArr = [...(allHints || new Set())];
+  const hasHints = hintArr.length > 0;
+
+  let rows = [];
+  try {
+    const sql = hasHints
+      ? `SELECT agent_id, agent_type, capabilities, status, registered_at, last_heartbeat, heartbeat_ttl
+           FROM processes
+          WHERE agent_id NOT IN ${sqlInList(hintArr)}
+          ORDER BY last_heartbeat DESC`
+      : `SELECT agent_id, agent_type, capabilities, status, registered_at, last_heartbeat, heartbeat_ttl
+           FROM processes
+          ORDER BY last_heartbeat DESC`;
+    rows = db.prepare(sql).all(...(hasHints ? hintArr : []));
+  } catch (_e) { return out; }
+
+  const ownsMap = computeOwnsTasksByAgent(db, tables, rows.map(r => r.agent_id));
+  const now = Date.now();
+  out.agents = rows.map(r => ({
+    agent_id: r.agent_id,
+    agent_type: r.agent_type || '?',
+    status: r.status,
+    computed_state: deriveSessionState(r, now),
+    registered_at: r.registered_at,
+    last_heartbeat: r.last_heartbeat,
+    heartbeat_ttl: r.heartbeat_ttl || 60000,
+    capabilities: parseCapabilities(r.capabilities),
+    owns_tasks: ownsMap.get(r.agent_id) || { RUNNING: 0, BLOCKED: 0, WAITING_REVIEW: 0, DONE: 0, FAILED: 0 },
+  }));
+  return out;
+}
+
 module.exports = {
   queryProjectScopedSummary,
   queryUnassignedSummary,
+  queryProjectScopedSessions,
+  queryUnassignedDetail,
+  deriveSessionState,
+  parseCapabilities,
+  computeOwnsTasksByAgent,
   computeHealth,
   STALE_GRACE_FACTOR,
   SUPPORTED_TABLES,

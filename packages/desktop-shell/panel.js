@@ -94,32 +94,47 @@ function escapeHtml(s) {
 // View state — Project-Aware (L1 default; L2 when selectedProject is set)
 // ---------------------------------------------------------------------------
 
-let currentView = 'projects'; // 'projects' | 'project'
+let currentView = 'projects'; // 'projects' | 'project' | 'unassigned'
 /** @type {{id:string,label:string,project_root:string,db_path:string}|null} */
 let selectedProject = null;
+/** @type {string|null} db_path the user is drilling into in the Unassigned view */
+let selectedUnassignedDbPath = null;
+/** @type {string|null} agent_id the Tasks tab is filtered to (set from Sessions tab) */
+let selectedAgentId = null;
 
-function setView(name, projectMeta) {
+function setView(name, meta) {
   // A view switch means the L2 task drill-down is no longer valid:
   // task_ids belong to a particular project's DB attribution, so a
   // selection from project A must not bleed into project B (or into
   // the L1 list, where the next entry will repopulate it from a
-  // possibly-different project anyway). Always reset.
-  const nextProjectId = (name === 'project' && projectMeta) ? projectMeta.id : null;
+  // possibly-different project anyway). Same applies to the agent
+  // filter chip and the Unassigned drill-down: each L2 entry starts
+  // with a clean slate.
+  const nextProjectId = (name === 'project' && meta) ? meta.id : null;
   const prevProjectId = selectedProject ? selectedProject.id : null;
   if (name !== 'project' || nextProjectId !== prevProjectId) {
     clearTaskSelection();
+    selectedAgentId = null;
+  }
+  // Always reset the Unassigned drill-down pointer when leaving the view.
+  if (name !== 'unassigned') {
+    selectedUnassignedDbPath = null;
   }
   currentView = name;
   if (name === 'project') {
-    selectedProject = projectMeta || null;
+    selectedProject = meta || null;
+  } else if (name === 'unassigned') {
+    selectedUnassignedDbPath = (meta && meta.db_path) || null;
+    selectedProject = null;
   } else {
     selectedProject = null;
   }
   document.getElementById('view-projects-list').hidden = (name !== 'projects');
   document.getElementById('view-project').hidden       = (name !== 'project');
-  // Back-button menu item visible only in project view.
+  document.getElementById('view-unassigned').hidden    = (name !== 'unassigned');
+  // Back-button menu item visible in any non-L1 view.
   const backBtn = document.getElementById('menu-back-to-projects');
-  if (backBtn) backBtn.hidden = (name !== 'project');
+  if (backBtn) backBtn.hidden = (name === 'projects');
   // Re-render header label
   renderHeaderForView();
   // Force an immediate poll to populate the new view fast.
@@ -135,6 +150,11 @@ function renderHeaderForView() {
   } else if (currentView === 'project' && selectedProject) {
     wl.textContent = selectedProject.label || '(project)';
     dp.textContent = `DB: ${shortBasename(selectedProject.db_path)}`;
+  } else if (currentView === 'unassigned') {
+    wl.textContent = 'Unassigned';
+    dp.textContent = selectedUnassignedDbPath
+      ? `DB: ${shortBasename(selectedUnassignedDbPath)}`
+      : '';
   } else {
     wl.textContent = 'Cairn';
     dp.textContent = '';
@@ -288,13 +308,39 @@ function renderTaskDetail(detail) {
   );
 }
 
+function renderTasksFilterChip() {
+  const el = document.getElementById('tasks-filter-chip');
+  if (!el) return;
+  if (!selectedAgentId) { el.innerHTML = ''; return; }
+  el.innerHTML =
+    `<div class="filter-chip">` +
+      `<span>filter · agent <code>${escapeHtml(selectedAgentId)}</code></span>` +
+      `<a id="tasks-filter-clear">clear</a>` +
+    `</div>`;
+  const clr = document.getElementById('tasks-filter-clear');
+  if (clr) clr.addEventListener('click', () => {
+    selectedAgentId = null;
+    renderTasksFilterChip();
+    renderTasks(lastTasks);
+  });
+}
+
 function renderTasks(tasks) {
   const el = document.getElementById('tasks-list');
-  if (!tasks || !tasks.length) {
-    el.innerHTML = '<div class="placeholder">no tasks yet — start an MCP session and call cairn.task.create</div>';
+  renderTasksFilterChip();
+  let view = tasks || [];
+  if (selectedAgentId) {
+    view = view.filter(t => t.created_by_agent_id === selectedAgentId);
+  }
+  if (!view.length) {
+    if (selectedAgentId) {
+      el.innerHTML = `<div class="placeholder">no tasks for agent <code>${escapeHtml(selectedAgentId)}</code> in this DB</div>`;
+    } else {
+      el.innerHTML = '<div class="placeholder">no tasks yet — start an MCP session and call cairn.task.create</div>';
+    }
     return;
   }
-  el.innerHTML = tasks.map(t => {
+  el.innerHTML = view.map(t => {
     const isSelected = (t.task_id === selectedTaskId);
     const stateCls = `s-${t.state}`;
     const detailHtml = isSelected ? renderTaskDetail(selectedTaskDetail) : '';
@@ -333,6 +379,224 @@ function renderTasks(tasks) {
 }
 
 // ---------------------------------------------------------------------------
+// Sessions tab + Unassigned-agent rendering (Day 3)
+// ---------------------------------------------------------------------------
+
+function fmtTtl(ms) {
+  if (!ms || ms < 1000) return `${ms || 0}ms`;
+  const sec = Math.round(ms / 1000);
+  if (sec < 90) return `${sec}s`;
+  return `${Math.round(sec / 60)}m`;
+}
+
+function renderCapChips(caps) {
+  if (!caps || !caps.length) return '';
+  const shown = caps.slice(0, 4).map(c =>
+    `<span class="sess-cap-chip">${escapeHtml(String(c).slice(0, 16))}</span>`).join('');
+  const more = caps.length > 4 ? `<span class="sess-cap-chip">+${caps.length - 4}</span>` : '';
+  return shown + more;
+}
+
+function renderOwnsTasks(o) {
+  if (!o) return '';
+  const cell = (n, sev) => {
+    const cls = (n === 0) ? 'zero' : (sev || '');
+    return `<span class="num ${cls}">${n}</span>`;
+  };
+  return (
+    `tasks ${cell(o.RUNNING, '')}` +
+    `<span class="sep">/</span>${cell(o.BLOCKED, 'warn')}` +
+    `<span class="sep">/</span>${cell(o.WAITING_REVIEW, 'warn')}` +
+    `<span class="sep">/</span>${cell(o.DONE, '')}` +
+    `<span class="sep">/</span>${cell(o.FAILED, 'alert')}` +
+    `<span class="sep" style="padding-left:6px">·</span>` +
+    `<span style="color:#666;font-size:0.85em">R/B/WR/D/F</span>`
+  );
+}
+
+function renderSessionRow(sess, opts) {
+  const allowFilter   = !!(opts && opts.allowFilter);
+  const allowAddTo    = !!(opts && opts.allowAddTo);
+  const stateLabel = sess.computed_state; // ACTIVE | STALE | DEAD | OTHER
+  const heartbeatTxt = sess.last_heartbeat
+    ? `${relTimeMs(sess.last_heartbeat)} (ttl ${fmtTtl(sess.heartbeat_ttl)})`
+    : `never (ttl ${fmtTtl(sess.heartbeat_ttl)})`;
+  const actions = [];
+  if (allowFilter) {
+    actions.push(`<a data-act="filter-tasks" data-agent="${escapeHtml(sess.agent_id)}">filter Tasks tab →</a>`);
+  }
+  if (allowAddTo) {
+    actions.push(`<a data-act="add-to-project" data-agent="${escapeHtml(sess.agent_id)}">Add to project…</a>`);
+  }
+  return (
+    `<div class="sess" data-agent="${escapeHtml(sess.agent_id)}">` +
+      `<div class="sess-line1">` +
+        `<span class="sess-state s-${escapeHtml(stateLabel)}">${escapeHtml(stateLabel)}</span>` +
+        `<span class="sess-id"><code>${escapeHtml(sess.agent_id)}</code> <span class="at-type">@${escapeHtml(sess.agent_type)}</span></span>` +
+        `<span class="sess-meta">${escapeHtml(heartbeatTxt)}</span>` +
+      `</div>` +
+      `<div class="sess-line2">${renderCapChips(sess.capabilities)}</div>` +
+      `<div class="sess-line3">${renderOwnsTasks(sess.owns_tasks)}</div>` +
+      (actions.length ? `<div class="sess-actions">${actions.join('')}</div>` : '') +
+    `</div>`
+  );
+}
+
+let lastSessions = [];
+
+function renderSessions(payload) {
+  const el = document.getElementById('sessions-list');
+  if (!payload || !payload.available) {
+    el.innerHTML = '<div class="placeholder">no sessions data — DB not connected</div>';
+    return;
+  }
+  const sessions = payload.sessions || [];
+  lastSessions = sessions;
+  if (!sessions.length) {
+    el.innerHTML = '<div class="placeholder">no sessions matched this project\'s hints<br>add a hint to start attributing presence rows</div>';
+    return;
+  }
+  // Group: ACTIVE / STALE / OTHER (DEAD or IDLE).
+  const groups = { ACTIVE: [], STALE: [], OTHER: [] };
+  for (const s of sessions) {
+    if (s.computed_state === 'ACTIVE')      groups.ACTIVE.push(s);
+    else if (s.computed_state === 'STALE')  groups.STALE.push(s);
+    else                                    groups.OTHER.push(s);
+  }
+  let html = '';
+  if (groups.ACTIVE.length) {
+    html += `<div class="sess-group-title">ACTIVE (${groups.ACTIVE.length})</div>`;
+    html += groups.ACTIVE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+  }
+  if (groups.STALE.length) {
+    html += `<div class="sess-group-title alert">STALE (${groups.STALE.length})</div>`;
+    html += groups.STALE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+  }
+  if (groups.OTHER.length) {
+    html += `<div class="sess-group-title">DEAD / IDLE (${groups.OTHER.length})</div>`;
+    html += groups.OTHER.map(s => renderSessionRow(s, { allowFilter: true })).join('');
+  }
+  el.innerHTML = html;
+
+  el.querySelectorAll('.sess-actions a[data-act="filter-tasks"]').forEach(a => {
+    a.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const agent = a.getAttribute('data-agent');
+      selectedAgentId = agent;
+      setActiveTab('tasks');
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Unassigned drill-down + agent → project picker modal (Day 3)
+// ---------------------------------------------------------------------------
+
+let lastUnassignedDetail = null;
+
+function renderUnassignedDetail(detail) {
+  const titleEl  = document.getElementById('ua-title');
+  const dbEl     = document.getElementById('ua-db-path');
+  const countsEl = document.getElementById('ua-counts');
+  const listEl   = document.getElementById('ua-agents-list');
+
+  if (!detail) {
+    titleEl.textContent  = 'Unassigned';
+    dbEl.textContent     = selectedUnassignedDbPath || '';
+    countsEl.textContent = 'unavailable';
+    listEl.innerHTML     = '<div class="placeholder">DB not connected</div>';
+    return;
+  }
+  lastUnassignedDetail = detail;
+
+  titleEl.textContent = `Unassigned · ${detail.total_rows || 0} row${detail.total_rows === 1 ? '' : 's'} not matched by any project's hints`;
+  dbEl.textContent    = `DB: ${detail.db_path}`;
+  countsEl.innerHTML  =
+    `agents <b>${detail.agents.length}</b>` +
+    `<span class="sep">·</span>tasks ${detail.tasks}` +
+    `<span class="sep">·</span>blockers ${detail.blockers}` +
+    `<span class="sep">·</span>outcomes ${detail.outcomes}` +
+    `<span class="sep">·</span>checkpoints ${detail.checkpoints}` +
+    `<span class="sep">·</span>conflicts ${detail.conflicts}` +
+    `<span class="sep">·</span>dispatches ${detail.dispatches}`;
+
+  if (!detail.agents.length) {
+    listEl.innerHTML = '<div class="placeholder">no unassigned agents — every presence row in this DB belongs to some registered project</div>';
+    return;
+  }
+  listEl.innerHTML = detail.agents
+    .map(s => renderSessionRow(s, { allowAddTo: true }))
+    .join('');
+
+  listEl.querySelectorAll('.sess-actions a[data-act="add-to-project"]').forEach(a => {
+    a.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const agent = a.getAttribute('data-agent');
+      openAddAgentToProjectModal(agent);
+    });
+  });
+}
+
+async function openAddAgentToProjectModal(agentId) {
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl  = document.getElementById('modal-body');
+  titleEl.textContent = `Add ${agentId} to project…`;
+  bodyEl.innerHTML = '<div class="modal-empty">loading projects…</div>';
+  overlay.classList.add('open');
+
+  let projects = [];
+  try {
+    const payload = await window.cairn.getProjectsList();
+    projects = (payload && payload.projects) || [];
+  } catch (_e) { projects = []; }
+
+  if (!projects.length) {
+    bodyEl.innerHTML =
+      '<div class="modal-empty">no projects registered yet — close this and click <b>＋ Add project…</b> first</div>';
+    return;
+  }
+  bodyEl.innerHTML = projects.map(p => {
+    const already = (p.agent_id_hints || []).includes(agentId);
+    const label = escapeHtml(p.label || '(project)');
+    const root  = escapeHtml(p.project_root || '(unknown)');
+    const tag   = already ? ' <span style="color:#7e7">(already a hint)</span>' : '';
+    return (
+      `<div class="modal-row" data-pid="${escapeHtml(p.id)}">` +
+        `<div>${label}${tag}</div>` +
+        `<div class="root">${root}</div>` +
+      `</div>`
+    );
+  }).join('');
+
+  bodyEl.querySelectorAll('.modal-row').forEach(row => {
+    row.addEventListener('click', async () => {
+      const pid = row.getAttribute('data-pid');
+      let res;
+      try {
+        res = await window.cairn.addHint(pid, agentId);
+      } catch (e) {
+        res = { ok: false, error: e && e.message };
+      }
+      closeModal();
+      if (res && res.ok) {
+        // Refresh: L1 list, the unassigned detail (count drops), and
+        // the project summary for the active project (if any).
+        poll().catch(() => {});
+      } else {
+        const footer = document.getElementById('footer');
+        footer.textContent = `addHint failed: ${(res && res.error) || 'unknown'}`;
+        footer.classList.add('bad');
+      }
+    });
+  });
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ---------------------------------------------------------------------------
 // Tab switching — track active tab so polling fetches only what's visible
 // ---------------------------------------------------------------------------
 
@@ -342,8 +606,9 @@ let lastTasks = [];
 function setupTabs() {
   const tabs = document.querySelectorAll('.tab');
   const views = {
-    runlog: document.getElementById('view-runlog'),
-    tasks:  document.getElementById('view-tasks'),
+    runlog:   document.getElementById('view-runlog'),
+    tasks:    document.getElementById('view-tasks'),
+    sessions: document.getElementById('view-sessions'),
   };
   tabs.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -355,6 +620,11 @@ function setupTabs() {
       poll().catch(() => {});
     });
   });
+}
+
+function setActiveTab(tabName) {
+  const btn = document.querySelector(`.tab[data-tab="${tabName}"]`);
+  if (btn) btn.click();
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +690,14 @@ function renderProjectsList(payload) {
       if (res && res.ok) {
         setView('project', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
       }
+    });
+  });
+
+  // Unassigned cards drill into a detail view scoped to that db_path.
+  el.querySelectorAll('.uacard[data-db-path]').forEach(node => {
+    node.addEventListener('click', () => {
+      const dbPath = node.getAttribute('data-db-path');
+      setView('unassigned', { db_path: dbPath });
     });
   });
 
@@ -496,14 +774,14 @@ function renderUnassignedCard(u) {
   const lastAct = u.last_activity_at ? relTimeMs(u.last_activity_at) : '—';
 
   return (
-    `<div class="pcard uacard">` +
+    `<div class="pcard uacard" data-db-path="${escapeHtml(u.db_path)}">` +
       `<div class="pcard-line1">` +
         `<span class="health-dot unassigned">◇</span>` +
         `<span class="pcard-label">Unassigned</span>` +
         `<span class="pcard-act">${escapeHtml(lastAct)}</span>` +
       `</div>` +
       `<div class="pcard-line2">DB: ${escapeHtml(u.db_path)}</div>` +
-      `<div class="pcard-line3">${total} row${total === 1 ? '' : 's'} not matched by any project's hints</div>` +
+      `<div class="pcard-line3">${total} row${total === 1 ? '' : 's'} not matched by any project's hints · click to drill in</div>` +
       `<div class="pcard-counts">${sub}</div>` +
     `</div>`
   );
@@ -529,8 +807,18 @@ function setupMenu() {
 
   back.addEventListener('click', async () => {
     pop.classList.remove('open');
+    // Project is only "selected" in L2 — clearing on the unassigned view
+    // is harmless but unnecessary; do it unconditionally for simplicity.
     await window.cairn.selectProject(null);
     setView('projects', null);
+  });
+
+  // Modal close (cancel link + click on backdrop + Esc handled below).
+  const overlay = document.getElementById('modal-overlay');
+  const cancelBtn = document.getElementById('modal-cancel-btn');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => closeModal());
+  if (overlay) overlay.addEventListener('click', ev => {
+    if (ev.target === overlay) closeModal();
   });
 
   async function doAddProject() {
@@ -571,6 +859,13 @@ async function poll() {
       const payload = await window.cairn.getProjectsList();
       renderProjectsList(payload);
       renderHeaderForView();
+    } else if (currentView === 'unassigned') {
+      // L1.5 — Unassigned drill-down for one db_path.
+      const detail = selectedUnassignedDbPath
+        ? await window.cairn.getUnassignedDetail(selectedUnassignedDbPath)
+        : null;
+      renderHeaderForView();
+      renderUnassignedDetail(detail);
     } else {
       // L2 view — Quick-Slice surface scoped to the active project.
       const summaryP = window.cairn.getProjectSummary();
@@ -582,12 +877,15 @@ async function poll() {
       const tasksP = activeTab === 'tasks'
         ? window.cairn.getTasksList()
         : Promise.resolve(null);
+      const sessionsP = activeTab === 'sessions'
+        ? window.cairn.getProjectSessions()
+        : Promise.resolve(null);
       const detailP = selectedTaskId
         ? window.cairn.getTaskDetail(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, _dbPath, events, tasks, detail] = await Promise.all([
-        summaryP, dbPathP, eventsP, tasksP, detailP,
+      const [summary, _dbPath, events, tasks, sessions, detail] = await Promise.all([
+        summaryP, dbPathP, eventsP, tasksP, sessionsP, detailP,
       ]);
 
       renderHeaderForView();
@@ -601,6 +899,7 @@ async function poll() {
       } else if (selectedTaskId) {
         selectedTaskDetail = detail;
       }
+      if (sessions) renderSessions(sessions);
     }
 
     // Reset footer if it was showing an error
@@ -624,9 +923,17 @@ setInterval(poll, 1000);
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    // Esc on L2 returns to L1; Esc on L1 closes the panel.
+    // Modal first: Esc dismisses the picker without leaving the view.
+    const overlay = document.getElementById('modal-overlay');
+    if (overlay && overlay.classList.contains('open')) {
+      closeModal();
+      return;
+    }
+    // Otherwise: any non-L1 view returns to L1; L1 closes the panel.
     if (currentView === 'project') {
       window.cairn.selectProject(null).then(() => setView('projects', null));
+    } else if (currentView === 'unassigned') {
+      setView('projects', null);
     } else {
       window.close();
     }

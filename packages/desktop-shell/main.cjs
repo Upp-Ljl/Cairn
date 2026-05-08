@@ -566,8 +566,32 @@ ipcMain.handle('rename-project', (_e, id, label) => {
 });
 
 ipcMain.handle('add-hint', (_e, id, agentId) => {
+  if (!agentId || typeof agentId !== 'string') return { ok: false, error: 'invalid agent_id' };
+  const proj = reg.projects.find(p => p.id === id);
+  if (!proj) return { ok: false, error: `project not found: ${id}` };
+  const already = proj.agent_id_hints.includes(agentId);
   reg = registry.addHint(reg, id, agentId);
-  return { ok: true };
+  return { ok: true, already };
+});
+
+// L2 Sessions tab — presence rows attributed to the active project.
+ipcMain.handle('get-project-sessions', () => {
+  const proj = activeProject();
+  if (!proj) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
+  return projectQueries.queryProjectScopedSessions(entry.db, entry.tables, proj.agent_id_hints);
+});
+
+// Unassigned drill-down — keyed by db_path so a user inspecting one DB's
+// Unassigned bucket gets a stable view regardless of which project is
+// currently selected for L2.
+ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
+  if (!dbPath || typeof dbPath !== 'string') return null;
+  const entry = ensureDbHandle(dbPath);
+  if (!entry) return null;
+  const allHints = registry.hintsByDbPath(reg).get(dbPath) || new Set();
+  return projectQueries.queryUnassignedDetail(entry.db, entry.tables, dbPath, allHints);
 });
 
 // ---------------------------------------------------------------------------

@@ -335,6 +335,156 @@
     text-align: center;
     font-style: italic;
   }
+
+  /* L2 Sessions tab + Unassigned detail share session-row styling */
+  .sess-group-title {
+    padding: 6px 12px 3px;
+    color: #666;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: #0f0f0f;
+    border-bottom: 1px solid #1e1e1e;
+  }
+  .sess-group-title.alert { color: #ec8; }
+  .sess {
+    padding: 6px 12px;
+    border-bottom: 1px solid #1e1e1e;
+    cursor: pointer;
+  }
+  .sess:hover { background: #181818; }
+  .sess-line1 {
+    display: grid;
+    grid-template-columns: 70px 1fr 80px;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .sess-state {
+    font-size: 0.78rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-align: center;
+    background: #2a2a2a;
+    color: #aaa;
+  }
+  .sess-state.s-ACTIVE { background: #1a3a1a; color: #7e7; }
+  .sess-state.s-STALE  { background: #3a2a10; color: #ec8; }
+  .sess-state.s-DEAD   { background: #2a2a2a; color: #888; }
+  .sess-state.s-OTHER  { background: #222;    color: #777; }
+  .sess-id { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-id .at-type { color: #88a; }
+  .sess-meta { color: #666; font-size: 0.85em; text-align: right; }
+  .sess-line2, .sess-line3 {
+    margin-left: 78px;
+    color: #888;
+    font-size: 0.85em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sess-line3 { color: #aaa; font-variant-numeric: tabular-nums; }
+  .sess-line3 .num { color: #ddd; }
+  .sess-line3 .num.warn  { color: #ec8; }
+  .sess-line3 .num.alert { color: #f77; }
+  .sess-line3 .num.zero  { color: #555; }
+  .sess-line3 .sep { color: #333; padding: 0 4px; }
+  .sess-cap-chip {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 2px;
+    font-size: 0.72rem;
+    margin-right: 4px;
+    background: #1f1f2a;
+    color: #aac;
+  }
+  .sess-actions {
+    margin-left: 78px;
+    margin-top: 4px;
+    font-size: 0.78rem;
+  }
+  .sess-actions a {
+    color: #7af;
+    cursor: pointer;
+    margin-right: 12px;
+  }
+  .sess-actions a:hover { color: #aef; }
+
+  /* Tasks tab filter chip (Day 3 — when filtered by selectedAgentId) */
+  .filter-chip {
+    margin: 6px 12px;
+    padding: 4px 8px;
+    background: #1d2233;
+    color: #aac;
+    font-size: 0.85em;
+    border-radius: 3px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .filter-chip a { color: #7af; cursor: pointer; }
+  .filter-chip a:hover { color: #aef; }
+
+  /* Unassigned detail view (L1 → drill-down) */
+  #view-unassigned {
+    flex: 1 1 auto;
+    overflow-y: auto;
+  }
+  .ua-header {
+    padding: 8px 12px;
+    background: #141414;
+    border-bottom: 1px solid #333;
+    color: #aac;
+    font-size: 0.9em;
+  }
+  .ua-header .ua-counts {
+    margin-top: 4px;
+    color: #aaa;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Modal — pick a project for "Add to project…" */
+  #modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+  #modal-overlay.open { display: flex; }
+  .modal-box {
+    background: #1f1f1f;
+    border: 1px solid #444;
+    min-width: 320px;
+    max-width: 80vw;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 0;
+  }
+  .modal-title {
+    padding: 8px 12px;
+    background: #0f0f0f;
+    border-bottom: 1px solid #333;
+    color: #7af;
+    font-weight: 600;
+  }
+  .modal-row {
+    padding: 6px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #1e1e1e;
+    color: #ddd;
+  }
+  .modal-row:hover { background: #2a2a2a; color: #7af; }
+  .modal-row .root { color: #666; font-size: 0.85em; }
+  .modal-empty { padding: 16px 12px; color: #888; font-style: italic; text-align: center; }
+  .modal-cancel {
+    padding: 6px 12px;
+    text-align: right;
+    background: #141414;
+  }
+  .modal-cancel a { color: #888; cursor: pointer; }
+  .modal-cancel a:hover { color: #7af; }
 </style>
 </head>
 <body>
@@ -378,8 +528,9 @@
     </div>
 
     <div id="tabs">
-      <button class="tab active" data-tab="runlog" type="button">Run Log</button>
-      <button class="tab"        data-tab="tasks"  type="button">Tasks</button>
+      <button class="tab active" data-tab="runlog"   type="button">Run Log</button>
+      <button class="tab"        data-tab="tasks"    type="button">Tasks</button>
+      <button class="tab"        data-tab="sessions" type="button">Sessions</button>
     </div>
 
     <div id="view-body">
@@ -389,10 +540,38 @@
         </div>
       </div>
       <div id="view-tasks" class="view" hidden>
+        <div id="tasks-filter-chip"></div>
         <div id="tasks-list">
           <div class="placeholder">loading…</div>
         </div>
       </div>
+      <div id="view-sessions" class="view" hidden>
+        <div id="sessions-list">
+          <div class="placeholder">loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- L1.5 Unassigned detail (drill-down from L1 Unassigned card) -->
+  <div id="view-unassigned" hidden>
+    <div class="ua-header">
+      <div id="ua-title">Unassigned</div>
+      <div id="ua-db-path" style="color:#666;font-size:0.85em;margin-top:2px;"></div>
+      <div id="ua-counts" class="ua-counts"></div>
+    </div>
+    <div class="sess-group-title">UNASSIGNED AGENTS</div>
+    <div id="ua-agents-list">
+      <div class="placeholder">loading…</div>
+    </div>
+  </div>
+
+  <!-- Modal for "Add to project…" picker -->
+  <div id="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-title" id="modal-title">Add to project…</div>
+      <div id="modal-body"></div>
+      <div class="modal-cancel"><a id="modal-cancel-btn">cancel</a></div>
     </div>
   </div>
 

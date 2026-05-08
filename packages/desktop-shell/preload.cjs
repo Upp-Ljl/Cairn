@@ -32,6 +32,8 @@ const api = {
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),
+  getProjectSessions: () => ipcRenderer.invoke('get-project-sessions'),
+  getUnassignedDetail:(dbPath) => ipcRenderer.invoke('get-unassigned-detail', dbPath),
 
   // ---- panel views (active-project routed; deprecated set-db-path) ----
   getProjectSummary: () => ipcRenderer.invoke('get-project-summary'),
