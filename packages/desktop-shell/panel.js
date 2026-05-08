@@ -250,13 +250,54 @@ function renderRunLog(events) {
 let selectedTaskId = null;
 /** @type {Object|null} */
 let selectedTaskDetail = null;
+/** @type {Array|null} fetched on detail expand */
+let selectedTaskCheckpoints = null;
+/** @type {Set<string>} task_ids whose subtree is expanded in the L2 tree */
+let expandedTaskIds = new Set();
 
 function clearTaskSelection() {
   selectedTaskId = null;
   selectedTaskDetail = null;
+  selectedTaskCheckpoints = null;
+  // Tree-expansion state is also project-scoped (task_ids only have
+  // meaning within one DB attribution) — reset on project switch.
+  expandedTaskIds = new Set();
 }
 
-function renderTaskDetail(detail) {
+function fmtBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
+
+function renderCheckpointsSection(checkpoints) {
+  if (checkpoints == null) {
+    return `<div class="ckpt-section"><div class="head">checkpoints</div><div style="color:#666">loading…</div></div>`;
+  }
+  if (!checkpoints.length) {
+    return `<div class="ckpt-section"><div class="head">checkpoints</div><div style="color:#666">none recorded</div></div>`;
+  }
+  const rows = checkpoints.map(c => {
+    const head = c.git_head ? String(c.git_head).slice(0, 7) : '—';
+    const labelTxt = c.label
+      ? `<span class="label">${escapeHtml(c.label)}</span> · ${escapeHtml(c.id.slice(0, 12))}`
+      : escapeHtml(c.id.slice(0, 12));
+    const ts = relTimeMs(c.ready_at || c.created_at);
+    return (
+      `<div class="ckpt">` +
+        `<span class="ckpt-status ${escapeHtml(c.snapshot_status)}">${escapeHtml(c.snapshot_status)}</span>` +
+        `<span class="ckpt-id" title="${escapeHtml(c.id)}">${labelTxt} <span style="color:#666">@${escapeHtml(head)}</span></span>` +
+        `<span class="ckpt-meta">${escapeHtml(ts)} · ${escapeHtml(fmtBytes(c.size_bytes))}</span>` +
+        `<button class="ckpt-copy" data-ckpt-id="${escapeHtml(c.id)}" type="button">copy id</button>` +
+      `</div>`
+    );
+  }).join('');
+  return `<div class="ckpt-section"><div class="head">checkpoints (${checkpoints.length})</div>${rows}</div>`;
+}
+
+function renderTaskDetail(detail, checkpoints) {
   if (!detail) return '<div class="tk-detail">detail unavailable</div>';
   const t = detail.task;
   const blockers = detail.blockers || [];
@@ -304,6 +345,7 @@ function renderTaskDetail(detail) {
       `<div class="kv"><span class="k">updated</span><span class="v">${relTimeMs(t.updated_at)}</span></div>` +
       blockerSummary +
       outcomeSummary +
+      renderCheckpointsSection(checkpoints) +
     `</div>`
   );
 }
@@ -325,55 +367,188 @@ function renderTasksFilterChip() {
   });
 }
 
-function renderTasks(tasks) {
+function buildTaskTree(tasks) {
+  // Returns { roots, childMap }. Roots = tasks whose parent is NULL or
+  // whose parent isn't present in the filtered set (so a child whose
+  // parent was filtered out by selectedAgentId becomes its own root).
+  const idSet = new Set(tasks.map(t => t.task_id));
+  const childMap = new Map();
+  const roots = [];
+  for (const t of tasks) {
+    const parent = t.parent_task_id;
+    if (!parent || !idSet.has(parent)) {
+      roots.push(t);
+    } else {
+      if (!childMap.has(parent)) childMap.set(parent, []);
+      childMap.get(parent).push(t);
+    }
+  }
+  return { roots, childMap, idSet };
+}
+
+function renderTaskMiniPills(t) {
+  const pills = [];
+  if (t.blockers_open > 0) {
+    pills.push(`<span class="pill warn">B×${t.blockers_open}</span>`);
+  } else if (t.blockers_total > 0) {
+    pills.push(`<span class="pill">b×${t.blockers_total}</span>`);
+  }
+  if (t.outcome_status) {
+    const cls =
+      t.outcome_status === 'PASS' ? 'ok' :
+      (t.outcome_status === 'FAIL' || t.outcome_status === 'TERMINAL_FAIL') ? 'error' :
+      t.outcome_status === 'PENDING' ? 'warn' : '';
+    pills.push(`<span class="pill ${cls}">${escapeHtml(t.outcome_status)}</span>`);
+  }
+  if (t.checkpoints_total > 0) {
+    pills.push(`<span class="pill">ckpt×${t.checkpoints_total}</span>`);
+  }
+  if (!pills.length) return '';
+  return `<span class="tk-mini-pills">${pills.join('')}</span>`;
+}
+
+function renderTaskRow(t, depth, hasChildren) {
+  const isSelected = (t.task_id === selectedTaskId);
+  const stateCls = `s-${t.state}`;
+  const expanded = expandedTaskIds.has(t.task_id);
+  const chev = hasChildren
+    ? `<span class="tk-chev" data-chev="${escapeHtml(t.task_id)}">${expanded ? '▼' : '▶'}</span>`
+    : `<span class="tk-chev leaf">·</span>`;
+  const agent = t.created_by_agent_id
+    ? `<span style="color:#88a">${escapeHtml(t.created_by_agent_id.slice(0, 16))}</span>`
+    : `<span style="color:#555">unattributed</span>`;
+  const indent = depth > 0
+    ? `style="padding-left:${12 + depth * 16}px"`
+    : '';
+  const detailHtml = isSelected
+    ? renderTaskDetail(selectedTaskDetail, selectedTaskCheckpoints)
+    : '';
+  return (
+    `<div class="tk${isSelected ? ' selected' : ''}" data-task-id="${escapeHtml(t.task_id)}" ${indent}>` +
+      `<div class="tk-line">` +
+        chev +
+        `<span class="tk-state ${stateCls}">${escapeHtml(t.state)}</span>` +
+        `<span class="tk-intent">${escapeHtml(t.intent || '')} ${agent}${renderTaskMiniPills(t)}</span>` +
+        `<span class="tk-meta">${relTimeMs(t.updated_at)}</span>` +
+      `</div>` +
+      detailHtml +
+    `</div>`
+  );
+}
+
+function flattenTreeForRender(roots, childMap, depth, acc) {
+  for (const t of roots) {
+    const children = childMap.get(t.task_id) || [];
+    acc.push({ task: t, depth, hasChildren: children.length > 0 });
+    if (children.length > 0 && expandedTaskIds.has(t.task_id)) {
+      flattenTreeForRender(children, childMap, depth + 1, acc);
+    }
+  }
+  return acc;
+}
+
+/**
+ * @param {{available?:boolean, hints_empty?:boolean, tasks?:Array}|Array|null} payload
+ */
+function renderTasks(payload) {
   const el = document.getElementById('tasks-list');
   renderTasksFilterChip();
-  let view = tasks || [];
+
+  const isPayload = payload && !Array.isArray(payload) && typeof payload === 'object';
+  const tasksRaw = isPayload ? (payload.tasks || []) : (payload || []);
+  const hintsEmpty = isPayload ? !!payload.hints_empty : false;
+
+  if (hintsEmpty) {
+    el.innerHTML =
+      '<div class="placeholder">' +
+      'this project has no agent_id_hints yet — click <b>Unassigned</b> on the projects list and use<br>' +
+      '<b>Add to project…</b> on a session to attribute it here.' +
+      '</div>';
+    return;
+  }
+
+  let view = tasksRaw;
   if (selectedAgentId) {
     view = view.filter(t => t.created_by_agent_id === selectedAgentId);
   }
   if (!view.length) {
     if (selectedAgentId) {
-      el.innerHTML = `<div class="placeholder">no tasks for agent <code>${escapeHtml(selectedAgentId)}</code> in this DB</div>`;
+      el.innerHTML = `<div class="placeholder">no tasks for agent <code>${escapeHtml(selectedAgentId)}</code> in this project</div>`;
     } else {
       el.innerHTML = '<div class="placeholder">no tasks yet — start an MCP session and call cairn.task.create</div>';
     }
     return;
   }
-  el.innerHTML = view.map(t => {
-    const isSelected = (t.task_id === selectedTaskId);
-    const stateCls = `s-${t.state}`;
-    const detailHtml = isSelected ? renderTaskDetail(selectedTaskDetail) : '';
-    const parentLabel = t.parent_task_id ? ` · ⤴ ${escapeHtml(t.parent_task_id.slice(0, 12))}` : '';
-    return (
-      `<div class="tk${isSelected ? ' selected' : ''}" data-task-id="${escapeHtml(t.task_id)}">` +
-        `<div class="tk-line">` +
-          `<span class="tk-state ${stateCls}">${escapeHtml(t.state)}</span>` +
-          `<span class="tk-intent">${escapeHtml(t.intent || '')}${parentLabel}</span>` +
-          `<span class="tk-meta">${relTimeMs(t.updated_at)}</span>` +
-        `</div>` +
-        detailHtml +
-      `</div>`
-    );
-  }).join('');
 
-  // Wire click handlers (rebuilt every render — cheap with ≤100 rows).
+  const tree = buildTaskTree(view);
+  const flat = flattenTreeForRender(tree.roots, tree.childMap, 0, []);
+  el.innerHTML = flat.map(r => renderTaskRow(r.task, r.depth, r.hasChildren)).join('');
+
+  // Chevron toggles tree expand without opening the detail card.
+  el.querySelectorAll('.tk-chev[data-chev]').forEach(c => {
+    c.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const id = c.getAttribute('data-chev');
+      if (expandedTaskIds.has(id)) expandedTaskIds.delete(id);
+      else expandedTaskIds.add(id);
+      renderTasks(lastTasks);
+    });
+  });
+
+  // Row click opens / closes the inline detail card.
   el.querySelectorAll('.tk').forEach(row => {
-    row.addEventListener('click', async () => {
+    row.addEventListener('click', async ev => {
+      // Don't double-fire when chevron / detail children were clicked.
+      if (ev.target.closest('.tk-chev[data-chev]')) return;
+      if (ev.target.closest('.ckpt-copy')) return;
       const id = row.getAttribute('data-task-id');
       if (selectedTaskId === id) {
-        // toggle: collapse
         selectedTaskId = null;
         selectedTaskDetail = null;
+        selectedTaskCheckpoints = null;
       } else {
         selectedTaskId = id;
-        selectedTaskDetail = null; // show the row immediately, populate on reply
+        selectedTaskDetail = null;
+        selectedTaskCheckpoints = null; // will populate after IPC reply
+        // Auto-expand the subtree so the user sees children alongside detail.
+        expandedTaskIds.add(id);
         try {
-          selectedTaskDetail = await window.cairn.getTaskDetail(id);
-        } catch (_e) { selectedTaskDetail = null; }
+          const [d, ckpts] = await Promise.all([
+            window.cairn.getTaskDetail(id),
+            window.cairn.getTaskCheckpoints(id),
+          ]);
+          // Make sure this is still the selection by the time we resolve
+          // (a fast user might have clicked another row in the meantime).
+          if (selectedTaskId === id) {
+            selectedTaskDetail = d;
+            selectedTaskCheckpoints = ckpts || [];
+          }
+        } catch (_e) {
+          if (selectedTaskId === id) {
+            selectedTaskDetail = null;
+            selectedTaskCheckpoints = [];
+          }
+        }
       }
-      // Re-render Tasks tab once with new selection state.
       renderTasks(lastTasks);
+    });
+  });
+
+  // Copy-checkpoint-id buttons (read-only — no DB writes).
+  el.querySelectorAll('.ckpt-copy').forEach(btn => {
+    btn.addEventListener('click', async ev => {
+      ev.stopPropagation();
+      const id = btn.getAttribute('data-ckpt-id');
+      try {
+        await navigator.clipboard.writeText(id);
+        const orig = btn.textContent;
+        btn.textContent = 'copied';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove('copied');
+        }, 1200);
+      } catch (_e) { /* clipboard may be unavailable */ }
     });
   });
 }
@@ -893,9 +1068,12 @@ async function poll() {
       const detailP = selectedTaskId
         ? window.cairn.getTaskDetail(selectedTaskId)
         : Promise.resolve(null);
+      const ckptsP = selectedTaskId
+        ? window.cairn.getTaskCheckpoints(selectedTaskId)
+        : Promise.resolve(null);
 
-      const [summary, _dbPath, events, tasks, sessions, detail] = await Promise.all([
-        summaryP, dbPathP, eventsP, tasksP, sessionsP, detailP,
+      const [summary, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
+        summaryP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
@@ -904,10 +1082,14 @@ async function poll() {
       if (events) renderRunLog(events);
       if (tasks) {
         lastTasks = tasks;
-        if (selectedTaskId) selectedTaskDetail = detail;
+        if (selectedTaskId) {
+          selectedTaskDetail = detail;
+          selectedTaskCheckpoints = ckpts || [];
+        }
         renderTasks(lastTasks);
       } else if (selectedTaskId) {
         selectedTaskDetail = detail;
+        selectedTaskCheckpoints = ckpts || [];
       }
       if (sessions) renderSessions(sessions);
     }

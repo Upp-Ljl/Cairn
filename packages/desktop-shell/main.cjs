@@ -740,16 +740,34 @@ ipcMain.handle('get-project-summary', () => {
   return queries.queryProjectSummary(entry.db, entry.tables, activeDbPath());
 });
 
+// Day 5: returns the project-scoped + enriched payload (filtered by
+// agent_id_hints, with per-task blocker / outcome / checkpoint counts).
+// When no project is selected (or when the active project has no
+// hints) the renderer surfaces an empty state — DB-wide tasks no
+// longer leak into the L2 view.
 ipcMain.handle('get-tasks-list', () => {
+  const proj = activeProject();
   const entry = activeDbEntry();
-  if (!entry) return [];
-  return queries.queryTasksList(entry.db, entry.tables);
+  if (!proj || !entry) {
+    return { available: false, hints_empty: true, tasks: [] };
+  }
+  return projectQueries.queryProjectScopedTasks(
+    entry.db, entry.tables, proj.agent_id_hints,
+  );
 });
 
 ipcMain.handle('get-task-detail', (_e, taskId) => {
   const entry = activeDbEntry();
   if (!entry) return null;
   return queries.queryTaskDetail(entry.db, entry.tables, taskId);
+});
+
+// Checkpoints attached to a task — fetched on detail expand. Read-only;
+// no rewind / preview / mutation channel.
+ipcMain.handle('get-task-checkpoints', (_e, taskId) => {
+  const entry = activeDbEntry();
+  if (!entry) return [];
+  return queries.queryTaskCheckpoints(entry.db, entry.tables, taskId);
 });
 
 ipcMain.handle('get-run-log-events', () => {

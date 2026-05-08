@@ -584,15 +584,139 @@ function queryUnassignedDetail(db, tables, dbPath, allHints) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Project-scoped tasks list with per-task aggregates (Day 5)
+// ---------------------------------------------------------------------------
+
+const PROJECT_TASKS_LIMIT = 200;
+
+/**
+ * Fetch tasks attributed to a project (`created_by_agent_id IN hints`),
+ * enriched with the per-task counts the L2 task tree displays:
+ *   - blockers_total, blockers_open
+ *   - outcome (status only — full outcome row is fetched on detail expand)
+ *   - checkpoints_total
+ *
+ * Returns a flat array; the renderer builds the tree from parent_task_id.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string[]} hints
+ * @param {number} [limit]
+ * @returns {{available:boolean, hints_empty:boolean, tasks:Array}}
+ */
+function queryProjectScopedTasks(db, tables, hints, limit) {
+  const hintArr = Array.isArray(hints) ? hints : [];
+  const lim = Math.max(1, Math.min(limit || PROJECT_TASKS_LIMIT, 1000));
+  const out = { available: false, hints_empty: hintArr.length === 0, tasks: [] };
+  if (!db || !tables.has('tasks')) return out;
+  out.available = true;
+  if (out.hints_empty) return out;
+
+  let rows = [];
+  try {
+    const inList = sqlInList(hintArr);
+    rows = db.prepare(`
+      SELECT task_id, parent_task_id, state, intent,
+             created_at, updated_at, created_by_agent_id, metadata_json
+        FROM tasks
+       WHERE created_by_agent_id IN ${inList}
+       ORDER BY
+         CASE state
+           WHEN 'FAILED'           THEN 1
+           WHEN 'BLOCKED'          THEN 2
+           WHEN 'WAITING_REVIEW'   THEN 3
+           WHEN 'RUNNING'          THEN 4
+           WHEN 'READY_TO_RESUME'  THEN 5
+           WHEN 'PENDING'          THEN 6
+           WHEN 'DONE'             THEN 7
+           WHEN 'CANCELLED'        THEN 8
+           ELSE 9
+         END,
+         updated_at DESC
+       LIMIT ?
+    `).all(...hintArr, lim);
+  } catch (_e) { return out; }
+
+  if (rows.length === 0) { out.tasks = []; return out; }
+
+  const taskIds = rows.map(r => r.task_id);
+  const taskInList = sqlInList(taskIds);
+
+  // Batched aggregates — three small queries vs N+1.
+  /** @type {Map<string,{open:number,total:number}>} */
+  const blockerMap = new Map();
+  if (tables.has('blockers')) {
+    try {
+      const brows = db.prepare(`
+        SELECT task_id, status, COUNT(*) AS n
+          FROM blockers
+         WHERE task_id IN ${taskInList}
+         GROUP BY task_id, status
+      `).all(...taskIds);
+      for (const b of brows) {
+        if (!blockerMap.has(b.task_id)) blockerMap.set(b.task_id, { open: 0, total: 0 });
+        const entry = blockerMap.get(b.task_id);
+        entry.total += b.n;
+        if (b.status === 'OPEN') entry.open += b.n;
+      }
+    } catch (_e) { /* leave empty */ }
+  }
+
+  /** @type {Map<string,string>} task_id → outcome status */
+  const outcomeMap = new Map();
+  if (tables.has('outcomes')) {
+    try {
+      const orows = db.prepare(`
+        SELECT task_id, status FROM outcomes WHERE task_id IN ${taskInList}
+      `).all(...taskIds);
+      for (const o of orows) outcomeMap.set(o.task_id, o.status);
+    } catch (_e) { /* leave empty */ }
+  }
+
+  /** @type {Map<string,number>} */
+  const ckptMap = new Map();
+  if (tables.has('checkpoints')) {
+    try {
+      const crows = db.prepare(`
+        SELECT task_id, COUNT(*) AS n FROM checkpoints
+         WHERE task_id IN ${taskInList}
+         GROUP BY task_id
+      `).all(...taskIds);
+      for (const c of crows) ckptMap.set(c.task_id, c.n);
+    } catch (_e) { /* leave empty */ }
+  }
+
+  out.tasks = rows.map(r => {
+    const b = blockerMap.get(r.task_id) || { open: 0, total: 0 };
+    return {
+      task_id: r.task_id,
+      parent_task_id: r.parent_task_id || null,
+      state: r.state,
+      intent: r.intent,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+      created_by_agent_id: r.created_by_agent_id || null,
+      blockers_total: b.total,
+      blockers_open: b.open,
+      outcome_status: outcomeMap.get(r.task_id) || null,
+      checkpoints_total: ckptMap.get(r.task_id) || 0,
+    };
+  });
+  return out;
+}
+
 module.exports = {
   queryProjectScopedSummary,
   queryUnassignedSummary,
   queryProjectScopedSessions,
   queryUnassignedDetail,
+  queryProjectScopedTasks,
   deriveSessionState,
   parseCapabilities,
   computeOwnsTasksByAgent,
   computeHealth,
   STALE_GRACE_FACTOR,
   SUPPORTED_TABLES,
+  PROJECT_TASKS_LIMIT,
 };

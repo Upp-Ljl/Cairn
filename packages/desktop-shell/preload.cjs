@@ -39,6 +39,7 @@ const api = {
   getProjectSummary: () => ipcRenderer.invoke('get-project-summary'),
   getTasksList:      () => ipcRenderer.invoke('get-tasks-list'),
   getTaskDetail:     (taskId) => ipcRenderer.invoke('get-task-detail', taskId),
+  getTaskCheckpoints:(taskId) => ipcRenderer.invoke('get-task-checkpoints', taskId),
   getRunLogEvents:   () => ipcRenderer.invoke('get-run-log-events'),
   getDbPath:         () => ipcRenderer.invoke('get-db-path'),
   setDbPath:         (path) => ipcRenderer.invoke('set-db-path', path),

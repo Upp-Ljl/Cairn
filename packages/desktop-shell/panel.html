@@ -195,7 +195,7 @@
   .ev.sev-error:nth-child(odd) { background: #240e0e; }
   .ev.sev-error .src, .ev.sev-error .ty { color: #f88; }
 
-  /* Task list rows + inline expansion */
+  /* Task list rows + inline expansion (Day 5: tree-aware) */
   .tk {
     padding: 5px 12px;
     border-bottom: 1px solid #1e1e1e;
@@ -205,10 +205,97 @@
   .tk.selected { background: #1d2233; }
   .tk-line {
     display: grid;
-    grid-template-columns: 110px 1fr 80px;
-    column-gap: 8px;
+    grid-template-columns: 14px 110px 1fr 80px;
+    column-gap: 6px;
     align-items: baseline;
   }
+  .tk-chev {
+    color: #555;
+    cursor: pointer;
+    user-select: none;
+    text-align: center;
+    width: 14px;
+  }
+  .tk-chev:hover { color: #7af; }
+  .tk-chev.leaf { color: #2a2a2a; cursor: default; }
+  .tk-line .tk-indent {
+    /* indentation rendered as left margin on the row itself */
+  }
+  .tk-mini-pills {
+    display: inline-block;
+    margin-left: 6px;
+    color: #888;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .tk-mini-pills .pill {
+    display: inline-block;
+    padding: 0 4px;
+    margin-right: 3px;
+    border-radius: 2px;
+    background: #2a2a2a;
+    color: #aaa;
+  }
+  .tk-mini-pills .pill.warn  { background: #3a2a10; color: #ec8; }
+  .tk-mini-pills .pill.error { background: #3a1010; color: #f88; }
+  .tk-mini-pills .pill.ok    { background: #1a3a1a; color: #7e7; }
+
+  /* Checkpoints subsection in task detail */
+  .tk-detail .ckpt-section {
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px dashed #2a2a2a;
+  }
+  .tk-detail .ckpt-section .head {
+    color: #888;
+    font-size: 0.78rem;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .tk-detail .ckpt {
+    display: grid;
+    grid-template-columns: 50px 1fr 70px 50px;
+    column-gap: 6px;
+    align-items: baseline;
+    padding: 2px 0;
+    font-size: 0.85em;
+  }
+  .tk-detail .ckpt-status {
+    font-size: 0.72rem;
+    padding: 0 4px;
+    border-radius: 2px;
+    text-align: center;
+  }
+  .tk-detail .ckpt-status.READY     { background: #1a3a1a; color: #7e7; }
+  .tk-detail .ckpt-status.PENDING   { background: #2a2a3a; color: #aac; }
+  .tk-detail .ckpt-status.CORRUPTED { background: #3a1010; color: #f88; }
+  .tk-detail .ckpt-id {
+    color: #888;
+    font-size: 0.85em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tk-detail .ckpt-id .label { color: #ddd; }
+  .tk-detail .ckpt-meta {
+    color: #666;
+    font-size: 0.85em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .tk-detail .ckpt-copy {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.78rem;
+    text-align: right;
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: inherit;
+  }
+  .tk-detail .ckpt-copy:hover { color: #aef; }
+  .tk-detail .ckpt-copy.copied { color: #7e7; }
   .tk-state {
     font-size: 0.78rem;
     padding: 1px 6px;

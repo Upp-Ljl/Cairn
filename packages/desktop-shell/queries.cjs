@@ -392,7 +392,32 @@ function queryTaskDetail(db, tables, taskId) {
 }
 
 /**
- * Run Log low-fidelity feed. 5 sources only:
+ * Checkpoints attached to a single task — fetched on detail expand
+ * (Day 5). Read-only and intentionally narrow: only the columns the
+ * panel renders. snapshot_dir is omitted because it leaks filesystem
+ * paths the user wouldn't act on inside the panel; rewind / preview
+ * stay out of scope per Day 5 boundaries.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string} taskId
+ * @returns {Array<{id:string,label:string|null,snapshot_status:string,git_head:string|null,size_bytes:number|null,created_at:number,ready_at:number|null}>}
+ */
+function queryTaskCheckpoints(db, tables, taskId) {
+  if (!db || !tables.has('checkpoints') || !taskId) return [];
+  try {
+    return db.prepare(`
+      SELECT id, label, snapshot_status, git_head, size_bytes, created_at, ready_at
+        FROM checkpoints
+       WHERE task_id = ?
+       ORDER BY COALESCE(ready_at, created_at) DESC
+       LIMIT 50
+    `).all(taskId);
+  } catch (_e) { return []; }
+}
+
+/**
+ * Run Log low-fidelity feed. 6 sources:
  *   tasks / blockers / outcomes / conflicts / dispatch_requests
  *
  * processes / scratchpad / checkpoints are explicitly NOT included
@@ -554,6 +579,46 @@ function queryRunLogEvents(db, tables) {
     } catch (_e) { /* skip source */ }
   }
 
+  // ---- checkpoints (Day 5: minimum Run Log upgrade) -----------------
+  // Emit one event per checkpoint row anchored at COALESCE(ready_at,
+  // created_at). Severity:
+  //   READY      → info
+  //   PENDING    → warn (snapshotting in progress / stuck)
+  //   CORRUPTED  → error
+  // task_id may be NULL for global anchors — we still emit them; the
+  // panel filter (if any) decides whether to drop unattributed rows.
+  if (tables.has('checkpoints')) {
+    try {
+      const rows = db.prepare(`
+        SELECT id, task_id, label, snapshot_status, git_head, size_bytes,
+               created_at, ready_at
+          FROM checkpoints
+         ORDER BY COALESCE(ready_at, created_at) DESC
+         LIMIT ?
+      `).all(PER_SOURCE_LIMIT);
+      for (const r of rows) {
+        const statusLower = String(r.snapshot_status || '').toLowerCase();
+        const severity =
+          r.snapshot_status === 'CORRUPTED' ? 'error' :
+          r.snapshot_status === 'PENDING'   ? 'warn'  :
+          'info';
+        const label = r.label
+          ? `${r.label}${r.git_head ? ' @' + String(r.git_head).slice(0, 7) : ''}`
+          : (r.git_head ? `@${String(r.git_head).slice(0, 7)}` : '(checkpoint)');
+        events.push({
+          ts: r.ready_at || r.created_at,
+          severity,
+          source: 'checkpoints',
+          type: `checkpoint.${statusLower}`,
+          agent_id: null,
+          task_id: r.task_id || null,
+          target: r.id,
+          message: _truncate(label, 96),
+        });
+      }
+    } catch (_e) { /* skip source */ }
+  }
+
   // ---- dispatch_requests --------------------------------------------
   // Use confirmed_at if present, else created_at. Terminal-state non-CONFIRMED
   // rows leave confirmed_at NULL — created_at is the only universal anchor.
@@ -596,7 +661,7 @@ function queryRunLogEvents(db, tables) {
  * @typedef {Object} RunLogEvent
  * @property {number} ts                     unix ms
  * @property {'info'|'warn'|'error'} severity
- * @property {'tasks'|'blockers'|'outcomes'|'conflicts'|'dispatch'} source
+ * @property {'tasks'|'blockers'|'outcomes'|'conflicts'|'dispatch'|'checkpoints'} source
  * @property {string} type                   e.g. 'task.failed' / 'blocker.opened'
  * @property {string|null} agent_id
  * @property {string|null} task_id
@@ -705,6 +770,7 @@ module.exports = {
   // Day 2 placeholders
   queryTasksList,
   queryTaskDetail,
+  queryTaskCheckpoints,
   queryRunLogEvents,
   // legacy (inspector-legacy + pet sprite)
   queryLegacyState,
