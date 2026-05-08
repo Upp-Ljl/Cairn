@@ -17,12 +17,36 @@
  * compatibility) is gated on CAIRN_DESKTOP_ENABLE_MUTATIONS=1.
  */
 
-const { app, BrowserWindow, ipcMain, screen, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog, Menu, Tray, nativeImage } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
 const queries = require('./queries.cjs');
+
+// ---------------------------------------------------------------------------
+// Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
+// ---------------------------------------------------------------------------
+//
+// Pre-generated at source-time with a one-shot Node helper (zlib + Buffer
+// builtins, no third-party dep). Embedded as base64 string constants so:
+//   - no binary files in the repo
+//   - no runtime canvas / spritesheet / webp dependency
+//   - no native ICO toolchain required for a 3-state Quick Slice tray
+// Three distinct colors carry the state signal:
+//   idle  = gray   #505050 / dark-gray border
+//   warn  = amber  #DCB432 / dark-amber border
+//   alert = red    #C83232 / dark-red border
+// macOS users may need a hi-dpi/ICO upgrade later; that's Hardening (R13).
+const TRAY_ICON_IDLE  = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIUlEQVR4nGPQ0ND4TwlmABEBAQFk4VEDRg0YNYDaBlCCAX390vApagYAAAAAAElFTkSuQmCC';
+const TRAY_ICON_WARN  = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIklEQVR4nGPIi5L8TwlmABF3thiRhUcNGDVg1ABqG0AJBgAaCYxjVG9cowAAAABJRU5ErkJggg==';
+const TRAY_ICON_ALERT = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIklEQVR4nGOoEBH5TwlmABEnjIzIwqMGjBowagC1DaAEAwCFDApPXv1bjAAAAABJRU5ErkJggg==';
+
+const TRAY_IMAGES = {
+  idle:  nativeImage.createFromDataURL('data:image/png;base64,' + TRAY_ICON_IDLE),
+  warn:  nativeImage.createFromDataURL('data:image/png;base64,' + TRAY_ICON_WARN),
+  alert: nativeImage.createFromDataURL('data:image/png;base64,' + TRAY_ICON_ALERT),
+};
 
 // ---------------------------------------------------------------------------
 // Config + flags
@@ -133,6 +157,10 @@ function connectDb(targetPath) {
 let petWindow = null;
 let panelWindow = null;
 let legacyWindow = null;
+let tray = null;
+let trayPollTimer = null;
+let lastTrayState = null;        // 'idle' | 'warn' | 'alert'
+let isQuitting = false;          // set by Quit menu so close handlers cooperate
 
 function createPetWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
@@ -166,6 +194,7 @@ function createPetWindow() {
 
 function createPanelWindow() {
   if (panelWindow) {
+    if (!panelWindow.isVisible()) panelWindow.show();
     panelWindow.focus();
     return;
   }
@@ -180,6 +209,18 @@ function createPanelWindow() {
     },
   });
   panelWindow.loadFile('panel.html');
+
+  // Tray-aware close: pressing the OS close button hides the window but
+  // keeps the app alive. Quit must go through the tray menu (or `app.quit()`
+  // wired via isQuitting). Without this, closing the panel would orphan
+  // the tray in a confusing "icon stays but nothing happens on click"
+  // state — see plan §10 R14.
+  panelWindow.on('close', (e) => {
+    if (!isQuitting && tray) {
+      e.preventDefault();
+      panelWindow.hide();
+    }
+  });
   panelWindow.on('closed', () => { panelWindow = null; });
 }
 
@@ -200,6 +241,88 @@ function createLegacyWindow() {
   });
   legacyWindow.loadFile('inspector-legacy.html');
   legacyWindow.on('closed', () => { legacyWindow = null; });
+}
+
+// ---------------------------------------------------------------------------
+// Tray (system tray / menu bar entry)
+// ---------------------------------------------------------------------------
+
+function togglePanel() {
+  if (panelWindow && panelWindow.isVisible() && panelWindow.isFocused()) {
+    panelWindow.hide();
+    return;
+  }
+  if (!panelWindow) {
+    createPanelWindow();
+  } else {
+    if (!panelWindow.isVisible()) panelWindow.show();
+    panelWindow.focus();
+  }
+}
+
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
+    { label: 'Open Cairn',            click: () => togglePanel() },
+    { label: 'Open Legacy Inspector', click: () => createLegacyWindow() },
+    { type: 'separator' },
+    { label: 'Quit',                  click: () => {
+      isQuitting = true;
+      app.quit();
+    }},
+  ]);
+}
+
+/**
+ * Compute tray state from the project summary. Priority:
+ *   alert  — open conflicts > 0 OR failed outcomes > 0
+ *   warn   — open blockers > 0 OR waiting_review tasks > 0
+ *   idle   — otherwise
+ */
+function deriveTrayState(summary) {
+  if (!summary || !summary.available) return 'idle';
+  if ((summary.conflicts_open  || 0) > 0) return 'alert';
+  if ((summary.outcomes_failed || 0) > 0) return 'alert';
+  if ((summary.blockers_open   || 0) > 0) return 'warn';
+  if ((summary.tasks_waiting_review || 0) > 0) return 'warn';
+  return 'idle';
+}
+
+function buildTrayTooltip(summary) {
+  if (!summary || !summary.available) return 'Cairn — DB unavailable';
+  return (
+    `Cairn — ${summary.agents_active} agents · ` +
+    `${summary.blockers_open} blockers · ` +
+    `${summary.outcomes_failed} FAIL · ` +
+    `${summary.conflicts_open} conflicts`
+  );
+}
+
+function refreshTray() {
+  if (!tray) return;
+  const summary = queries.queryProjectSummary(db, tables, dbPath);
+  const state = deriveTrayState(summary);
+  if (state !== lastTrayState) {
+    tray.setImage(TRAY_IMAGES[state]);
+    lastTrayState = state;
+  }
+  tray.setToolTip(buildTrayTooltip(summary));
+}
+
+function createTray() {
+  if (tray) return;
+  // Start with idle; refreshTray will update immediately.
+  tray = new Tray(TRAY_IMAGES.idle);
+  tray.setToolTip('Cairn — starting…');
+  tray.setContextMenu(buildTrayMenu());
+
+  // Single-click toggles panel on Windows. macOS shows the context menu
+  // on click by default; Quick Slice main target is Windows (R11), so
+  // this is fine for now.
+  tray.on('click', () => togglePanel());
+
+  // Update icon + tooltip every 1s alongside panel polling.
+  refreshTray();
+  trayPollTimer = setInterval(refreshTray, 1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +460,10 @@ app.whenReady().then(() => {
   const initialPath = prefs.dbPath || DEFAULT_DB_PATH;
   connectDb(initialPath);
 
+  // Tray comes up first so the app has a persistent entry point even if
+  // the user immediately closes the panel.
+  createTray();
+
   // Always create the pet (ambient presence). Then open either the panel
   // or the legacy Inspector depending on launch mode.
   createPetWindow();
@@ -349,12 +476,29 @@ app.whenReady().then(() => {
   // eslint-disable-next-line no-console
   console.log(
     `cairn desktop-shell ready — mode=${LEGACY_MODE ? 'legacy' : 'panel'} ` +
-    `mutations=${MUTATIONS_ENABLED ? 'on(dev)' : 'off'} db=${dbPath}`
+    `mutations=${MUTATIONS_ENABLED ? 'on(dev)' : 'off'} ` +
+    `tray=on db=${dbPath}`
   );
 });
 
-// Day 3 will install the tray icon and make this conditional. For Day 1
-// we keep the existing behavior so smoke-testing without a tray still
-// works (closing the panel window quits the app on Windows/Linux, which
-// is the current expectation). Day 3 will replace this guard.
-app.on('window-all-closed', () => app.quit());
+// Tray-aware lifecycle: closing all windows does NOT quit the app.
+// Users who want to actually exit must use the tray's Quit menu (which
+// flips isQuitting and calls app.quit()). On macOS this matches the
+// platform convention; on Windows it gives the tray a meaningful role
+// instead of being an orphan icon (plan §10 R14).
+app.on('window-all-closed', () => {
+  if (isQuitting) app.quit();
+  // otherwise: keep app + tray alive
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+  if (trayPollTimer) {
+    clearInterval(trayPollTimer);
+    trayPollTimer = null;
+  }
+  if (tray) {
+    try { tray.destroy(); } catch (_e) {}
+    tray = null;
+  }
+});
