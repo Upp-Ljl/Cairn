@@ -243,6 +243,87 @@
   .interp-risks .risk-title  { color: #ddd; }
   .interp-risks .risk-detail { color: #777; font-size: 0.92em; grid-column: 2; }
 
+  /* Pre-PR Gate card — advisory readiness check. Sits between the
+     Interpretation card and the Pulse strip. */
+  .pre-pr-card {
+    padding: 6px 12px;
+    background: #15131c;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #pre-pr-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .pre-pr-status {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.74rem;
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: #2a2a2a;
+    color: #888;
+    flex: 0 0 auto;
+  }
+  .pre-pr-status.not_ready        { background: #3a1010; color: #f88; }
+  .pre-pr-status.ready_with_risks { background: #3a2a10; color: #ec8; }
+  .pre-pr-status.unknown          { background: #2a2a2a; color: #889; }
+  .pre-pr-meta {
+    color: #666;
+    font-size: 0.82em;
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pre-pr-refresh, .pre-pr-copy {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+    margin-left: 8px;
+  }
+  .pre-pr-refresh:hover, .pre-pr-copy:hover { color: #aef; }
+  .pre-pr-summary {
+    color: #ddd;
+    font-size: 0.9em;
+    line-height: 1.45;
+    margin-top: 3px;
+  }
+  .pre-pr-checklist {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed #2a2a2a;
+    color: #aaa;
+    font-size: 0.88em;
+    line-height: 1.5;
+  }
+  .pre-pr-checklist .head, .pre-pr-risks .head {
+    color: #889;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+  }
+  .pre-pr-checklist ul, .pre-pr-risks ul {
+    margin: 0 0 0 18px;
+    padding: 0;
+  }
+  .pre-pr-risks {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed #2a2a2a;
+    color: #aaa;
+    font-size: 0.88em;
+    line-height: 1.5;
+  }
+  .pre-pr-risks .risk-item.attention { color: #f99; }
+  .pre-pr-risks .risk-item.watch     { color: #ec8; }
+  .pre-pr-risks .risk-item .detail   { color: #777; }
+
   /* Project Pulse strip — sits above the summary card on L2.
      Compact, read-only, "needs attention?" signal only. Color matches
      the tray semantics: dim green = ok, amber = watch, red = attention.
@@ -1054,6 +1135,23 @@
       <div id="interp-summary" class="interp-summary"></div>
       <div id="interp-risks" class="interp-risks" hidden></div>
       <div id="interp-next" class="interp-next" hidden></div>
+    </div>
+    <!--
+      Pre-PR Gate (advisory). Status reflects deterministic rules
+      (open blocker / failed outcome / failed task / open conflict
+      → not_ready). LLM rewrites the checklist tone but never the
+      status. Hidden until the user clicks Refresh once.
+    -->
+    <div id="pre-pr-card" class="pre-pr-card" hidden>
+      <div id="pre-pr-line1">
+        <span id="pre-pr-status" class="pre-pr-status">UNKNOWN</span>
+        <span id="pre-pr-meta" class="pre-pr-meta"></span>
+        <a id="pre-pr-refresh-link" class="pre-pr-refresh">Refresh</a>
+        <a id="pre-pr-copy-link" class="pre-pr-copy">copy checklist</a>
+      </div>
+      <div id="pre-pr-summary" class="pre-pr-summary" hidden></div>
+      <div id="pre-pr-checklist" class="pre-pr-checklist" hidden></div>
+      <div id="pre-pr-risks" class="pre-pr-risks" hidden></div>
     </div>
     <!--
       Project Pulse — read-only derived signals.

@@ -56,6 +56,7 @@ const goalSignals       = require('./goal-signals.cjs');
 const goalInterpretation = require('./goal-interpretation.cjs');
 const llmClient         = require('./llm-client.cjs');
 const workerReports     = require('./worker-reports.cjs');
+const prePrGate         = require('./pre-pr-gate.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1218,6 +1219,56 @@ ipcMain.handle('list-worker-reports', (_e, projectId, limit) => {
 
 ipcMain.handle('clear-worker-reports', (_e, projectId) => {
   return workerReports.clearWorkerReports(projectId);
+});
+
+// ---------------------------------------------------------------------------
+// Pre-PR Gate (advisory only)
+// ---------------------------------------------------------------------------
+//
+// Reuses the buildInterpretationInput pipeline + adds a `summary`
+// field for the gate's deterministic rules. Cached the same way as
+// goal interpretation: get-* returns the cached value (or null);
+// refresh-* is the only path that actually evaluates / calls LLM.
+
+/** @type {Map<string, { result: object, generated_at: number }>} */
+const prePrGateCache = new Map();
+
+function buildPrePrGateInput(proj, entry, agentIds) {
+  // Same shape as buildInterpretationInput — the gate consumes
+  // goal + pulse + activity_summary + recent_reports + a flat
+  // summary field (counts).
+  const interpInput = buildInterpretationInput(proj, entry, agentIds);
+  const summary = projectQueries.queryProjectScopedSummary(
+    entry.db, entry.tables, proj.db_path, agentIds,
+  );
+  // Carry the post-fold counts (Claude/Codex etc.) for the gate's
+  // future use; the deterministic rules currently read only the
+  // base SQLite-derived counts here.
+  return Object.assign({}, interpInput, { summary });
+}
+
+ipcMain.handle('get-pre-pr-gate', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const cached = prePrGateCache.get(projectId);
+  return cached ? cached.result : null;
+});
+
+ipcMain.handle('refresh-pre-pr-gate', async (_e, projectId, opts) => {
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const input = buildPrePrGateInput(proj, entry, agentIds);
+  const force = !!(opts && opts.forceDeterministic);
+  const result = await prePrGate.evaluatePrePrGate(input, {
+    forceDeterministic: force,
+  });
+  prePrGateCache.set(projectId, {
+    result,
+    generated_at: Date.now(),
+  });
+  return { ok: true, result };
 });
 
 // Project Pulse — derived signals only. No mutation, no recommendation

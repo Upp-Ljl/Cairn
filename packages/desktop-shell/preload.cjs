@@ -44,6 +44,9 @@ const api = {
   addWorkerReport:    (projectId, input) => ipcRenderer.invoke('add-worker-report', projectId, input),
   listWorkerReports:  (projectId, limit) => ipcRenderer.invoke('list-worker-reports', projectId, limit || 0),
   clearWorkerReports: (projectId) => ipcRenderer.invoke('clear-worker-reports', projectId),
+  // Pre-PR Gate (advisory)
+  getPrePrGate:       (projectId) => ipcRenderer.invoke('get-pre-pr-gate', projectId),
+  refreshPrePrGate:   (projectId, opts) => ipcRenderer.invoke('refresh-pre-pr-gate', projectId, opts || null),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),

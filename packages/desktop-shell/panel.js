@@ -407,6 +407,108 @@ function setupInterpretationCard() {
 }
 
 // ---------------------------------------------------------------------------
+// Pre-PR Gate renderer (advisory only)
+// ---------------------------------------------------------------------------
+//
+// Cairn does NOT decide whether a PR is good. The card surfaces the
+// deterministic rules' output (status + checklist + risks). LLM
+// optionally rewrites tone — never status. Hidden until the user
+// clicks Refresh.
+
+let lastPrePrGate = null;
+let prePrGateLoading = false;
+
+function renderPrePrGate(gate) {
+  lastPrePrGate = gate || null;
+  const card = document.getElementById('pre-pr-card');
+  if (!card) return;
+  if (!gate) {
+    // Stay hidden when nothing computed yet — the user hasn't asked.
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const statusEl = document.getElementById('pre-pr-status');
+  statusEl.textContent = (gate.status || 'unknown').replace(/_/g, ' ').toUpperCase();
+  statusEl.className = 'pre-pr-status ' + (gate.status || 'unknown');
+
+  const meta = [];
+  if (gate.mode) meta.push(gate.mode);
+  if (gate.model) meta.push(gate.model);
+  if (gate.error_code) meta.push(`fallback: ${gate.error_code}`);
+  document.getElementById('pre-pr-meta').textContent = meta.join(' · ');
+
+  const summaryEl = document.getElementById('pre-pr-summary');
+  if (gate.summary) {
+    summaryEl.hidden = false;
+    summaryEl.textContent = gate.summary;
+  } else {
+    summaryEl.hidden = true;
+    summaryEl.textContent = '';
+  }
+
+  const checklistEl = document.getElementById('pre-pr-checklist');
+  if (Array.isArray(gate.checklist) && gate.checklist.length) {
+    checklistEl.hidden = false;
+    checklistEl.innerHTML =
+      `<div class="head">CHECKLIST (advisory)</div>` +
+      `<ul>` + gate.checklist.map(s => `<li>${escapeHtml(s)}</li>`).join('') + `</ul>`;
+  } else {
+    checklistEl.hidden = true;
+    checklistEl.innerHTML = '';
+  }
+
+  const risksEl = document.getElementById('pre-pr-risks');
+  if (Array.isArray(gate.risks) && gate.risks.length) {
+    risksEl.hidden = false;
+    risksEl.innerHTML =
+      `<div class="head">RISKS</div>` +
+      `<ul>` + gate.risks.map(r => (
+        `<li class="risk-item ${escapeHtml(r.severity || 'watch')}">` +
+          escapeHtml(r.title || r.kind || '') +
+          (r.detail ? `<div class="detail">${escapeHtml(r.detail)}</div>` : '') +
+        `</li>`
+      )).join('') + `</ul>`;
+  } else {
+    risksEl.hidden = true;
+    risksEl.innerHTML = '';
+  }
+}
+
+function setupPrePrGateCard() {
+  const refresh = document.getElementById('pre-pr-refresh-link');
+  const copy    = document.getElementById('pre-pr-copy-link');
+  if (refresh) refresh.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    if (prePrGateLoading) return;
+    prePrGateLoading = true;
+    const meta = document.getElementById('pre-pr-meta');
+    if (meta) meta.textContent = 'evaluating…';
+    try {
+      const res = await window.cairn.refreshPrePrGate(selectedProject.id, {});
+      if (res && res.ok) {
+        renderPrePrGate(res.result);
+      } else {
+        const footer = document.getElementById('footer');
+        footer.textContent = `pre-PR refresh failed: ${(res && res.error) || 'unknown'}`;
+        footer.classList.add('bad');
+      }
+    } finally {
+      prePrGateLoading = false;
+    }
+  });
+  if (copy) copy.addEventListener('click', async () => {
+    if (!lastPrePrGate || !Array.isArray(lastPrePrGate.checklist)) return;
+    const text = lastPrePrGate.checklist.map((s, i) => `${i + 1}. ${s}`).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = 'copied';
+      setTimeout(() => { copy.textContent = 'copy checklist'; }, 1200);
+    } catch (_e) { /* clipboard unavailable */ }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
 // ---------------------------------------------------------------------------
 //
@@ -2063,6 +2165,9 @@ async function poll() {
       const interpP  = selectedProject
         ? window.cairn.getGoalInterpretation(selectedProject.id)
         : Promise.resolve(null);
+      const gateP    = selectedProject
+        ? window.cairn.getPrePrGate(selectedProject.id)
+        : Promise.resolve(null);
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -2084,13 +2189,14 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, interp, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, interpP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
+      const [summary, pulse, goal, interp, gate, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, interpP, gateP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
       renderGoalCard(goal);
       renderInterpretation(interp);
+      renderPrePrGate(gate);
       renderPulse(pulse);
       renderSummary(summary);
 
@@ -2127,6 +2233,7 @@ setupTabs();
 setupMenu();
 setupGoalCard();
 setupInterpretationCard();
+setupPrePrGateCard();
 setupReportsTab();
 setView('projects', null);
 poll();
