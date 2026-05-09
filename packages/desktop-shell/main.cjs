@@ -1747,11 +1747,17 @@ ipcMain.handle('generate-prompt-pack', async (_e, projectId, opts) => {
   const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
   // Reuse the gate input — same shape (goal + rules + state + reports);
   // also pass the cached gate result if available so the pack
-  // checklist can dedupe against it.
+  // checklist can dedupe against it. Plus a coordination summary so
+  // the prompt pack carries today's coordination context (not the
+  // raw signals — only the LLM-safe summary form).
+  const coordInput = buildCoordinationInput(proj, entry, agentIds);
+  const coord = coordinationSignals.deriveCoordinationSignals(coordInput, {});
+  const coordSummary = coordinationSignals.summarizeCoordination(coord);
   const input = Object.assign({}, buildPrePrGateInput(proj, entry, agentIds), {
     pre_pr_gate: prePrGateCache.get(projectId)
       ? prePrGateCache.get(projectId).result
       : null,
+    coordination_summary: coordSummary,
   });
   const force = !!(opts && opts.forceDeterministic);
   const result = await goalLoopPromptPack.generatePromptPack(input, {

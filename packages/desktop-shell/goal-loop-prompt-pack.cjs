@@ -90,6 +90,11 @@ function assembleSections(input) {
   const outcomes   = o.outcomes_summary || null;
   const reports    = Array.isArray(o.recent_reports) ? o.recent_reports : [];
   const gate       = o.pre_pr_gate || null;
+  // Coordination summary — the prompt pack carries the SUMMARY shape
+  // (counts + by_kind + top_titles), NEVER the raw signals array.
+  // This keeps the LLM payload bounded and avoids spreading scratchpad
+  // / conflict raw data across surfaces.
+  const coordSum   = o.coordination_summary || null;
 
   // ---- goal ----
   const goalLines = [];
@@ -137,6 +142,28 @@ function assembleSections(input) {
     }
   } else {
     rulesLines.push('(no rules configured)');
+  }
+
+  // ---- coordination signals (summary form) ----
+  const coordLines = [];
+  if (coordSum) {
+    coordLines.push(`Level: ${(coordSum.level || 'ok').toUpperCase()}`);
+    if (coordSum.counts) {
+      coordLines.push(`Signals: ${coordSum.counts.attention || 0} attention · ${coordSum.counts.watch || 0} watch · ${coordSum.counts.info || 0} info`);
+    }
+    if (coordSum.handoff_count || coordSum.conflict_count || coordSum.recovery_count) {
+      const bits = [];
+      if (coordSum.handoff_count)  bits.push(`${coordSum.handoff_count} handoff`);
+      if (coordSum.conflict_count) bits.push(`${coordSum.conflict_count} conflict`);
+      if (coordSum.recovery_count) bits.push(`${coordSum.recovery_count} recovery`);
+      coordLines.push(`Candidates: ${bits.join(' · ')}`);
+    }
+    if (Array.isArray(coordSum.top_titles) && coordSum.top_titles.length) {
+      coordLines.push('Top items the user should look at:');
+      for (const t of coordSum.top_titles.slice(0, 5)) coordLines.push(`  - ${clip(t, STR_TITLE_MAX)}`);
+    }
+  } else {
+    coordLines.push('(no coordination signals available — Cairn project state may be empty)');
   }
 
   // ---- current_state ----
@@ -235,6 +262,7 @@ function assembleSections(input) {
     goal:                  goalLines.join('\n'),
     context_summary:       contextSummary,
     rules:                 rulesLines.join('\n'),
+    coordination:          coordLines.join('\n'),
     current_state:         stateLines.join('\n'),
     worker_report_summary: reportLines.join('\n'),
     acceptance_checklist:  accept.slice(0, LIST_MAX + 5),
@@ -263,6 +291,9 @@ function composePrompt(sections, opts) {
   lines.push('');
   lines.push('# Project rules');
   lines.push(sections.rules);
+  lines.push('');
+  lines.push('# Coordination signals (Cairn-derived; advisory)');
+  lines.push(sections.coordination);
   lines.push('');
   lines.push('# Current state');
   lines.push(sections.current_state);
@@ -303,6 +334,7 @@ function deterministicPack(input, opts) {
       goal:                  sections.goal,
       context_summary:       sections.context_summary,
       rules:                 sections.rules,
+      coordination:          sections.coordination,
       current_state:         sections.current_state,
       worker_report_summary: sections.worker_report_summary,
       acceptance_checklist:  sections.acceptance_checklist,
@@ -346,6 +378,9 @@ function safeMergeFromLlm(deterministic, llmObj) {
     sections: Object.assign({}, deterministic.sections),
     evidence_ids: deterministic.evidence_ids,
   };
+  // The coordination section is NEVER LLM-rewritable. It comes from
+  // pure Cairn derivation; if the LLM tries to inject one, ignore it.
+  out.sections.coordination = deterministic.sections.coordination;
   // Allow rephrasing the freeform text sections.
   if (llmObj && typeof llmObj.context_summary === 'string') {
     out.sections.context_summary = clip(llmObj.context_summary, STR_LINE_MAX * 2);
