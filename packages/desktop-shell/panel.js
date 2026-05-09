@@ -307,6 +307,106 @@ function openGoalEditModal(existing) {
 }
 
 // ---------------------------------------------------------------------------
+// Goal Interpretation renderer (Goal Mode v1, advisory)
+// ---------------------------------------------------------------------------
+//
+// The card is hidden when there's no goal AND no cached interpretation
+// — interpretation without a goal anchor is unhelpful. The Refresh
+// link is the only path that actually triggers an LLM call.
+
+let lastInterpretation = null;
+let interpretationLoading = false;
+
+function renderInterpretation(interp) {
+  lastInterpretation = interp || null;
+  const card = document.getElementById('interp-card');
+  if (!card) return;
+  // Hide entirely when we have nothing useful (no goal AND no cached
+  // result). The "set goal first" empty state lives on the Goal Card.
+  if (!interp) {
+    card.hidden = (!lastGoal);
+    if (!lastGoal) return;
+    // No interpretation cached yet but goal exists: render a one-line
+    // call-to-action so the user knows it's available.
+    card.hidden = false;
+    document.getElementById('interp-mode-chip').textContent = 'INTERP';
+    document.getElementById('interp-mode-chip').className = 'interp-mode';
+    document.getElementById('interp-meta').textContent = 'click Refresh to compute';
+    document.getElementById('interp-summary').textContent = '';
+    document.getElementById('interp-risks').hidden = true;
+    document.getElementById('interp-next').hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const modeChip = document.getElementById('interp-mode-chip');
+  modeChip.textContent = (interp.mode || 'deterministic').toUpperCase();
+  modeChip.className = 'interp-mode' + (interp.mode === 'llm' ? ' llm' : '');
+
+  const meta = [];
+  if (interp.model) meta.push(interp.model);
+  if (interp.generated_at) meta.push(relTimeMs(interp.generated_at));
+  if (interp.error_code) meta.push(`fallback: ${interp.error_code}`);
+  document.getElementById('interp-meta').textContent = meta.join(' · ');
+
+  document.getElementById('interp-summary').textContent = interp.summary || '';
+
+  const risksEl = document.getElementById('interp-risks');
+  if (Array.isArray(interp.risks) && interp.risks.length) {
+    risksEl.hidden = false;
+    risksEl.innerHTML = interp.risks.map(r => (
+      `<div class="risk">` +
+        `<span class="risk-dot ${escapeHtml(r.severity || 'watch')}">●</span>` +
+        `<span class="risk-title">${escapeHtml(r.title || r.kind || '')}</span>` +
+        (r.detail ? `<span class="risk-detail">${escapeHtml(r.detail)}</span>` : '') +
+      `</div>`
+    )).join('');
+  } else {
+    risksEl.hidden = true;
+    risksEl.innerHTML = '';
+  }
+
+  const nextEl = document.getElementById('interp-next');
+  if (Array.isArray(interp.next_attention) && interp.next_attention.length) {
+    nextEl.hidden = false;
+    nextEl.innerHTML =
+      `<div style="color:#888;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px">NEXT ATTENTION</div>` +
+      interp.next_attention.map(s => (
+        `<div class="item">` +
+          `<span style="color:#557">·</span>` +
+          `<span>${escapeHtml(s)}</span>` +
+        `</div>`
+      )).join('');
+  } else {
+    nextEl.hidden = true;
+    nextEl.innerHTML = '';
+  }
+}
+
+function setupInterpretationCard() {
+  const link = document.getElementById('interp-refresh-link');
+  if (!link) return;
+  link.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    if (interpretationLoading) return;
+    interpretationLoading = true;
+    const meta = document.getElementById('interp-meta');
+    if (meta) meta.textContent = 'refreshing…';
+    try {
+      const res = await window.cairn.refreshGoalInterpretation(selectedProject.id, {});
+      if (res && res.ok) {
+        renderInterpretation(res.result);
+      } else {
+        const footer = document.getElementById('footer');
+        footer.textContent = `interpretation refresh failed: ${(res && res.error) || 'unknown'}`;
+        footer.classList.add('bad');
+      }
+    } finally {
+      interpretationLoading = false;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
 // ---------------------------------------------------------------------------
 //
@@ -1817,6 +1917,9 @@ async function poll() {
       const goalP    = selectedProject
         ? window.cairn.getProjectGoal(selectedProject.id)
         : Promise.resolve(null);
+      const interpP  = selectedProject
+        ? window.cairn.getGoalInterpretation(selectedProject.id)
+        : Promise.resolve(null);
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -1835,12 +1938,13 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
+      const [summary, pulse, goal, interp, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, interpP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
       renderGoalCard(goal);
+      renderInterpretation(interp);
       renderPulse(pulse);
       renderSummary(summary);
 
@@ -1875,6 +1979,7 @@ async function poll() {
 setupTabs();
 setupMenu();
 setupGoalCard();
+setupInterpretationCard();
 setView('projects', null);
 poll();
 setInterval(poll, 1000);

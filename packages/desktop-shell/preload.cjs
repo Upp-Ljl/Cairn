@@ -35,6 +35,11 @@ const api = {
   getProjectGoal:    (projectId) => ipcRenderer.invoke('get-project-goal', projectId),
   setProjectGoal:    (projectId, goal) => ipcRenderer.invoke('set-project-goal', projectId, goal),
   clearProjectGoal:  (projectId) => ipcRenderer.invoke('clear-project-goal', projectId),
+  // Goal Interpretation (advisory)
+  getGoalInterpretation:     (projectId) => ipcRenderer.invoke('get-goal-interpretation', projectId),
+  refreshGoalInterpretation: (projectId, opts) =>
+    ipcRenderer.invoke('refresh-goal-interpretation', projectId, opts || null),
+  getLlmProviderInfo:        () => ipcRenderer.invoke('get-llm-provider-info'),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),

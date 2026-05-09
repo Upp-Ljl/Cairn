@@ -53,6 +53,8 @@ const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
 const goalSignals       = require('./goal-signals.cjs');
+const goalInterpretation = require('./goal-interpretation.cjs');
+const llmClient         = require('./llm-client.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1082,6 +1084,98 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
 // if no project selected). For project-scoped summary they apply the
 // active project's hints; for Run Log / Tasks they currently return
 // DB-wide data (per-project filtering for those is Day 3+ work).
+
+// ---------------------------------------------------------------------------
+// Goal Interpretation — advisory LLM layer (Goal Mode v1)
+// ---------------------------------------------------------------------------
+//
+// In-memory cache so the panel's 1s poll doesn't hammer the provider.
+// `get-goal-interpretation` returns the cached value (or null);
+// `refresh-goal-interpretation` is the only path that actually calls
+// the LLM. Cache lives only in this process — never persisted.
+
+/** @type {Map<string, { result: object, generated_at: number }>} */
+const interpretationCache = new Map();
+const INTERPRETATION_CACHE_TTL_MS = 5 * 60 * 1000; // best-effort, not load-bearing
+
+function buildInterpretationInput(proj, entry, agentIds) {
+  const summary = projectQueries.queryProjectScopedSummary(
+    entry.db, entry.tables, proj.db_path, agentIds,
+  );
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+  const codexAll  = codexSessionScan.scanCodexSessions();
+  const { matched: claudeForP } = claudeSessionScan.partitionByProject(claudeAll, proj);
+  const { matched: codexForP }  = codexSessionScan.partitionByProject(codexAll, proj);
+  foldClaudeIntoSummary(summary, claudeForP);
+  foldCodexIntoSummary(summary, codexForP);
+  const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, proj, agentIds);
+  const built = agentActivity.buildProjectActivities(
+    proj, mcpForActivity, claudeAll, codexAll,
+    { claude: claudeSessionScan, codex: codexSessionScan },
+  );
+  summary.agent_activity = built.summary;
+
+  const pulse = goalSignals.deriveProjectPulse(summary, built.activities, {});
+  const goal = registry.getProjectGoal(reg, proj.id);
+  // Worker Reports (Phase 3) feed in here once landed. Until then,
+  // return an empty list so the interpretation runs against goal +
+  // pulse + activity alone.
+  const recentReports = (typeof readRecentWorkerReports === 'function')
+    ? readRecentWorkerReports(proj.id, 5) : [];
+
+  return {
+    goal,
+    pulse,
+    activity_summary: built.summary,
+    top_activities: built.activities.slice(0, 6),
+    tasks_summary: {
+      running:        summary.tasks_running,
+      blocked:        summary.tasks_blocked,
+      waiting_review: summary.tasks_waiting_review,
+      failed:         summary.tasks_failed,
+      done:           0, // not currently tracked in summary
+    },
+    blockers_summary: { open: summary.blockers_open },
+    outcomes_summary: {
+      failed:  summary.outcomes_failed,
+      pending: summary.outcomes_pending,
+    },
+    checkpoints_summary: null, // not in summary; left null for v1
+    recent_reports: recentReports,
+  };
+}
+
+ipcMain.handle('get-goal-interpretation', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const cached = interpretationCache.get(projectId);
+  if (cached && (Date.now() - cached.generated_at) < INTERPRETATION_CACHE_TTL_MS) {
+    return cached.result;
+  }
+  return cached ? cached.result : null; // stale cache is OK; refresh is explicit
+});
+
+ipcMain.handle('refresh-goal-interpretation', async (_e, projectId, opts) => {
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const input = buildInterpretationInput(proj, entry, agentIds);
+  const force = !!(opts && opts.forceDeterministic);
+  const result = await goalInterpretation.interpretGoal(input, {
+    forceDeterministic: force,
+  });
+  interpretationCache.set(projectId, {
+    result,
+    generated_at: Date.now(),
+  });
+  return { ok: true, result };
+});
+
+// Provider describe-self (NEVER includes the api key).
+ipcMain.handle('get-llm-provider-info', () => {
+  return llmClient.describeProvider(llmClient.loadProvider());
+});
 
 // Project Pulse — derived signals only. No mutation, no recommendation
 // of next agent action. Uses the same project summary + activity feed

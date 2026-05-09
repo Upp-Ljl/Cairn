@@ -176,6 +176,73 @@
   }
   .goal-actions a:hover { color: #7af; }
 
+  /* Goal Interpretation card — advisory layer. Sits between the
+     Goal Card and the Pulse strip. */
+  .interp-card {
+    padding: 6px 12px;
+    background: #141320;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #interp-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .interp-mode {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+    padding: 0 5px;
+    border-radius: 2px;
+    background: #2a2a3a;
+    color: #aab;
+    flex: 0 0 auto;
+  }
+  .interp-mode.llm { background: #1a3a2a; color: #7dc; }
+  .interp-meta {
+    color: #666;
+    font-size: 0.82em;
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .interp-refresh {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+  }
+  .interp-refresh:hover { color: #aef; }
+  .interp-summary {
+    color: #ddd;
+    font-size: 0.92em;
+    line-height: 1.45;
+    margin-top: 3px;
+  }
+  .interp-risks, .interp-next {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed #2a2a2a;
+    color: #aaa;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  .interp-risks .risk, .interp-next .item {
+    display: grid;
+    grid-template-columns: 9px 1fr;
+    column-gap: 8px;
+    padding: 1px 0;
+  }
+  .interp-risks .risk-dot.attention { color: #f77; }
+  .interp-risks .risk-dot.watch     { color: #ec8; }
+  .interp-risks .risk-dot.info      { color: #5b5; }
+  .interp-risks .risk-title  { color: #ddd; }
+  .interp-risks .risk-detail { color: #777; font-size: 0.92em; grid-column: 2; }
+
   /* Project Pulse strip — sits above the summary card on L2.
      Compact, read-only, "needs attention?" signal only. Color matches
      the tray semantics: dim green = ok, amber = watch, red = attention.
@@ -897,6 +964,23 @@
           <a id="goal-clear-link">clear</a>
         </div>
       </div>
+    </div>
+    <!--
+      Goal Interpretation (advisory). Either:
+        - deterministic: pure derivation from goal + pulse + activity
+        - llm: an LLM rephrased the deterministic finding (advisory only)
+      Hidden when there's no goal (interpretation has no anchor) or
+      no last-refreshed result yet.
+    -->
+    <div id="interp-card" class="interp-card" hidden>
+      <div id="interp-line1">
+        <span id="interp-mode-chip" class="interp-mode">DETERMINISTIC</span>
+        <span id="interp-meta" class="interp-meta"></span>
+        <a id="interp-refresh-link" class="interp-refresh">Refresh</a>
+      </div>
+      <div id="interp-summary" class="interp-summary"></div>
+      <div id="interp-risks" class="interp-risks" hidden></div>
+      <div id="interp-next" class="interp-next" hidden></div>
     </div>
     <!--
       Project Pulse — read-only derived signals.
