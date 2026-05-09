@@ -686,6 +686,7 @@ function shortPathInProject(absPath, projectRoot) {
 
 function renderClaudeSessionRow(row, opts) {
   const projectRoot = opts && opts.projectRoot;
+  const allowRegister = !!(opts && opts.allowRegisterFromCwd);
   // status (lowercase) → display badge state (uppercase).
   const display = (row.status || 'unknown').toUpperCase(); // BUSY | IDLE | STALE | DEAD | UNKNOWN
   const sid = row.session_id ? row.session_id.slice(0, 8) : '?';
@@ -699,8 +700,14 @@ function renderClaudeSessionRow(row, opts) {
   const reasonTxt = row.stale_reason && (display === 'STALE' || display === 'DEAD')
     ? ` <span style="color:#666">[${escapeHtml(row.stale_reason)}]</span>`
     : '';
-  // No data-agent attribute — Claude rows are read-only with no Cairn
-  // agent_id. Click is not wired to any per-row action for now.
+  // Register-from-cwd action only renders in Unassigned context AND
+  // only when the row carries a cwd. No cwd → nothing to register.
+  const registerLink = (allowRegister && row.cwd)
+    ? `<div class="sess-actions">` +
+        `<a data-act="register-project" data-cwd="${escapeHtml(row.cwd)}">` +
+        `Register project from this cwd…</a>` +
+      `</div>`
+    : '';
   return (
     `<div class="sess" data-claude-pid="${escapeHtml(String(row.pid || ''))}">` +
       `<div class="sess-line1">` +
@@ -714,6 +721,7 @@ function renderClaudeSessionRow(row, opts) {
       `<div class="sess-line3" style="margin-left:78px">` +
         `${escapeHtml(pidTxt)}${verTxt}${reasonTxt}` +
       `</div>` +
+      registerLink +
     `</div>`
   );
 }
@@ -753,6 +761,7 @@ function renderClaudeSessionsBlock(rows, opts) {
 
 function renderCodexSessionRow(row, opts) {
   const projectRoot = opts && opts.projectRoot;
+  const allowRegister = !!(opts && opts.allowRegisterFromCwd);
   const display = (row.status || 'unknown').toUpperCase(); // RECENT | INACTIVE | UNKNOWN
   const sid = row.session_id ? row.session_id.slice(0, 8) : '?';
   const cwdShort = shortPathInProject(row.cwd, projectRoot);
@@ -764,6 +773,12 @@ function renderCodexSessionRow(row, opts) {
   const appTxt = row.source_app ? ` · ${escapeHtml(row.source_app)}` : '';
   const reasonTxt = row.stale_reason && display === 'UNKNOWN'
     ? ` <span style="color:#666">[${escapeHtml(row.stale_reason)}]</span>`
+    : '';
+  const registerLink = (allowRegister && row.cwd)
+    ? `<div class="sess-actions">` +
+        `<a data-act="register-project" data-cwd="${escapeHtml(row.cwd)}">` +
+        `Register project from this cwd…</a>` +
+      `</div>`
     : '';
   return (
     `<div class="sess" data-codex-sid="${escapeHtml(row.session_id || '')}">` +
@@ -778,6 +793,7 @@ function renderCodexSessionRow(row, opts) {
       `<div class="sess-line3" style="margin-left:78px">` +
         `${orig}${verTxt}${appTxt}${reasonTxt}` +
       `</div>` +
+      registerLink +
     `</div>`
   );
 }
@@ -912,19 +928,23 @@ function renderUnassignedDetail(detail) {
   if (detail.agents.length) {
     html += detail.agents.map(s => renderSessionRow(s, { allowAddTo: true })).join('');
   }
-  // Claude rows whose cwd matches no registered project. We don't offer
-  // "Add to project" for them — Claude sessions don't carry a Cairn
-  // agent_id, so a hint won't help. Surfacing them is itself the value:
-  // user sees "I have a Claude Code running outside any registered
-  // project" and decides whether to register that project.
+  // Claude rows whose cwd matches no registered project. They carry no
+  // Cairn agent_id, so "Add to project…" (which adds an agent_id_hint)
+  // wouldn't help — but the row's own cwd is exactly the signal we
+  // need to register a brand-new project. Offer that as the per-row
+  // action; surfacing the row is itself the value.
   if (claudeRows.length) {
-    html += renderClaudeSessionsBlock(claudeRows, { projectRoot: null });
+    html += renderClaudeSessionsBlock(claudeRows, {
+      projectRoot: null,
+      allowRegisterFromCwd: true,
+    });
   }
-  // Codex rows: same as Claude — no agent_id, no "Add to project".
-  // The point is just visibility: "I have Codex running outside any
-  // registered project; maybe I should register that project."
+  // Codex rows: same flow as Claude — register project from cwd.
   if (codexRows.length) {
-    html += renderCodexSessionsBlock(codexRows, { projectRoot: null });
+    html += renderCodexSessionsBlock(codexRows, {
+      projectRoot: null,
+      allowRegisterFromCwd: true,
+    });
   }
   listEl.innerHTML = html;
 
@@ -935,6 +955,76 @@ function renderUnassignedDetail(detail) {
       openAddAgentToProjectModal(agent);
     });
   });
+
+  listEl.querySelectorAll('.sess-actions a[data-act="register-project"]').forEach(a => {
+    a.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const cwd = a.getAttribute('data-cwd');
+      if (!cwd) return;
+      handleRegisterFromCwdClick(cwd);
+    });
+  });
+}
+
+/**
+ * "Register project from this cwd" click handler. Confirms the
+ * canonicalized target with the user (prevents accidental clicks from
+ * polluting the registry), then calls the IPC channel and refreshes.
+ *
+ * The Unassigned bucket the user is currently viewing scopes the
+ * db_path: if they're drilling into the bucket for ~/.cairn/cairn.db,
+ * the new project goes into that DB. Without that pin, multi-DB users
+ * would land on whichever DB the IPC layer picked as default, which
+ * may not be the one they were looking at.
+ */
+async function handleRegisterFromCwdClick(cwd) {
+  const dbPath = selectedUnassignedDbPath || null;
+  // Single confirmation step. We want this near-frictionless ("一键")
+  // but not silent — the user just clicked an action that mutates the
+  // registry, so a one-line "register?" prompt is the floor.
+  const proceed = window.confirm(
+    `Register a new Cairn project at:\n\n${cwd}\n\n` +
+    `(canonicalized to git toplevel if applicable; cwd ⊆ project_root attribution)`
+  );
+  if (!proceed) return;
+
+  let res;
+  try {
+    res = await window.cairn.registerProjectFromCwd(cwd, dbPath);
+  } catch (e) {
+    res = { ok: false, error: e && e.message };
+  }
+
+  const footer = document.getElementById('footer');
+  if (res && res.ok) {
+    footer.textContent = `registered project "${res.entry.label}" at ${res.entry.project_root}`;
+    footer.classList.remove('bad');
+    setTimeout(() => {
+      footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+    }, 4000);
+    poll().catch(() => {});
+    return;
+  }
+
+  // Friendly errors: already_registered carries the existing entry so
+  // the user knows the cwd isn't going unregistered, just consolidated.
+  if (res && res.error === 'already_registered' && res.entry) {
+    footer.textContent =
+      `already registered as "${res.entry.label}" — refresh to see it on the project list`;
+    footer.classList.add('bad');
+    setTimeout(() => {
+      footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+      footer.classList.remove('bad');
+    }, 4000);
+    poll().catch(() => {});
+    return;
+  }
+  footer.textContent = `register failed: ${(res && res.error) || 'unknown'}`;
+  footer.classList.add('bad');
+  setTimeout(() => {
+    footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+    footer.classList.remove('bad');
+  }, 4000);
 }
 
 async function openAddAgentToProjectModal(agentId) {

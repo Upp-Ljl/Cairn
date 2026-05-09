@@ -101,6 +101,82 @@ function defaultLabelFor(projectRoot) {
   return base || projectRoot;
 }
 
+/**
+ * Normalize a project_root string for collision comparison: forward
+ * slashes, trim trailing slash, lowercase on Windows. Kept private to
+ * this module so the IPC layer doesn't accidentally use it for anything
+ * other than uniqueness checks. Display strings should preserve
+ * whatever the user / canonicalizer produced.
+ *
+ * The Real Agent Presence v2 Claude / Codex adapters use the same
+ * normalization shape (project-queries.cjs::normalizePath); the helper
+ * is duplicated here only because we don't want registry.cjs to acquire
+ * a runtime dependency on the SQL-querying layer just for path math.
+ *
+ * @param {string} p
+ * @returns {string}
+ */
+function _normalizeRootForCompare(p) {
+  if (typeof p !== 'string' || !p) return '';
+  let s = p.replace(/\\/g, '/');
+  if (s.length > 1 && s.endsWith('/')) s = s.slice(0, -1);
+  if (process.platform === 'win32') s = s.toLowerCase();
+  return s;
+}
+
+/**
+ * Find the registry entry whose project_root matches `projectRoot` under
+ * the same path-comparison rules as Claude/Codex attribution. Returns
+ * null when no entry matches; the caller decides whether to surface
+ * "already registered" vs add a duplicate (we never auto-add on a
+ * collision — the panel needs to tell the user what happened).
+ *
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectRoot
+ * @returns {ProjectRegistryEntry|null}
+ */
+function findProjectByRoot(reg, projectRoot) {
+  if (!reg || !Array.isArray(reg.projects)) return null;
+  const target = _normalizeRootForCompare(projectRoot);
+  if (!target || target === '(unknown)') return null;
+  for (const p of reg.projects) {
+    if (_normalizeRootForCompare(p.project_root) === target) return p;
+  }
+  return null;
+}
+
+/**
+ * Pick an unused project label, suffixing `(2)`, `(3)`, … on collision.
+ * Comparison is case-insensitive so two on-disk paths that only differ
+ * in casing don't both try to claim "Foo" — the user typically wouldn't
+ * want that even if the OS allows it.
+ *
+ * If `baseLabel` itself is unused, it's returned unchanged. We avoid
+ * "(1)" because users expect the first occurrence to be the bare name.
+ *
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} baseLabel
+ * @returns {string}
+ */
+function pickAvailableLabel(reg, baseLabel) {
+  const base = (baseLabel && String(baseLabel).trim()) || '(project)';
+  const taken = new Set();
+  if (reg && Array.isArray(reg.projects)) {
+    for (const p of reg.projects) {
+      if (typeof p.label === 'string') taken.add(p.label.toLowerCase());
+    }
+  }
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base} (${i})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  // Pathological fallback — registry has 1000+ entries with the same
+  // base label, which should never happen in practice. Append a random
+  // suffix so addProject still produces a unique entry.
+  return `${base} (${crypto.randomBytes(2).toString('hex')})`;
+}
+
 // ---------------------------------------------------------------------------
 // File IO
 // ---------------------------------------------------------------------------
@@ -349,6 +425,8 @@ module.exports = {
   // identity
   deriveAgentIdHint,
   defaultLabelFor,
+  findProjectByRoot,
+  pickAvailableLabel,
   // load / save
   loadRegistry,
   saveRegistry,

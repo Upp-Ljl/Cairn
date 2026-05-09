@@ -808,6 +808,58 @@ ipcMain.handle('rename-project', (_e, id, label) => {
   return { ok: true };
 });
 
+// Register a project entry from a Claude/Codex Unassigned row's cwd.
+//
+// Why a dedicated channel and not just add-project({ project_root, db_path }):
+//   - The starting point is a presence-row cwd we already know; the
+//     caller doesn't want a folder-picker dialog and shouldn't have to
+//     compute the canonical git-toplevel itself.
+//   - We owe the user a clear "already registered" answer when the
+//     canonical cwd matches an existing entry — silently no-op'ing
+//     would confuse, and silently duplicating would create two project
+//     cards pointing at the same tree.
+//   - Real Agent Presence attribution rule: Claude / Codex rows match
+//     by `cwd ⊆ project_root`, not by agent_id_hints. So this handler
+//     deliberately does NOT add a hint — adding one would conflate
+//     pre-v2 deterministic-id semantics with v2 capability/cwd-driven
+//     attribution. The new entry comes up with hints=[] and the next
+//     poll re-attributes Claude/Codex purely via cwd.
+ipcMain.handle('register-project-from-cwd', (_e, cwd, dbPath) => {
+  if (typeof cwd !== 'string' || !cwd.trim()) {
+    return { ok: false, error: 'cwd_required' };
+  }
+  const canonical = canonicalizeToGitToplevel(cwd);
+  if (!canonical || canonical === '(unknown)') {
+    return { ok: false, error: 'canonicalize_failed' };
+  }
+  const existing = registry.findProjectByRoot(reg, canonical);
+  if (existing) {
+    return {
+      ok: false,
+      error: 'already_registered',
+      entry: { id: existing.id, label: existing.label, project_root: existing.project_root },
+    };
+  }
+  const targetDb = (typeof dbPath === 'string' && dbPath.trim())
+    ? dbPath
+    : registry.DEFAULT_DB_PATH;
+  const baseLabel = registry.defaultLabelFor(canonical);
+  const label = registry.pickAvailableLabel(reg, baseLabel);
+
+  // hints intentionally empty — see comment above. Claude / Codex
+  // attribute via cwd, MCP via capability tags. Pre-v2 historical rows
+  // can still be attached later via "Add to project…" on a session.
+  const result = registry.addProject(reg, {
+    project_root: canonical,
+    db_path: targetDb,
+    label,
+    agent_id_hints: [],
+  });
+  reg = result.reg;
+  ensureDbHandle(targetDb); // open the read handle eagerly so L1 can render
+  return { ok: true, entry: result.entry };
+});
+
 ipcMain.handle('add-hint', (_e, id, agentId) => {
   if (!agentId || typeof agentId !== 'string') return { ok: false, error: 'invalid agent_id' };
   const proj = reg.projects.find(p => p.id === id);

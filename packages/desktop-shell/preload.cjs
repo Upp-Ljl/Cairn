@@ -29,6 +29,8 @@ const api = {
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),
+  registerProjectFromCwd: (cwd, dbPath) =>
+    ipcRenderer.invoke('register-project-from-cwd', cwd, dbPath || null),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),
