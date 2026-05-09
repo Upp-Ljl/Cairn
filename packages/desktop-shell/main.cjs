@@ -1845,6 +1845,56 @@ ipcMain.handle('list-managed-iterations', (_e, projectId, limit) => {
   return managedLoopHandlers.listManagedIterations(projectId, limit || 0);
 });
 
+// Worker Launch — user-authorized, single-shot agent runs. Each
+// channel is one panel button; never invoked on a timer.
+
+ipcMain.handle('detect-worker-providers', () => {
+  return managedLoopHandlers.detectWorkerProviders();
+});
+
+ipcMain.handle('launch-managed-worker', (_e, projectId, input) => {
+  return managedLoopHandlers.launchManagedWorker(projectId, input || {});
+});
+
+ipcMain.handle('get-worker-run', (_e, runId) => {
+  return managedLoopHandlers.getWorkerRun(runId);
+});
+
+ipcMain.handle('list-worker-runs', (_e, projectId) => {
+  return managedLoopHandlers.listWorkerRuns(projectId);
+});
+
+ipcMain.handle('stop-worker-run', (_e, runId) => {
+  return managedLoopHandlers.stopWorkerRun(runId);
+});
+
+ipcMain.handle('tail-worker-run', (_e, runId, limit) => {
+  return managedLoopHandlers.tailWorkerRun(runId, limit || 16 * 1024);
+});
+
+ipcMain.handle('extract-worker-report', (_e, projectId, input) => {
+  return managedLoopHandlers.extractManagedWorkerReport(projectId, input || {});
+});
+
+ipcMain.handle('continue-managed-iteration-review', async (_e, projectId, opts) => {
+  // Same context build as review-managed-iteration; collects evidence + reviews.
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const o = opts || {};
+  const cachedGate = prePrGateCache.get(projectId);
+  const goal = registry.getProjectGoal(reg, projectId);
+  const effective = registry.getEffectiveProjectRules(reg, projectId);
+  const ctx = {
+    iteration_id: o.iteration_id || null,
+    pre_pr_gate: cachedGate ? cachedGate.result : null,
+    goal,
+    rules: effective ? effective.rules : null,
+  };
+  return managedLoopHandlers.continueManagedIterationReview(projectId, ctx, {
+    forceDeterministic: !!o.forceDeterministic,
+  });
+});
+
 // Project Pulse — derived signals only. No mutation, no recommendation
 // of next agent action. Uses the same project summary + activity feed
 // the rest of the IPC layer already produces; no new SQL.

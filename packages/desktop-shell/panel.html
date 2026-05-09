@@ -620,6 +620,41 @@
     box-sizing: border-box;
     resize: vertical;
   }
+  .managed-providers {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: #aaa;
+    font-size: 0.85em;
+    margin: 2px 0;
+  }
+  .managed-provider {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: #1c1f24;
+    border: 1px solid #333;
+    cursor: pointer;
+  }
+  .managed-provider.unavailable {
+    color: #555;
+    border-color: #222;
+    cursor: default;
+  }
+  .managed-provider.selected {
+    background: #1a3a3a;
+    border-color: #4a7e7e;
+    color: #cef;
+  }
+  .managed-provider input { margin-right: 2px; }
+  .managed-disclosure {
+    color: #ec8;
+    font-size: 0.78em;
+    margin: 2px 0;
+    line-height: 1.4;
+  }
   .recovery-last-ready {
     margin-top: 3px;
     color: #aaa;
@@ -1785,6 +1820,31 @@
           <button id="managed-btn-evidence"   type="button" class="managed-btn" disabled>collect evidence</button>
           <button id="managed-btn-review"     type="button" class="managed-btn" disabled>review iteration</button>
           <button id="managed-btn-copy-seed"  type="button" class="managed-btn" disabled>copy next prompt seed</button>
+        </div>
+        <!--
+          Worker launch controls. Each button is one user click; Cairn
+          never auto-launches and never schedules subsequent runs.
+          The provider selector reflects what was found on PATH; an
+          unavailable provider keeps the row visible but disables the
+          launch button (so the user knows the option exists).
+        -->
+        <div id="managed-worker-area" class="managed-area">
+          <div class="managed-area-head">Worker</div>
+          <div id="managed-worker-providers" class="managed-providers">
+            <span class="placeholder">probing CLI providers…</span>
+          </div>
+          <div id="managed-worker-actions" class="managed-actions">
+            <button id="managed-btn-open-worker" type="button" class="managed-btn" disabled>open worker</button>
+            <button id="managed-btn-stop-worker" type="button" class="managed-btn" disabled>stop worker</button>
+            <button id="managed-btn-tail-worker" type="button" class="managed-btn" disabled>refresh tail</button>
+            <button id="managed-btn-extract"     type="button" class="managed-btn" disabled>extract report</button>
+          </div>
+          <div id="managed-worker-disclosure" class="managed-disclosure" hidden></div>
+          <div id="managed-worker-status" class="managed-evidence" hidden></div>
+          <div id="managed-worker-tail-area" hidden>
+            <div class="managed-area-head">tail log (last bytes)</div>
+            <textarea id="managed-worker-tail" class="managed-textarea" readonly rows="8"></textarea>
+          </div>
         </div>
         <div id="managed-prompt-area" class="managed-area" hidden>
           <div class="managed-area-head">Worker prompt (copy-paste into Claude Code / Codex / Cursor)</div>

@@ -26,6 +26,7 @@ const evidenceM = require('./project-evidence.cjs');
 const reviewM   = require('./managed-loop-review.cjs');
 const adapter   = require('./managed-loop-prompt.cjs');
 const wr        = require('./worker-reports.cjs');
+const launcher  = require('./worker-launcher.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. list — every managed project on disk, joined with the registry
@@ -294,6 +295,132 @@ function listManagedIterations(projectId, limit, opts) {
   return iters.listIterations(projectId, limit || 20, { home: o.home });
 }
 
+// ---------------------------------------------------------------------------
+// Worker Launch (user-authorized, single-shot)
+// ---------------------------------------------------------------------------
+//
+// `detectWorkerProviders` is a pure detection probe — no I/O outside
+// PATH stat. `launchManagedWorker` is the only handler that spawns a
+// child process; it binds the new run to the latest open iteration
+// so the panel can fold runs into the iteration timeline.
+//
+// `extractManagedWorkerReport` parses the run's tail.log
+// deterministically (no LLM) for a `## Worker Report` block. If
+// missing, the panel still shows the manual paste-report path —
+// extraction is a convenience, not a requirement.
+
+function detectWorkerProviders() {
+  return launcher.detectWorkerProviders();
+}
+
+function launchManagedWorker(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  if (!i.provider) return { ok: false, error: 'provider_required' };
+
+  const record = mp.readManagedProject(projectId, o.home);
+  if (!record) return { ok: false, error: 'managed_project_not_found' };
+  if (!record.local_path) return { ok: false, error: 'local_path_missing' };
+
+  // Bind to latest open iteration — caller can override.
+  let iterationId = i.iteration_id || null;
+  if (!iterationId) {
+    const open = iters.getLatestOpenIteration(projectId, { home: o.home });
+    if (open) iterationId = open.id;
+  }
+  if (!iterationId) return { ok: false, error: 'no_open_iteration' };
+
+  // Prompt: caller MUST supply the prompt text (we don't auto-generate
+  // here — keeping prompt composition + worker launch as two distinct
+  // user clicks per PRODUCT.md §1.3).
+  if (typeof i.prompt !== 'string' || !i.prompt.trim()) {
+    return { ok: false, error: 'prompt_required' };
+  }
+
+  const launchRes = launcher.launchWorker({
+    provider: i.provider,
+    cwd: record.local_path,
+    prompt: i.prompt,
+    iteration_id: iterationId,
+    project_id: projectId,
+  }, { home: o.home });
+  if (!launchRes.ok) return launchRes;
+
+  // Stamp the iteration with the run binding.
+  iters.attachWorkerRunToIteration(projectId, iterationId, {
+    run_id: launchRes.run.run_id,
+    provider: launchRes.run.provider,
+    status: launchRes.run.status,
+    started_at: launchRes.run.started_at,
+    run_dir: launcher.runDir(launchRes.run.run_id, o.home),
+  }, { home: o.home });
+
+  return { ok: true, run_id: launchRes.run_id, run: launchRes.run, iteration_id: iterationId };
+}
+
+function getWorkerRun(runId, opts) {
+  const o = opts || {};
+  return launcher.getWorkerRun(runId, { home: o.home });
+}
+
+function listWorkerRuns(projectId, opts) {
+  const o = opts || {};
+  return launcher.listWorkerRuns(projectId, { home: o.home });
+}
+
+function stopWorkerRun(runId, opts) {
+  const o = opts || {};
+  const stopRes = launcher.stopWorkerRun(runId, { home: o.home });
+  // If stop succeeded, mark iteration too — but we don't have
+  // project_id/iteration_id here without re-reading the run.json.
+  // The panel polls getWorkerRun anyway; iteration status updates on
+  // the next review tick. Keep this handler narrow.
+  return stopRes;
+}
+
+function tailWorkerRun(runId, limit, opts) {
+  const o = opts || {};
+  return {
+    ok: true,
+    text: launcher.tailRunLog(runId, limit || 16 * 1024, o.home),
+  };
+}
+
+function extractManagedWorkerReport(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  const runId = i.run_id;
+  if (!runId) return { ok: false, error: 'run_id_required' };
+  const ext = launcher.extractWorkerReport(runId, { home: o.home });
+  if (!ext.ok) return ext;
+  // Persist as a normal worker report so review uses it.
+  return attachManagedWorkerReport(projectId, {
+    title: ext.title,
+    completed: ext.completed,
+    remaining: ext.remaining,
+    blockers: ext.blockers,
+    next_steps: ext.next_steps,
+    source_app: 'auto-extract',
+    iteration_id: i.iteration_id || null,
+  }, { home: o.home });
+}
+
+/**
+ * One-stop "advance the iteration" call for the panel: collect
+ * evidence + run review. Caller still must trigger this — Cairn
+ * never advances the loop on its own.
+ */
+async function continueManagedIterationReview(projectId, ctx, opts) {
+  const o = opts || {};
+  const ev = collectManagedEvidence(projectId, ctx || {}, o);
+  if (!ev.ok) return ev;
+  const verdict = await reviewManagedIteration(projectId, ctx || {}, o);
+  if (!verdict.ok) return verdict;
+  return { ok: true, evidence: ev.evidence, summary: ev.summary, verdict: verdict.verdict, iteration_id: verdict.iteration_id };
+}
+
 module.exports = {
   listManagedProjects,
   registerManagedProject,
@@ -304,4 +431,13 @@ module.exports = {
   collectManagedEvidence,
   reviewManagedIteration,
   listManagedIterations,
+  // worker launch
+  detectWorkerProviders,
+  launchManagedWorker,
+  getWorkerRun,
+  listWorkerRuns,
+  stopWorkerRun,
+  tailWorkerRun,
+  extractManagedWorkerReport,
+  continueManagedIterationReview,
 };

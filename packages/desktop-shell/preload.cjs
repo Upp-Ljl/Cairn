@@ -65,6 +65,15 @@ const api = {
   collectManagedEvidence:     (projectId, input) => ipcRenderer.invoke('collect-managed-evidence', projectId, input || {}),
   reviewManagedIteration:     (projectId, opts) => ipcRenderer.invoke('review-managed-iteration', projectId, opts || null),
   listManagedIterations:      (projectId, limit) => ipcRenderer.invoke('list-managed-iterations', projectId, limit || 0),
+  // Managed worker launch (user-authorized; never auto-invoked)
+  detectWorkerProviders:      () => ipcRenderer.invoke('detect-worker-providers'),
+  launchManagedWorker:        (projectId, input) => ipcRenderer.invoke('launch-managed-worker', projectId, input || {}),
+  getWorkerRun:               (runId) => ipcRenderer.invoke('get-worker-run', runId),
+  listWorkerRuns:             (projectId) => ipcRenderer.invoke('list-worker-runs', projectId),
+  stopWorkerRun:              (runId) => ipcRenderer.invoke('stop-worker-run', runId),
+  tailWorkerRun:              (runId, limit) => ipcRenderer.invoke('tail-worker-run', runId, limit || 16 * 1024),
+  extractWorkerReport:        (projectId, input) => ipcRenderer.invoke('extract-worker-report', projectId, input || {}),
+  continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
   getRecoveryPrompt:  (projectId, opts) => ipcRenderer.invoke('get-recovery-prompt', projectId, opts || null),

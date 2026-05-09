@@ -819,6 +819,11 @@ let managedLastIteration = null;
 let managedLastPrompt = null;
 let managedLastReview = null;
 let managedBusy = false;
+// Worker state — set by setup, refreshed by poll
+let managedProviders = null;
+let managedSelectedProvider = null;
+let managedActiveRun = null;
+let managedRunPollTimer = null;
 
 function setManagedBusy(busy) {
   managedBusy = !!busy;
@@ -863,7 +868,7 @@ function renderManagedCard(record, latestIteration) {
   } else {
     status.textContent = 'unmanaged';
     status.className = 'managed-status';
-    meta.textContent = 'click "register" to manage this repo with Cairn';
+    meta.textContent = 'click "register" to track this repo with Cairn';
   }
 
   const body = document.getElementById('managed-body');
@@ -949,6 +954,96 @@ function renderManagedCard(record, latestIteration) {
       document.getElementById('managed-seed-text').value = managedLastReview.next_prompt_seed;
     }
   }
+
+  renderManagedWorkerArea();
+}
+
+// Render the worker controls (providers, status, tail). Called from
+// renderManagedCard at the bottom of the card render path. Buttons
+// stay inert until the panel has detected providers AND the
+// project is registered as managed AND there's an open iteration.
+function renderManagedWorkerArea() {
+  const providersHost = document.getElementById('managed-worker-providers');
+  if (!providersHost) return;
+  const has = !!(managedLastRecord && managedLastRecord.profile);
+  const iter = managedLastIteration;
+  const haveOpenIter = !!(iter && iter.status !== 'reviewed' && iter.status !== 'archived');
+
+  // Providers row
+  if (managedProviders === null) {
+    providersHost.innerHTML = '<span class="placeholder">probing CLI providers…</span>';
+  } else {
+    const parts = [];
+    for (const p of managedProviders) {
+      const checked = managedSelectedProvider === p.id;
+      const cls = ['managed-provider'];
+      if (!p.available) cls.push('unavailable');
+      if (checked) cls.push('selected');
+      const note = p.available
+        ? ''
+        : `<span style="margin-left:4px;color:#a66;font-size:0.85em;">${escapeHtml(p.id === 'codex' ? 'Codex CLI not found in PATH' : 'not found in PATH')}</span>`;
+      parts.push(
+        `<label class="${cls.join(' ')}">` +
+          `<input type="radio" name="managed-provider" value="${escapeHtml(p.id)}" ${checked ? 'checked' : ''} ${p.available ? '' : 'disabled'}>` +
+          `${escapeHtml(p.displayName)}` +
+          note +
+        `</label>`
+      );
+    }
+    providersHost.innerHTML = parts.join('');
+    // Wire change handlers (idempotent — DOM nodes are recreated each render)
+    providersHost.querySelectorAll('input[name="managed-provider"]').forEach(el => {
+      el.addEventListener('change', (e) => {
+        managedSelectedProvider = e.target.value;
+        renderManagedWorkerArea();
+      });
+    });
+  }
+
+  // Disclosure
+  const disclosure = document.getElementById('managed-worker-disclosure');
+  const selProv = managedSelectedProvider && (managedProviders || []).find(p => p.id === managedSelectedProvider);
+  if (selProv && selProv.available && managedLastRecord && managedLastRecord.local_path) {
+    disclosure.hidden = false;
+    disclosure.textContent =
+      `will start ${selProv.displayName} in ${managedLastRecord.local_path} — it can read and modify files`;
+  } else {
+    disclosure.hidden = true;
+  }
+
+  // Active run status
+  const statusNode = document.getElementById('managed-worker-status');
+  if (managedActiveRun) {
+    statusNode.hidden = false;
+    const r = managedActiveRun;
+    const elapsed = r.started_at && (r.ended_at || Date.now()) - r.started_at;
+    const mm = Math.floor((elapsed || 0) / 60000);
+    const ss = Math.floor(((elapsed || 0) % 60000) / 1000);
+    const time = mm + ':' + (ss < 10 ? '0' : '') + ss;
+    const cls = ({ running: 'running', exited: 'managed', failed: 'blocked', stopped: 'needs', queued: 'needs', unknown: '' })[r.status] || '';
+    statusNode.innerHTML =
+      `<span class="managed-status ${cls}">${escapeHtml(r.status)}</span>` +
+      ` · ${escapeHtml(r.provider || '?')}` +
+      ` · ${time}` +
+      ` · run <code>${escapeHtml(r.run_id || '?')}</code>` +
+      (r.exit_code != null ? ` · exit ${r.exit_code}` : '');
+  } else {
+    statusNode.hidden = true;
+  }
+
+  // Buttons
+  const open  = document.getElementById('managed-btn-open-worker');
+  const stop  = document.getElementById('managed-btn-stop-worker');
+  const tail  = document.getElementById('managed-btn-tail-worker');
+  const extr  = document.getElementById('managed-btn-extract');
+  const canOpen = has && haveOpenIter && !!selProv && selProv.available && !(managedActiveRun && managedActiveRun.status === 'running');
+  const canStop = managedActiveRun && managedActiveRun.status === 'running';
+  const canTail = !!managedActiveRun;
+  const canExtract = managedActiveRun && (managedActiveRun.status === 'exited' || managedActiveRun.status === 'failed' || managedActiveRun.status === 'stopped' || managedActiveRun.status === 'unknown');
+  if (open) open[canOpen ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (stop) stop[canStop ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (tail) tail[canTail ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (extr) extr[canExtract ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
 }
 
 function reportFooterError(msg) {
@@ -1085,6 +1180,121 @@ function setupManagedCard() {
       setTimeout(() => { btn.textContent = 'copy next prompt seed'; }, 1200);
     } catch (_e) { /* clipboard unavailable */ }
   });
+
+  // ---- Worker launch wiring ----
+
+  // One-time provider detection at startup. Renderer is sandboxed, so
+  // we re-fetch on demand via window.cairn.detectWorkerProviders.
+  (async () => {
+    try {
+      managedProviders = await window.cairn.detectWorkerProviders();
+      // Pre-select the first available provider (claude-code wins
+      // when both are present, then codex, then fixture-echo).
+      const order = ['claude-code', 'codex', 'fixture-echo'];
+      for (const id of order) {
+        const p = (managedProviders || []).find(pp => pp.id === id);
+        if (p && p.available) { managedSelectedProvider = id; break; }
+      }
+      renderManagedWorkerArea();
+    } catch (_e) {
+      managedProviders = [];
+      renderManagedWorkerArea();
+    }
+  })();
+
+  document.getElementById('managed-btn-open-worker').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    if (!managedSelectedProvider) { reportFooterError('select a worker provider first'); return; }
+    if (!managedLastPrompt || !managedLastPrompt.prompt) {
+      reportFooterError('generate a worker prompt first'); return;
+    }
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.launchManagedWorker(selectedProject.id, {
+        provider: managedSelectedProvider,
+        prompt: managedLastPrompt.prompt,
+      });
+      if (!res || !res.ok) {
+        reportFooterError(`open worker failed: ${(res && res.error) || 'unknown'}`);
+      } else {
+        managedActiveRun = res.run;
+        renderManagedWorkerArea();
+        startManagedRunPoll(res.run_id);
+      }
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-stop-worker').addEventListener('click', async () => {
+    if (!managedActiveRun || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.stopWorkerRun(managedActiveRun.run_id);
+      if (!res || !res.ok) reportFooterError(`stop failed: ${(res && res.error) || 'unknown'}`);
+      // poll loop will refresh status
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-tail-worker').addEventListener('click', async () => {
+    if (!managedActiveRun) return;
+    const res = await window.cairn.tailWorkerRun(managedActiveRun.run_id, 16384);
+    if (res && res.ok) {
+      const ta = document.getElementById('managed-worker-tail-area');
+      ta.hidden = false;
+      document.getElementById('managed-worker-tail').value = res.text || '(empty)';
+    }
+  });
+
+  document.getElementById('managed-btn-extract').addEventListener('click', async () => {
+    if (!selectedProject || !managedActiveRun || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.extractWorkerReport(selectedProject.id, { run_id: managedActiveRun.run_id });
+      if (!res || !res.ok) {
+        reportFooterError(`extract failed: ${(res && res.error) || 'unknown'} — paste report manually`);
+      } else {
+        const btn = document.getElementById('managed-btn-extract');
+        btn.textContent = 'extracted';
+        setTimeout(() => { btn.textContent = 'extract report'; }, 1200);
+      }
+    } finally { setManagedBusy(false); }
+  });
+}
+
+// Poll the active worker run's status until it exits. Polling is
+// only active when a run was launched THIS panel session — we don't
+// auto-poll persisted runs from prior sessions.
+function startManagedRunPoll(runId) {
+  if (managedRunPollTimer) {
+    clearInterval(managedRunPollTimer);
+    managedRunPollTimer = null;
+  }
+  let consecutiveErrors = 0;
+  managedRunPollTimer = setInterval(async () => {
+    try {
+      const run = await window.cairn.getWorkerRun(runId);
+      if (!run) {
+        consecutiveErrors++;
+        if (consecutiveErrors >= 5) {
+          clearInterval(managedRunPollTimer);
+          managedRunPollTimer = null;
+        }
+        return;
+      }
+      consecutiveErrors = 0;
+      managedActiveRun = run;
+      renderManagedWorkerArea();
+      if (run.status !== 'running' && run.status !== 'queued') {
+        clearInterval(managedRunPollTimer);
+        managedRunPollTimer = null;
+      }
+    } catch (_e) {
+      consecutiveErrors++;
+      if (consecutiveErrors >= 5) {
+        clearInterval(managedRunPollTimer);
+        managedRunPollTimer = null;
+      }
+    }
+  }, 1000);
 }
 
 // ---------------------------------------------------------------------------
