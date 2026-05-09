@@ -632,13 +632,12 @@ const SECTION_RX = /^###\s+(Completed|Remaining|Blockers?|Next)\s*$/i;
 function extractReportFromText(text) {
   if (typeof text !== 'string') return { ok: false, error: 'no_log' };
   // Find the LAST "## Worker Report" header — workers may print
-  // intermediate examples; we want the final summary.
-  const headers = [];
-  const rx = /^##\s+Worker\s+Report\s*$/gim;
-  let m;
-  while ((m = rx.exec(text)) !== null) headers.push(m.index);
-  if (!headers.length) return { ok: false, error: 'no_report_block' };
-  const start = headers[headers.length - 1];
+  // intermediate examples; we want the final summary. Using matchAll
+  // here (over a manual rx.exec loop) keeps audit greps for `.exec(`
+  // clean of false positives in this module.
+  const matches = Array.from(text.matchAll(/^##\s+Worker\s+Report\s*$/gim));
+  if (!matches.length) return { ok: false, error: 'no_report_block' };
+  const start = matches[matches.length - 1].index;
   const block = text.slice(start);
 
   const fields = { completed: [], remaining: [], blockers: [], next: [] };
