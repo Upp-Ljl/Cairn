@@ -73,6 +73,7 @@ const api = {
   stopWorkerRun:              (runId) => ipcRenderer.invoke('stop-worker-run', runId),
   tailWorkerRun:              (runId, limit) => ipcRenderer.invoke('tail-worker-run', runId, limit || 16 * 1024),
   extractWorkerReport:        (projectId, input) => ipcRenderer.invoke('extract-worker-report', projectId, input || {}),
+  extractScoutCandidates:     (projectId, input) => ipcRenderer.invoke('extract-scout-candidates', projectId, input || {}),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),

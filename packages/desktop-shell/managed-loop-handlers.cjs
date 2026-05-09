@@ -27,6 +27,7 @@ const reviewM   = require('./managed-loop-review.cjs');
 const adapter   = require('./managed-loop-prompt.cjs');
 const wr        = require('./worker-reports.cjs');
 const launcher  = require('./worker-launcher.cjs');
+const candidates = require('./project-candidates.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. list — every managed project on disk, joined with the registry
@@ -420,6 +421,52 @@ function tailWorkerRun(runId, limit, opts) {
   };
 }
 
+/**
+ * Extract Scout candidates from a finished Scout run's tail.log and
+ * persist each candidate to the project-candidates registry as
+ * PROPOSED. Source-of-truth check: the run.json's project_id MUST
+ * equal the projectId argument, otherwise we refuse — without this,
+ * a caller could accidentally bind candidates to the wrong project.
+ *
+ * Returns { ok, candidate_ids, candidates } on success;
+ *         { ok:false, error } on the standard error codes.
+ */
+function extractScoutCandidates(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  const runId = i.run_id;
+  if (!runId) return { ok: false, error: 'run_id_required' };
+
+  const runMeta = launcher.getWorkerRun(runId, { home: o.home });
+  if (!runMeta) return { ok: false, error: 'run_not_found' };
+  if (runMeta.project_id && runMeta.project_id !== projectId) {
+    return { ok: false, error: 'project_id_mismatch' };
+  }
+  // Sync iteration status (same hygiene as extractManagedWorkerReport).
+  syncIterationFromRun(runMeta, { home: o.home });
+
+  const ext = launcher.extractScoutCandidates(runId, { home: o.home });
+  if (!ext.ok) return ext;
+
+  const sourceIterationId = i.iteration_id || runMeta.iteration_id || null;
+  const candidate_ids = [];
+  const persisted = [];
+  for (const c of ext.candidates) {
+    const r = candidates.proposeCandidate(projectId, {
+      description: c.description,
+      candidate_kind: c.kind,
+      source_iteration_id: sourceIterationId,
+      source_run_id: runId,
+    }, { home: o.home });
+    if (r.ok) {
+      candidate_ids.push(r.candidate.id);
+      persisted.push({ id: r.candidate.id, kind: r.candidate.candidate_kind, description: r.candidate.description });
+    }
+  }
+  return { ok: true, candidate_ids, candidates: persisted, run_id: runId, iteration_id: sourceIterationId };
+}
+
 function extractManagedWorkerReport(projectId, input, opts) {
   const o = opts || {};
   if (!projectId) return { ok: false, error: 'project_id_required' };
@@ -487,5 +534,6 @@ module.exports = {
   stopWorkerRun,
   tailWorkerRun,
   extractManagedWorkerReport,
+  extractScoutCandidates,
   continueManagedIterationReview,
 };

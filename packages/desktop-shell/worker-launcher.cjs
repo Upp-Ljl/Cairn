@@ -111,6 +111,15 @@ const PROVIDERS = {
     acceptsStdin: false,
     fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
   },
+  'fixture-scout': {
+    id: 'fixture-scout',
+    displayName: 'Fixture (scout)',
+    command: process.execPath,
+    description: 'Local fixture that emits a Scout Candidates block and exits (no LLM)',
+    argvFor: (_promptPath) => ['-e', FIXTURE_SCOUT_SCRIPT],
+    acceptsStdin: false,
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+  },
 };
 
 // Inlined as a string so the launcher has no dep on a separate file
@@ -136,6 +145,27 @@ process.stdout.write('- Real worker did not run; this is the fixture provider.\\
 process.stdout.write('### Blockers\\n');
 process.stdout.write('### Next\\n');
 process.stdout.write('- Wire a real provider before relying on this output.\\n');
+process.exit(0);
+`;
+
+// fixture-scout — parallel to fixture-echo, but emits a Scout
+// Candidates block in the format the Scout parser expects. Used by
+// smoke + dogfood to exercise the full launch -> parse -> registry
+// pipeline without burning Anthropic API credits or modifying the
+// managed repo.
+const FIXTURE_SCOUT_SCRIPT = `
+'use strict';
+const fs = require('fs');
+const promptPath = process.env.CAIRN_FIXTURE_PROMPT;
+const prompt = promptPath ? fs.readFileSync(promptPath, 'utf8') : '';
+process.stdout.write('[fixture-scout] received prompt of ' + prompt.length + ' chars\\n');
+process.stdout.write('[fixture-scout] read-only inspection complete; emitting candidates.\\n\\n');
+process.stdout.write('## Scout Candidates\\n');
+process.stdout.write('- [missing_test] src/lib/engine/equity.ts has no sibling test file\\n');
+process.stdout.write('- [doc] README.md missing a quick-start section for new contributors\\n');
+process.stdout.write('- [bug_fix] tests/api/mailbox.test.ts: timeout edge case under load\\n');
+process.stdout.write('- [refactor] consolidate duplicate session-token validators across api/\\n');
+process.stdout.write('- [other] add a CHANGELOG.md entry template\\n');
 process.exit(0);
 `;
 
@@ -692,6 +722,89 @@ function extractReportFromText(text) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Scout Candidates extraction (deterministic, never LLM)
+// ---------------------------------------------------------------------------
+//
+// A Scout run is asked to end its output with:
+//
+//   ## Scout Candidates
+//   - [missing_test] description...
+//   - [doc] another...
+//
+// We scan the LAST occurrence of the header (mirroring the Worker
+// Report extractor: workers may print intermediate examples; the
+// final block is the one that matters). Each bullet line is parsed
+// for an optional `[kind]` prefix; the closed kind set is enforced
+// by the caller (managed-loop-handlers), which coerces unknown kinds
+// to 'other'. We coerce here too as defense-in-depth.
+
+const SCOUT_KIND_SET = new Set(['missing_test', 'refactor', 'doc', 'bug_fix', 'other']);
+const MAX_SCOUT_CANDIDATES = 5;
+
+function extractScoutCandidates(runId, opts) {
+  const o = opts || {};
+  const tail = tailRunLog(runId, o.bytes || MAX_LOG_BYTES, o.home);
+  if (!tail) return { ok: false, error: 'no_log' };
+  return extractScoutCandidatesFromText(tail);
+}
+
+function extractScoutCandidatesFromText(text) {
+  if (typeof text !== 'string') return { ok: false, error: 'no_log' };
+  // Find the LAST "## Scout Candidates" header. matchAll is used
+  // here (instead of a manual stateful regex loop) for the same
+  // audit-grep reason as the Worker Report extractor above.
+  const matches = Array.from(text.matchAll(/^##\s+Scout\s+Candidates\s*$/gim));
+  if (!matches.length) return { ok: false, error: 'no_scout_block' };
+  const start = matches[matches.length - 1].index;
+  const block = text.slice(start);
+  const lines = block.split(/\r?\n/);
+  const candidates = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (candidates.length >= MAX_SCOUT_CANDIDATES) break;
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    // Stop at any sibling ## or # major header.
+    if (/^##\s+/.test(trimmed)) break;
+    // Empty bullet — skip; do NOT count as a phantom candidate.
+    if (/^[-*•]\s*$/.test(trimmed)) continue;
+    if (!/^[-*•]\s+/.test(trimmed)) continue;
+    const body = trimmed.replace(/^[-*•]\s+/, '').trim();
+    if (!body || isNoneSentinel(body)) continue;
+
+    // Try to peel an optional "[kind]" prefix. Tolerate both
+    // "[kind]" and "(kind)" styles, and ALSO accept a kind label
+    // followed by a colon (Claude sometimes writes "missing_test:" instead).
+    let kind = 'other';
+    let description = body;
+    const bracket = body.match(/^[\[\(]\s*([a-z_][a-z0-9_]{0,31})\s*[\]\)]\s*(.*)$/i);
+    const colon   = bracket ? null : body.match(/^([a-z_][a-z0-9_]{0,31})\s*:\s*(.+)$/i);
+    if (bracket) {
+      const k = bracket[1].toLowerCase();
+      kind = SCOUT_KIND_SET.has(k) ? k : 'other';
+      description = bracket[2].trim();
+      if (!bracket[2].trim()) {
+        // unknown kind with no remaining description — keep the original body so we don't lose info
+        description = body;
+      } else if (kind === 'other' && !SCOUT_KIND_SET.has(bracket[1].toLowerCase())) {
+        // unknown kind: keep the [unknown] prefix in the description so the user sees it
+        description = body;
+      }
+    } else if (colon) {
+      const k = colon[1].toLowerCase();
+      if (SCOUT_KIND_SET.has(k)) {
+        kind = k;
+        description = colon[2].trim();
+      }
+    }
+
+    if (!description) continue;
+    if (description.length > 240) description = description.slice(0, 240);
+    candidates.push({ kind, description });
+  }
+  return { ok: true, candidates };
+}
+
 module.exports = {
   // constants
   STATUS_VALUES,
@@ -700,6 +813,8 @@ module.exports = {
   PROMPT_MAX_BYTES,
   RUNS_DIRNAME,
   PROVIDERS,
+  SCOUT_KIND_SET,
+  MAX_SCOUT_CANDIDATES,
   // detection
   whichCommand,
   detectWorkerProviders,
@@ -714,6 +829,9 @@ module.exports = {
   // report extraction
   extractWorkerReport,
   extractReportFromText,
+  // scout extraction (Day 2)
+  extractScoutCandidates,
+  extractScoutCandidatesFromText,
   // paths
   runsDir,
   runDir,
