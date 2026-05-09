@@ -2155,6 +2155,240 @@ function openAddReportModal() {
 }
 
 // ---------------------------------------------------------------------------
+// Coordination tab renderer (kernel primitives — scratchpad, conflicts,
+// coordination signals)
+// ---------------------------------------------------------------------------
+//
+// Three sections in one tab:
+//   1. Top coordination signals (with copy-prompt actions per row)
+//   2. Handoff context = scratchpad entries
+//   3. Conflicts
+//
+// Cairn never auto-resolves / dispatches / rewinds. Every action is
+// "copy <kind> prompt" pointing at the user's own coding agent.
+
+let lastCoordSignals = null;
+let lastScratchpad = [];
+let lastConflicts = [];
+
+function renderCoordSignalsList(coord) {
+  lastCoordSignals = coord || null;
+  const el = document.getElementById('coord-signals-list');
+  if (!el) return;
+  if (!coord || !coord.signals || !coord.signals.length) {
+    el.innerHTML = '<div class="placeholder">No coordination signals yet — fresh project or quiet period.</div>';
+    return;
+  }
+  el.innerHTML = coord.signals.map(s => {
+    const sev = s.severity || 'info';
+    const action = s.prompt_action
+      ? renderSignalActionLink(s)
+      : '';
+    return (
+      `<div class="coord-signal">` +
+        `<span class="coord-signal-sev ${escapeHtml(sev)}">${escapeHtml(sev.toUpperCase())}</span>` +
+        `<span class="coord-signal-text">${escapeHtml(s.title)}` +
+          (s.detail ? `<span class="detail">${escapeHtml(s.detail)}</span>` : '') +
+        `</span>` +
+        `<span class="coord-signal-action">${action}</span>` +
+      `</div>`
+    );
+  }).join('');
+  // Wire each signal's action.
+  el.querySelectorAll('.coord-signal-action a[data-act]').forEach(a => {
+    a.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const act = a.getAttribute('data-act');
+      const taskId = a.getAttribute('data-task-id') || null;
+      const conflictId = a.getAttribute('data-conflict-id') || null;
+      await handleCoordAction(act, { task_id: taskId, conflict_id: conflictId });
+    });
+  });
+}
+
+function renderSignalActionLink(s) {
+  const r = s.related || {};
+  switch (s.prompt_action) {
+    case 'copy_handoff_prompt':
+      return `<a data-act="copy_handoff_prompt" data-task-id="${escapeHtml(r.task_id || '')}">copy handoff</a>`;
+    case 'copy_recovery_prompt':
+      return `<a data-act="copy_recovery_prompt" data-task-id="${escapeHtml(r.task_id || '')}">copy recovery</a>`;
+    case 'copy_review_prompt':
+      return `<a data-act="copy_review_prompt" data-task-id="${escapeHtml(r.task_id || '')}">copy review</a>`;
+    case 'copy_conflict_prompt':
+      return `<a data-act="copy_conflict_prompt" data-conflict-id="${escapeHtml(r.conflict_id || '')}">copy conflict</a>`;
+    default: return '';
+  }
+}
+
+async function handleCoordAction(action, related) {
+  if (!selectedProject) return;
+  const r = related || {};
+  let res;
+  try {
+    if (action === 'copy_handoff_prompt') {
+      res = await window.cairn.getHandoffPrompt(selectedProject.id, { task_id: r.task_id || null });
+    } else if (action === 'copy_recovery_prompt') {
+      res = await window.cairn.getRecoveryPrompt(selectedProject.id, { task_id: r.task_id || null });
+    } else if (action === 'copy_review_prompt') {
+      res = await window.cairn.getReviewPrompt(selectedProject.id, r.task_id || null);
+    } else if (action === 'copy_conflict_prompt') {
+      res = await window.cairn.getConflictPrompt(selectedProject.id, r.conflict_id || null);
+    }
+  } catch (e) { res = { ok: false, error: e && e.message }; }
+  if (res && res.ok && res.prompt) {
+    try { await navigator.clipboard.writeText(res.prompt); }
+    catch (_e) { /* clipboard unavailable */ }
+    flashFooter(`copied ${action.replace('copy_', '').replace('_prompt', '')} prompt`);
+  } else {
+    flashFooter(`prompt failed: ${(res && res.error) || 'unknown'}`, true);
+  }
+}
+
+function flashFooter(msg, bad) {
+  const footer = document.getElementById('footer');
+  footer.textContent = msg;
+  if (bad) footer.classList.add('bad'); else footer.classList.remove('bad');
+  setTimeout(() => {
+    footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+    footer.classList.remove('bad');
+  }, 3000);
+}
+
+function renderScratchpadList(rows) {
+  lastScratchpad = Array.isArray(rows) ? rows : [];
+  const el = document.getElementById('coord-scratchpad-list');
+  if (!el) return;
+  if (!lastScratchpad.length) {
+    el.innerHTML = '<div class="placeholder">No shared context recorded yet. Ask an agent to write a worker report or scratchpad note before handoff.</div>';
+    return;
+  }
+  el.innerHTML = lastScratchpad.map(sp => {
+    const ageTxt = sp.updated_at ? relTimeMs(sp.updated_at) : '?';
+    const sizeTxt = sp.value_size != null ? `${sp.value_size}B` : '—';
+    const taskBit = sp.task_id
+      ? `task ${escapeHtml(sp.task_id)}${sp.task_intent ? ' · ' + escapeHtml(sp.task_intent.slice(0, 60)) : ''}${sp.task_state ? ' · ' + escapeHtml(sp.task_state) : ''}`
+      : 'no task';
+    const previewBit = sp.value_preview
+      ? `<div class="coord-scratch-preview">${escapeHtml(sp.value_preview)}</div>`
+      : '';
+    return (
+      `<div class="coord-scratch" data-key="${escapeHtml(sp.key)}">` +
+        `<div class="coord-scratch-head">` +
+          `<span class="coord-scratch-key">${escapeHtml(sp.key)}</span>` +
+          `<span class="coord-scratch-meta">${escapeHtml(ageTxt)}</span>` +
+          `<span class="coord-scratch-size">${escapeHtml(sizeTxt)}</span>` +
+        `</div>` +
+        `<div class="coord-scratch-task">${taskBit}</div>` +
+        previewBit +
+        `<div class="coord-scratch-actions">` +
+          `<a data-act="copy-key">copy key</a>` +
+          (sp.value_preview ? `<a data-act="copy-preview">copy preview</a>` : '') +
+        `</div>` +
+      `</div>`
+    );
+  }).join('');
+
+  el.querySelectorAll('.coord-scratch').forEach(card => {
+    card.querySelectorAll('a[data-act]').forEach(a => {
+      a.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const act = a.getAttribute('data-act');
+        const key = card.getAttribute('data-key');
+        const sp = lastScratchpad.find(x => x.key === key);
+        if (!sp) return;
+        const text = act === 'copy-key' ? sp.key : (sp.value_preview || '');
+        try {
+          await navigator.clipboard.writeText(text);
+          const orig = a.textContent;
+          a.textContent = 'copied';
+          setTimeout(() => { a.textContent = orig; }, 1200);
+        } catch (_e) {}
+      });
+    });
+  });
+}
+
+function renderConflictsList(rows) {
+  lastConflicts = Array.isArray(rows) ? rows : [];
+  const el = document.getElementById('coord-conflicts-list');
+  if (!el) return;
+  if (!lastConflicts.length) {
+    el.innerHTML = '<div class="placeholder">No conflicts.</div>';
+    return;
+  }
+  el.innerHTML = lastConflicts.map(c => {
+    const ageTxt = c.detected_at ? relTimeMs(c.detected_at) : '?';
+    const partyB = c.agent_b ? ` ↔ ${escapeHtml(c.agent_b)}` : '';
+    const pathBit = (c.paths && c.paths.length)
+      ? `<div class="coord-conflict-paths">paths: ${c.paths.slice(0, 4).map(p => `<code>${escapeHtml(p)}</code>`).join(' · ')}${c.paths.length > 4 ? ` +${c.paths.length - 4} more` : ''}</div>`
+      : '';
+    const summaryBit = c.summary
+      ? `<div class="coord-conflict-paths" style="color:#aab">${escapeHtml(c.summary)}</div>`
+      : '';
+    const isOpen = c.status === 'OPEN' || c.status === 'PENDING_REVIEW';
+    const actions = isOpen
+      ? `<div class="coord-conflict-actions">` +
+          `<a data-act="copy_conflict_prompt" data-conflict-id="${escapeHtml(c.id)}">copy conflict prompt</a>` +
+          (c.paths && c.paths.length ? `<a data-act="copy-paths" data-conflict-id="${escapeHtml(c.id)}">copy affected paths</a>` : '') +
+        `</div>`
+      : '';
+    return (
+      `<div class="coord-conflict" data-conflict-id="${escapeHtml(c.id)}">` +
+        `<div class="coord-conflict-head">` +
+          `<span class="coord-conflict-status ${escapeHtml(c.status)}">${escapeHtml(c.status)}</span>` +
+          `<span class="coord-conflict-title">${escapeHtml(c.conflict_type)} — ${escapeHtml(c.agent_a)}${partyB}</span>` +
+          `<span class="coord-conflict-meta">${escapeHtml(ageTxt)}</span>` +
+        `</div>` +
+        summaryBit +
+        pathBit +
+        actions +
+      `</div>`
+    );
+  }).join('');
+
+  el.querySelectorAll('.coord-conflict-actions a[data-act]').forEach(a => {
+    a.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const act = a.getAttribute('data-act');
+      const conflictId = a.getAttribute('data-conflict-id');
+      if (act === 'copy_conflict_prompt') {
+        await handleCoordAction('copy_conflict_prompt', { conflict_id: conflictId });
+      } else if (act === 'copy-paths') {
+        const c = lastConflicts.find(x => x.id === conflictId);
+        if (c && Array.isArray(c.paths)) {
+          try { await navigator.clipboard.writeText(c.paths.join('\n')); }
+          catch (_e) {}
+          flashFooter('copied affected paths');
+        }
+      }
+    });
+  });
+}
+
+// Phase 4: coordination hero strip on L2 — implemented in a follow-up
+// commit. Stubbed here so the panel poll loop can call it without
+// crashing during Phase 2 / Phase 3 incremental delivery.
+function renderCoordinationStrip(_coord) { /* see Phase 4 commit */ }
+
+function setupCoordinationTab() {
+  const handoffLink = document.getElementById('coord-handoff-prompt-link');
+  if (handoffLink) handoffLink.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    let res;
+    try {
+      res = await window.cairn.getHandoffPrompt(selectedProject.id, { include_context: true });
+    } catch (e) { res = { ok: false, error: e && e.message }; }
+    if (res && res.ok && res.prompt) {
+      try { await navigator.clipboard.writeText(res.prompt); } catch (_e) {}
+      flashFooter('copied handoff prompt');
+    } else {
+      flashFooter(`handoff prompt failed: ${(res && res.error) || 'unknown'}`, true);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tab switching — track active tab so polling fetches only what's visible
 // ---------------------------------------------------------------------------
 
@@ -2168,6 +2402,7 @@ function setupTabs() {
     tasks:    document.getElementById('view-tasks'),
     sessions: document.getElementById('view-sessions'),
     reports:  document.getElementById('view-reports'),
+    coord:    document.getElementById('view-coord'),
   };
   tabs.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2526,6 +2761,19 @@ async function poll() {
       const reportsP = activeTab === 'reports' && selectedProject
         ? window.cairn.listWorkerReports(selectedProject.id, 50)
         : Promise.resolve(null);
+      // Coordination tab fetches three things in parallel; we always
+      // fetch coordination signals so the L2 coordination strip
+      // (Phase 4 hero strip) can show top signals even when the tab
+      // is not visible.
+      const coordSignalsP = selectedProject
+        ? window.cairn.getCoordinationSignals(selectedProject.id)
+        : Promise.resolve(null);
+      const coordScratchP = activeTab === 'coord' && selectedProject
+        ? window.cairn.getProjectScratchpad(selectedProject.id, 30)
+        : Promise.resolve(null);
+      const coordConflictsP = activeTab === 'coord' && selectedProject
+        ? window.cairn.getProjectConflicts(selectedProject.id, 30)
+        : Promise.resolve(null);
       const detailP = selectedTaskId
         ? window.cairn.getTaskDetail(selectedTaskId)
         : Promise.resolve(null);
@@ -2533,8 +2781,10 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, rules, interp, gate, pack, recovery, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, rulesP, interpP, gateP, packP, recoveryP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
+      const [summary, pulse, goal, rules, interp, gate, pack, recovery, coordSig, coordScratch, coordConflicts, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, rulesP, interpP, gateP, packP, recoveryP,
+        coordSignalsP, coordScratchP, coordConflictsP,
+        dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
@@ -2544,8 +2794,15 @@ async function poll() {
       renderPrePrGate(gate);
       renderPromptPack(pack);
       renderRecoveryCard(recovery);
+      renderCoordinationStrip(coordSig);
       renderPulse(pulse);
       renderSummary(summary);
+      // Coordination tab body — always render signals so the tab is
+      // not blank when first opened; scratchpad / conflicts only
+      // render when the tab is active to save IPC.
+      renderCoordSignalsList(coordSig);
+      if (coordScratch) renderScratchpadList(coordScratch);
+      if (coordConflicts) renderConflictsList(coordConflicts);
 
       if (events) renderRunLog(events);
       if (tasks) {
@@ -2585,6 +2842,7 @@ setupPrePrGateCard();
 setupPromptPack();
 setupRecoveryCard();
 setupReportsTab();
+setupCoordinationTab();
 setView('projects', null);
 poll();
 setInterval(poll, 1000);

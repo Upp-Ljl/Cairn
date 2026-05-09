@@ -59,6 +59,7 @@ const workerReports     = require('./worker-reports.cjs');
 const prePrGate         = require('./pre-pr-gate.cjs');
 const goalLoopPromptPack = require('./goal-loop-prompt-pack.cjs');
 const recoverySummary    = require('./recovery-summary.cjs');
+const coordinationSignals = require('./coordination-signals.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1348,6 +1349,337 @@ ipcMain.handle('get-prompt-pack', (_e, projectId) => {
 // panel exposes Cairn's checkpoint primitive to the user. Per
 // PRODUCT.md §1.3 #4 the panel does not execute rewind; users get
 // "copy recovery prompt" only.
+
+// ---------------------------------------------------------------------------
+// Handoff (scratchpad) + Conflict surface (Coordination Surface Pass)
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('get-project-scratchpad', (_e, projectId, limit) => {
+  if (!projectId || typeof projectId !== 'string') return [];
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return [];
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return [];
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  return projectQueries.queryProjectScopedScratchpad(
+    entry.db, entry.tables, agentIds, limit || 30,
+  );
+});
+
+ipcMain.handle('get-project-conflicts', (_e, projectId, limit) => {
+  if (!projectId || typeof projectId !== 'string') return [];
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return [];
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return [];
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  return projectQueries.queryProjectScopedConflicts(
+    entry.db, entry.tables, agentIds, limit || 30,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Coordination signals — derived view for the panel + prompt pack
+// ---------------------------------------------------------------------------
+
+function buildCoordinationInput(proj, entry, agentIds) {
+  const summary = projectQueries.queryProjectScopedSummary(
+    entry.db, entry.tables, proj.db_path, agentIds,
+  );
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+  const codexAll  = codexSessionScan.scanCodexSessions();
+  const sess = projectQueries.queryProjectScopedSessions(entry.db, entry.tables, agentIds);
+  for (const r of sess.sessions) {
+    r._attribution = agentActivity.decideMcpAttribution(
+      r.capabilities, proj.project_root, proj.agent_id_hints || [], r.agent_id,
+    );
+  }
+  const built = agentActivity.buildProjectActivities(
+    proj, sess.sessions, claudeAll, codexAll,
+    { claude: claudeSessionScan, codex: codexSessionScan },
+  );
+  summary.agent_activity = built.summary;
+  const tasksPayload   = projectQueries.queryProjectScopedTasks(entry.db, entry.tables, agentIds);
+  const blockers       = projectQueries.queryProjectScopedBlockers(entry.db, entry.tables, agentIds, 50);
+  const outcomes       = projectQueries.queryProjectScopedOutcomes(entry.db, entry.tables, agentIds, 50);
+  const checkpoints    = projectQueries.queryProjectScopedCheckpoints(entry.db, entry.tables, agentIds, 50);
+  const scratchpad     = projectQueries.queryProjectScopedScratchpad(entry.db, entry.tables, agentIds, 30);
+  const conflicts      = projectQueries.queryProjectScopedConflicts(entry.db, entry.tables, agentIds, 30);
+  const recentReports  = workerReports.listWorkerReports(proj.id, 5);
+  const goal           = registry.getProjectGoal(reg, proj.id);
+  const effRules       = registry.getEffectiveProjectRules(reg, proj.id);
+
+  return {
+    activities: built.activities,
+    summary,
+    tasks: tasksPayload.tasks,
+    blockers,
+    outcomes,
+    checkpoints,
+    scratchpad,
+    conflicts,
+    recent_reports: recentReports,
+    goal,
+    project_rules: effRules.rules,
+    project_rules_is_default: effRules.is_default,
+  };
+}
+
+ipcMain.handle('get-coordination-signals', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return null;
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return null;
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const input = buildCoordinationInput(proj, entry, agentIds);
+  return coordinationSignals.deriveCoordinationSignals(input, {});
+});
+
+ipcMain.handle('get-handoff-prompt', (_e, projectId, opts) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'projectId_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const o = opts || {};
+  const taskId = typeof o.task_id === 'string' ? o.task_id : null;
+  const includeContext = !!o.include_context;
+  const ckpts = projectQueries.queryProjectScopedCheckpoints(entry.db, entry.tables, agentIds, 50);
+  const scratchpad = projectQueries.queryProjectScopedScratchpad(entry.db, entry.tables, agentIds, 20);
+  const reports = workerReports.listWorkerReports(proj.id, 3);
+  const tasks = projectQueries.queryProjectScopedTasks(entry.db, entry.tables, agentIds).tasks;
+  const targetTask = taskId ? tasks.find(t => t.task_id === taskId) : null;
+  const prompt = coordinationSignals.handoffPromptText
+    ? coordinationSignals.handoffPromptText(/* unused */)
+    : null; // legacy guard; the actual builder lives below
+  // We compose the handoff prompt inline (rather than in
+  // coordination-signals.cjs) because it pulls from project state and
+  // is intentionally the panel's job, not a pure-derivation module's.
+  return {
+    ok: true,
+    prompt: composeHandoffPrompt({
+      project_label: proj.label,
+      goal: registry.getProjectGoal(reg, proj.id),
+      target_task: targetTask,
+      latest_checkpoints: ckpts.slice(0, 3),
+      latest_scratchpad: includeContext ? scratchpad.slice(0, 5) : [],
+      recent_reports: reports.slice(0, 2),
+      include_full_context: includeContext,
+    }),
+  };
+});
+
+ipcMain.handle('get-conflict-prompt', (_e, projectId, conflictId) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'projectId_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const conflicts = projectQueries.queryProjectScopedConflicts(entry.db, entry.tables, agentIds, 50);
+  const target = conflictId ? conflicts.find(c => c.id === conflictId) : conflicts.find(c => c.status === 'OPEN' || c.status === 'PENDING_REVIEW');
+  if (!target) return { ok: false, error: 'no_conflict_found' };
+  return {
+    ok: true,
+    prompt: composeConflictPrompt({ project_label: proj.label, conflict: target }),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Handoff + Conflict prompt composers (panel-side; advisory)
+// ---------------------------------------------------------------------------
+//
+// Kept inline in main.cjs because they pull from registry / queries
+// (not pure-derivation friendly) and they MUST stay out of any LLM
+// payload — the templates explicitly forbid auto-execute / push.
+
+function _clip(s, max) {
+  if (typeof s !== 'string') return '';
+  const t = s.trim();
+  return t.length > max ? t.slice(0, max) : t;
+}
+
+function composeHandoffPrompt(input) {
+  const o = input || {};
+  const lines = [];
+  const projectLabel = _clip(o.project_label, 200) || '(this project)';
+  lines.push(`You are a coding agent picking up where a previous agent left off in ${projectLabel}.`);
+  lines.push(`Cairn is a project control surface (read-only); it does NOT dispatch you. The user is asking you to take over.`);
+  lines.push('');
+
+  if (o.goal && o.goal.title) {
+    lines.push('# Project goal');
+    lines.push(`Goal: ${_clip(o.goal.title, 200)}`);
+    if (o.goal.desired_outcome) lines.push(`Desired outcome: ${_clip(o.goal.desired_outcome, 400)}`);
+    lines.push('');
+  }
+
+  if (o.target_task) {
+    const t = o.target_task;
+    lines.push('# Task to continue');
+    lines.push(`- task id:     ${t.task_id}`);
+    lines.push(`- intent:      ${_clip(t.intent, 200) || '(no intent recorded)'}`);
+    lines.push(`- state:       ${t.state}`);
+    if (t.created_by_agent_id) lines.push(`- previous agent: ${t.created_by_agent_id}`);
+    lines.push(`- blockers (open/total): ${t.blockers_open || 0} / ${t.blockers_total || 0}`);
+    if (t.outcome_status) lines.push(`- outcome:     ${t.outcome_status}`);
+    if (t.checkpoints_total) lines.push(`- checkpoints: ${t.checkpoints_total}`);
+    lines.push('');
+  } else {
+    lines.push('# Task to continue');
+    lines.push('(No specific task selected — pick the next attention candidate from Cairn\'s coordination signals.)');
+    lines.push('');
+  }
+
+  if (Array.isArray(o.latest_checkpoints) && o.latest_checkpoints.length) {
+    lines.push('# Recovery anchors');
+    for (const c of o.latest_checkpoints) {
+      const idShort = (c.id || '').slice(0, 12);
+      const labelPart = c.label ? ` "${_clip(c.label, 80)}"` : '';
+      const headPart  = c.git_head ? ` @${String(c.git_head).slice(0, 7)}` : '';
+      lines.push(`- ${idShort}${labelPart} (${c.snapshot_status || '?'})${headPart}`);
+    }
+    lines.push('');
+  }
+
+  if (Array.isArray(o.latest_scratchpad) && o.latest_scratchpad.length) {
+    lines.push('# Shared context (scratchpad keys)');
+    for (const sp of o.latest_scratchpad) {
+      const keyPart = _clip(sp.key, 80);
+      const taskPart = sp.task_id ? ` (task ${sp.task_id})` : '';
+      const sizePart = sp.value_size ? ` — ${sp.value_size}B` : '';
+      lines.push(`- ${keyPart}${taskPart}${sizePart}`);
+      if (o.include_full_context && sp.value_preview) {
+        // Indent the preview lines so they're visually grouped under
+        // the key. Preview is already capped to 240 chars by the query.
+        for (const l of sp.value_preview.split(/\r?\n/).slice(0, 3)) {
+          lines.push(`    > ${_clip(l, 200)}`);
+        }
+      }
+    }
+    if (!o.include_full_context) {
+      lines.push('(Use Cairn cairn.scratchpad.read tool to fetch full content.)');
+    }
+    lines.push('');
+  }
+
+  if (Array.isArray(o.recent_reports) && o.recent_reports.length) {
+    lines.push('# Recent worker reports (counts only)');
+    for (const r of o.recent_reports) {
+      lines.push(`- "${_clip(r.title, 120)}": ${(r.completed || []).length} done · ${(r.remaining || []).length} remaining · ${(r.blockers || []).length} blockers${r.needs_human ? ' · needs_human' : ''}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('# What to do');
+  lines.push('1. Read the recovery anchors and shared scratchpad keys to understand what the previous agent left.');
+  lines.push('2. Confirm the next concrete step with the user before executing — do not infer scope from transcripts.');
+  lines.push('3. Produce a worker report at the end (completed / remaining / blockers / next_steps).');
+  lines.push('');
+  lines.push('# Hard rules');
+  lines.push('- Do not push, merge, or force any branch unless the user explicitly authorizes.');
+  lines.push('- Do not expand scope beyond the original goal\'s success criteria.');
+  lines.push('- Do not execute rewind without first showing the preview to the user (if a rewind is being considered).');
+  lines.push('- Cairn does not dispatch agents. You were not auto-assigned; the user pasted this prompt to you.');
+
+  return lines.join('\n');
+}
+
+function composeConflictPrompt(input) {
+  const o = input || {};
+  const c = o.conflict || null;
+  const projectLabel = _clip(o.project_label, 200) || '(this project)';
+  const lines = [];
+  lines.push(`You are a coding agent reviewing a multi-agent conflict in ${projectLabel}.`);
+  lines.push(`Cairn is a project control surface (read-only); it does NOT resolve conflicts. The user is asking you to inspect and recommend.`);
+  lines.push('');
+  if (!c) {
+    lines.push('# Conflict');
+    lines.push('No conflict provided. Refuse to inspect without one.');
+  } else {
+    lines.push('# Conflict');
+    lines.push(`- id:     ${c.id}`);
+    lines.push(`- type:   ${c.conflict_type}`);
+    lines.push(`- status: ${c.status}`);
+    lines.push(`- detected: ${c.detected_at ? new Date(c.detected_at).toISOString() : '?'}`);
+    lines.push(`- agent_a: ${c.agent_a}`);
+    if (c.agent_b) lines.push(`- agent_b: ${c.agent_b}`);
+    if (c.summary) lines.push(`- summary: ${_clip(c.summary, 400)}`);
+    if (Array.isArray(c.paths) && c.paths.length) {
+      lines.push('- paths:');
+      for (const p of c.paths.slice(0, 12)) lines.push(`    - ${_clip(p, 200)}`);
+    }
+    lines.push('');
+  }
+  lines.push('# What to do');
+  lines.push('1. Inspect each affected path. Diff the two agents\' versions if both present.');
+  lines.push('2. Identify the root cause (concurrent write / overlapping intent / state mismatch).');
+  lines.push('3. Recommend a resolution to the USER. Do NOT resolve, merge, or force-push the conflict yourself.');
+  lines.push('4. If the resolution requires choosing one agent\'s output over the other, ask the user which to keep.');
+  lines.push('');
+  lines.push('# Hard rules');
+  lines.push('- Do not push, merge, or force any branch unless the user explicitly authorizes.');
+  lines.push('- Do not modify Cairn\'s conflict state from your end (Cairn marks RESOLVED via its own tools, not via you).');
+  lines.push('- Do not silently pick a side; surface the trade-off to the user.');
+  return lines.join('\n');
+}
+
+function composeReviewPrompt(input) {
+  const o = input || {};
+  const projectLabel = _clip(o.project_label, 200) || '(this project)';
+  const t = o.target_task || null;
+  const oc = o.outcome || null;
+  const lines = [];
+  lines.push(`You are a coding agent reviewing a Cairn task for ${projectLabel}.`);
+  lines.push('Cairn is a project control surface (read-only); it does NOT decide PASS / FAIL / RETRY. Your role is to report what you see and recommend a verdict to the user.');
+  lines.push('');
+  if (t) {
+    lines.push('# Task');
+    lines.push(`- task id:     ${t.task_id}`);
+    lines.push(`- intent:      ${_clip(t.intent, 200) || '(no intent)'}`);
+    lines.push(`- state:       ${t.state}`);
+  }
+  if (oc) {
+    lines.push('');
+    lines.push('# Outcome');
+    lines.push(`- status: ${oc.status}`);
+    if (oc.evaluation_summary) lines.push(`- last evaluation: ${_clip(oc.evaluation_summary, 400)}`);
+  }
+  lines.push('');
+  lines.push('# What to do');
+  lines.push('1. Inspect the task\'s diff / files / acceptance criteria.');
+  lines.push('2. Verify against the project\'s testing policy.');
+  lines.push('3. Report PASS / FAIL with evidence to the user. Do NOT mark the outcome yourself.');
+  lines.push('');
+  lines.push('# Hard rules');
+  lines.push('- Do not push, merge, or force any branch unless the user explicitly authorizes.');
+  lines.push('- Do not change the outcome record in Cairn from your end.');
+  return lines.join('\n');
+}
+
+ipcMain.handle('get-review-prompt', (_e, projectId, taskId) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'projectId_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const tasks = projectQueries.queryProjectScopedTasks(entry.db, entry.tables, agentIds).tasks;
+  const target = taskId ? tasks.find(t => t.task_id === taskId) : null;
+  let outcome = null;
+  if (target) {
+    const detail = queries.queryTaskDetail(entry.db, entry.tables, target.task_id);
+    outcome = detail && detail.outcome ? detail.outcome : null;
+  }
+  return {
+    ok: true,
+    prompt: composeReviewPrompt({
+      project_label: proj.label, target_task: target, outcome,
+    }),
+  };
+});
 
 ipcMain.handle('get-project-recovery', (_e, projectId) => {
   if (!projectId || typeof projectId !== 'string') return null;

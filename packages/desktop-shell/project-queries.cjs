@@ -960,6 +960,202 @@ function queryProjectScopedCheckpoints(db, tables, hints, limit) {
   });
 }
 
+/**
+ * Project-scoped scratchpad list. Returns scratchpad rows whose
+ * task_id is attributed to this project, sorted by updated_at DESC.
+ * Strict read-only.
+ *
+ * Schema (migration 002): scratchpad(key, value_json, value_path,
+ * task_id, expires_at, created_at, updated_at). Task_id is FK to
+ * tasks(task_id) — we filter by task_id ∈ project tasks. Untagged
+ * (task_id IS NULL) entries do NOT come back in project-scoped
+ * results — they belong to the Unassigned bucket conceptually.
+ *
+ * The handoff surface only needs metadata + a short preview, not
+ * the whole value. We emit `value_preview` (first 240 chars of the
+ * JSON-stringified value) and `value_size` so the panel can show
+ * what's there without rendering the full payload by default.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string[]} hints
+ * @param {number} [limit]
+ * @returns {Array<{key:string, task_id:string|null, updated_at:number,
+ *                  created_at:number, expires_at:number|null,
+ *                  value_size:number, value_preview:string|null,
+ *                  has_value_path:boolean,
+ *                  task_intent:string|null, task_state:string|null}>}
+ */
+function queryProjectScopedScratchpad(db, tables, hints, limit) {
+  if (!db || !tables.has('scratchpad')) return [];
+  const hintArr = Array.isArray(hints) ? hints : [];
+  if (hintArr.length === 0) return [];
+  const lim = Math.max(1, Math.min(limit || 50, 200));
+
+  // Step 1: attributed task ids (with intent + state for the panel).
+  let taskRows;
+  try {
+    const inList = sqlInList(hintArr);
+    taskRows = db.prepare(`
+      SELECT task_id, intent, state FROM tasks
+       WHERE created_by_agent_id IN ${inList}
+    `).all(...hintArr);
+  } catch (_e) { return []; }
+  if (taskRows.length === 0) return [];
+
+  /** @type {Map<string, {intent:string|null, state:string|null}>} */
+  const taskMap = new Map();
+  const taskIds = [];
+  for (const t of taskRows) {
+    taskMap.set(t.task_id, { intent: t.intent || null, state: t.state || null });
+    taskIds.push(t.task_id);
+  }
+
+  // Step 2: scratchpad rows for those tasks.
+  let rows;
+  try {
+    const taskInList = sqlInList(taskIds);
+    rows = db.prepare(`
+      SELECT key, value_json, value_path, task_id, expires_at, created_at, updated_at
+        FROM scratchpad
+       WHERE task_id IN ${taskInList}
+       ORDER BY updated_at DESC
+       LIMIT ?
+    `).all(...taskIds, lim);
+  } catch (_e) { return []; }
+
+  return rows.map(r => {
+    const t = taskMap.get(r.task_id) || { intent: null, state: null };
+    const valueStr = typeof r.value_json === 'string' ? r.value_json : '';
+    return {
+      key:           r.key,
+      task_id:       r.task_id,
+      task_intent:   t.intent,
+      task_state:    t.state,
+      created_at:    r.created_at,
+      updated_at:    r.updated_at,
+      expires_at:    r.expires_at,
+      value_size:    valueStr.length,
+      value_preview: valueStr ? valueStr.slice(0, 240) : null,
+      has_value_path: !!r.value_path,
+    };
+  });
+}
+
+/**
+ * Project-scoped conflicts. Returns OPEN / PENDING_REVIEW / RESOLVED
+ * conflicts whose either party (agent_a / agent_b) is in the project's
+ * effective agent_ids. Sorted by detected_at DESC.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string[]} hints
+ * @param {number} [limit]
+ * @returns {Array<{id:string, detected_at:number, conflict_type:string,
+ *                  agent_a:string, agent_b:string|null, paths:string[],
+ *                  summary:string|null, status:string,
+ *                  resolved_at:number|null, resolution:string|null}>}
+ */
+function queryProjectScopedConflicts(db, tables, hints, limit) {
+  if (!db || !tables.has('conflicts')) return [];
+  const hintArr = Array.isArray(hints) ? hints : [];
+  if (hintArr.length === 0) return [];
+  const lim = Math.max(1, Math.min(limit || 50, 200));
+  let rows;
+  try {
+    const inList = sqlInList(hintArr);
+    rows = db.prepare(`
+      SELECT id, detected_at, conflict_type, agent_a, agent_b,
+             paths_json, summary, status, resolved_at, resolution
+        FROM conflicts
+       WHERE agent_a IN ${inList}
+          OR (agent_b IS NOT NULL AND agent_b IN ${inList})
+       ORDER BY detected_at DESC
+       LIMIT ?
+    `).all(...hintArr, ...hintArr, lim);
+  } catch (_e) { return []; }
+  return rows.map(r => {
+    let paths = [];
+    if (r.paths_json) {
+      try { const v = JSON.parse(r.paths_json); if (Array.isArray(v)) paths = v.map(String); }
+      catch (_e) { /* tolerate malformed */ }
+    }
+    return {
+      id:           r.id,
+      detected_at:  r.detected_at,
+      conflict_type: r.conflict_type,
+      agent_a:      r.agent_a,
+      agent_b:      r.agent_b || null,
+      paths,
+      summary:      r.summary || null,
+      status:       r.status,
+      resolved_at:  r.resolved_at || null,
+      resolution:   r.resolution || null,
+    };
+  });
+}
+
+/**
+ * Project-scoped recent blockers (used by the coordination layer).
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string[]} hints
+ * @param {number} [limit]
+ */
+function queryProjectScopedBlockers(db, tables, hints, limit) {
+  if (!db || !tables.has('blockers')) return [];
+  const hintArr = Array.isArray(hints) ? hints : [];
+  if (hintArr.length === 0) return [];
+  const lim = Math.max(1, Math.min(limit || 50, 200));
+  // Join via attributed tasks.
+  let taskRows;
+  try {
+    const inList = sqlInList(hintArr);
+    taskRows = db.prepare(`SELECT task_id FROM tasks WHERE created_by_agent_id IN ${inList}`).all(...hintArr);
+  } catch (_e) { return []; }
+  if (taskRows.length === 0) return [];
+  const ids = taskRows.map(r => r.task_id);
+  try {
+    const taskInList = sqlInList(ids);
+    return db.prepare(`
+      SELECT id, task_id, status, raised_at, answered_at, question, answer,
+             raised_by, answered_by
+        FROM blockers
+       WHERE task_id IN ${taskInList}
+       ORDER BY COALESCE(answered_at, raised_at) DESC
+       LIMIT ?
+    `).all(...ids, lim);
+  } catch (_e) { return []; }
+}
+
+/**
+ * Project-scoped outcomes (used by the coordination layer).
+ */
+function queryProjectScopedOutcomes(db, tables, hints, limit) {
+  if (!db || !tables.has('outcomes')) return [];
+  const hintArr = Array.isArray(hints) ? hints : [];
+  if (hintArr.length === 0) return [];
+  const lim = Math.max(1, Math.min(limit || 50, 200));
+  let taskRows;
+  try {
+    const inList = sqlInList(hintArr);
+    taskRows = db.prepare(`SELECT task_id FROM tasks WHERE created_by_agent_id IN ${inList}`).all(...hintArr);
+  } catch (_e) { return []; }
+  if (taskRows.length === 0) return [];
+  const ids = taskRows.map(r => r.task_id);
+  try {
+    const taskInList = sqlInList(ids);
+    return db.prepare(`
+      SELECT outcome_id, task_id, status, evaluated_at, evaluation_summary,
+             grader_agent_id, created_at, updated_at
+        FROM outcomes
+       WHERE task_id IN ${taskInList}
+       ORDER BY COALESCE(evaluated_at, updated_at) DESC
+       LIMIT ?
+    `).all(...ids, lim);
+  } catch (_e) { return []; }
+}
+
 module.exports = {
   queryProjectScopedSummary,
   queryUnassignedSummary,
@@ -967,6 +1163,10 @@ module.exports = {
   queryUnassignedDetail,
   queryProjectScopedTasks,
   queryProjectScopedCheckpoints,
+  queryProjectScopedScratchpad,
+  queryProjectScopedConflicts,
+  queryProjectScopedBlockers,
+  queryProjectScopedOutcomes,
   deriveSessionState,
   parseCapabilities,
   computeOwnsTasksByAgent,

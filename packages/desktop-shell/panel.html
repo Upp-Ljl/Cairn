@@ -1178,6 +1178,140 @@
   }
   .report-section li { line-height: 1.4; }
 
+  /* Coordination tab — three sections (signals / handoff / conflicts). */
+  .coord-section {
+    border-bottom: 1px solid #1e1e1e;
+    padding: 4px 0 8px;
+  }
+  .coord-section-head {
+    padding: 6px 12px 3px;
+    color: #779;
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: #0f0f0f;
+    border-bottom: 1px solid #1e1e1e;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .coord-section-head .coord-action {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .coord-section-head .coord-action:hover { color: #aef; }
+
+  /* Top signals list */
+  .coord-signal {
+    padding: 5px 12px;
+    border-bottom: 1px solid #1e1e1e;
+    display: grid;
+    grid-template-columns: 60px 1fr 110px;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .coord-signal:hover { background: #181818; }
+  .coord-signal-sev {
+    font-size: 0.72rem;
+    padding: 0 5px;
+    border-radius: 2px;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .coord-signal-sev.attention { background: #3a1010; color: #f88; }
+  .coord-signal-sev.watch     { background: #3a2a10; color: #ec8; }
+  .coord-signal-sev.info      { background: #1a3a1a; color: #7e7; }
+  .coord-signal-text { color: #ddd; }
+  .coord-signal-text .detail { color: #888; font-size: 0.85em; display: block; }
+  .coord-signal-action a {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    text-align: right;
+    display: block;
+  }
+  .coord-signal-action a:hover { color: #aef; }
+
+  /* Scratchpad / handoff entries */
+  .coord-scratch {
+    padding: 5px 12px;
+    border-bottom: 1px solid #1e1e1e;
+  }
+  .coord-scratch-head {
+    display: grid;
+    grid-template-columns: 1fr 80px 60px;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .coord-scratch-key {
+    color: #ddd;
+    font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .coord-scratch-meta { color: #666; font-size: 0.85em; text-align: right; font-variant-numeric: tabular-nums; }
+  .coord-scratch-size { color: #888; font-size: 0.85em; text-align: right; font-variant-numeric: tabular-nums; }
+  .coord-scratch-task {
+    margin-left: 0;
+    color: #aab;
+    font-size: 0.82em;
+    margin-top: 1px;
+  }
+  .coord-scratch-preview {
+    margin-top: 2px;
+    color: #888;
+    font-size: 0.85em;
+    background: #0a0a0a;
+    border-left: 2px solid #2a2a2a;
+    padding: 3px 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: pre-wrap;
+  }
+  .coord-scratch-actions {
+    margin-top: 3px;
+    font-size: 0.78rem;
+  }
+  .coord-scratch-actions a { color: #7af; cursor: pointer; margin-right: 12px; }
+  .coord-scratch-actions a:hover { color: #aef; }
+
+  /* Conflicts list */
+  .coord-conflict {
+    padding: 5px 12px;
+    border-bottom: 1px solid #1e1e1e;
+  }
+  .coord-conflict-head {
+    display: grid;
+    grid-template-columns: 90px 1fr 80px;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .coord-conflict-status {
+    font-size: 0.72rem;
+    padding: 0 5px;
+    border-radius: 2px;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .coord-conflict-status.OPEN, .coord-conflict-status.PENDING_REVIEW { background: #3a1010; color: #f88; }
+  .coord-conflict-status.RESOLVED { background: #1a3a1a; color: #7e7; }
+  .coord-conflict-status.IGNORED { background: #2a2a2a; color: #888; }
+  .coord-conflict-title { color: #ddd; }
+  .coord-conflict-meta  { color: #666; font-size: 0.85em; text-align: right; }
+  .coord-conflict-paths { margin-top: 2px; color: #888; font-size: 0.85em; }
+  .coord-conflict-paths code { color: #ccc; }
+  .coord-conflict-actions { margin-top: 3px; font-size: 0.78rem; }
+  .coord-conflict-actions a { color: #7af; cursor: pointer; margin-right: 12px; }
+  .coord-conflict-actions a:hover { color: #aef; }
+
   /* Tasks tab filter chip (Day 3 — when filtered by selectedAgentId) */
   .filter-chip {
     margin: 6px 12px;
@@ -1476,6 +1610,7 @@
       <button class="tab"        data-tab="tasks"    type="button">Tasks</button>
       <button class="tab"        data-tab="sessions" type="button">Agent Activity</button>
       <button class="tab"        data-tab="reports"  type="button">Reports</button>
+      <button class="tab"        data-tab="coord"    type="button">Coordination</button>
     </div>
 
     <div id="view-body">
@@ -1502,6 +1637,35 @@
         </div>
         <div id="reports-list">
           <div class="placeholder">no reports yet — paste an agent's "what I did / what's left / blockers" summary via Add report.</div>
+        </div>
+      </div>
+      <!--
+        Coordination tab — surfaces kernel-layer atomic capabilities
+        (scratchpad / conflicts / coordination signals) as a project
+        coordination surface. Three sections (top signals, handoff
+        context, conflicts) share one tab so navigation stays cheap.
+      -->
+      <div id="view-coord" class="view" hidden>
+        <div class="coord-section">
+          <div class="coord-section-head">Top coordination signals</div>
+          <div id="coord-signals-list">
+            <div class="placeholder">No coordination signals yet — fresh project or quiet period.</div>
+          </div>
+        </div>
+        <div class="coord-section">
+          <div class="coord-section-head">
+            Handoff context (scratchpad)
+            <a id="coord-handoff-prompt-link" class="coord-action">copy handoff prompt</a>
+          </div>
+          <div id="coord-scratchpad-list">
+            <div class="placeholder">No shared context recorded yet. Ask an agent to write a worker report or scratchpad note before handoff.</div>
+          </div>
+        </div>
+        <div class="coord-section">
+          <div class="coord-section-head">Conflicts</div>
+          <div id="coord-conflicts-list">
+            <div class="placeholder">No conflicts.</div>
+          </div>
         </div>
       </div>
     </div>

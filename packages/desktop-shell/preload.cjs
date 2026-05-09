@@ -58,6 +58,13 @@ const api = {
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
   getRecoveryPrompt:  (projectId, opts) => ipcRenderer.invoke('get-recovery-prompt', projectId, opts || null),
+  // Coordination surface
+  getProjectScratchpad:    (projectId, limit) => ipcRenderer.invoke('get-project-scratchpad', projectId, limit || 30),
+  getProjectConflicts:     (projectId, limit) => ipcRenderer.invoke('get-project-conflicts', projectId, limit || 30),
+  getCoordinationSignals:  (projectId) => ipcRenderer.invoke('get-coordination-signals', projectId),
+  getHandoffPrompt:        (projectId, opts) => ipcRenderer.invoke('get-handoff-prompt', projectId, opts || null),
+  getConflictPrompt:       (projectId, conflictId) => ipcRenderer.invoke('get-conflict-prompt', projectId, conflictId || null),
+  getReviewPrompt:         (projectId, taskId) => ipcRenderer.invoke('get-review-prompt', projectId, taskId || null),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),
