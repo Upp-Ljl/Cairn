@@ -547,6 +547,74 @@
   .recovery-anchors .anchor-head   { color: #666; font-variant-numeric: tabular-nums; text-align: right; }
   .recovery-anchors .anchor-time   { color: #666; font-variant-numeric: tabular-nums; text-align: right; }
 
+  /* Coordination Strip — top 3 signals on L2 hero. */
+  .coord-strip {
+    padding: 6px 12px;
+    background: #181a1f;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #coord-strip-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .coord-strip-dot { font-size: 0.9em; line-height: 1; flex: 0 0 auto; }
+  .coord-strip-dot.ok        { color: #5b5; }
+  .coord-strip-dot.watch     { color: #ec8; }
+  .coord-strip-dot.attention { color: #f77; }
+  #coord-strip-level {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.74rem;
+    color: #888;
+    flex: 0 0 auto;
+  }
+  .coord-strip.coord-attention #coord-strip-level { color: #f77; }
+  .coord-strip.coord-watch     #coord-strip-level { color: #ec8; }
+  .coord-strip.coord-ok        #coord-strip-level { color: #5b5; }
+  #coord-strip-headline {
+    color: #ccc;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  .coord-strip-show-all {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+  }
+  .coord-strip-show-all:hover { color: #aef; }
+  .coord-strip-top {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed #2a2a2a;
+    color: #aaa;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  .coord-strip-top .strip-row {
+    display: grid;
+    grid-template-columns: 9px 1fr 100px;
+    column-gap: 8px;
+    padding: 1px 0;
+  }
+  .coord-strip-top .strip-dot.attention { color: #f77; }
+  .coord-strip-top .strip-dot.watch     { color: #ec8; }
+  .coord-strip-top .strip-dot.info      { color: #5b5; }
+  .coord-strip-top .strip-action a {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    text-align: right;
+    display: block;
+  }
+  .coord-strip-top .strip-action a:hover { color: #aef; }
+
   /* Project Pulse strip — sits above the summary card on L2.
      Compact, read-only, "needs attention?" signal only. Color matches
      the tray semantics: dim green = ok, amber = watch, red = attention.
@@ -1579,6 +1647,21 @@
       </div>
       <div id="recovery-last-ready" class="recovery-last-ready" hidden></div>
       <div id="recovery-anchors" class="recovery-anchors" hidden></div>
+    </div>
+    <!--
+      Coordination strip — top 3 coordination signals on L2 hero.
+      Compact; click each to copy the relevant prompt; "show all" jumps
+      to the Coordination tab. Hidden when coordination_level === 'ok'
+      with no signals.
+    -->
+    <div id="coord-strip" class="coord-strip" hidden>
+      <div id="coord-strip-line">
+        <span id="coord-strip-dot" class="coord-strip-dot ok">●</span>
+        <span id="coord-strip-level">OK</span>
+        <span id="coord-strip-headline"></span>
+        <a id="coord-strip-show-all" class="coord-strip-show-all">show all ▸</a>
+      </div>
+      <div id="coord-strip-top" class="coord-strip-top" hidden></div>
     </div>
     <!--
       Project Pulse — read-only derived signals.

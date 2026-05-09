@@ -2366,10 +2366,76 @@ function renderConflictsList(rows) {
   });
 }
 
-// Phase 4: coordination hero strip on L2 — implemented in a follow-up
-// commit. Stubbed here so the panel poll loop can call it without
-// crashing during Phase 2 / Phase 3 incremental delivery.
-function renderCoordinationStrip(_coord) { /* see Phase 4 commit */ }
+// Coordination hero strip on L2 — top 3 signals + jump-to-tab action.
+let coordStripExpanded = false;
+
+function renderCoordinationStrip(coord) {
+  const strip = document.getElementById('coord-strip');
+  if (!strip) return;
+  if (!coord || !coord.signals || coord.signals.length === 0) {
+    strip.hidden = true;
+    return;
+  }
+  // For coordination_level === 'ok' with only `info` signals (e.g.
+  // recovery_available), keep the strip subtle but visible — the
+  // user benefits from knowing they have anchors.
+  strip.hidden = false;
+  const level = coord.coordination_level || 'ok';
+  strip.classList.remove('coord-ok', 'coord-watch', 'coord-attention');
+  strip.classList.add('coord-' + level);
+  document.getElementById('coord-strip-dot').className = 'coord-strip-dot ' + level;
+  document.getElementById('coord-strip-level').textContent = level.toUpperCase();
+  // Headline: top 1 signal title or "no issues to coordinate".
+  const top = coord.signals[0] || null;
+  document.getElementById('coord-strip-headline').textContent =
+    top ? top.title : 'no issues to coordinate';
+
+  const detailEl = document.getElementById('coord-strip-top');
+  if (coordStripExpanded) {
+    detailEl.hidden = false;
+    detailEl.innerHTML = coord.signals.slice(0, 3).map(s => {
+      const sev = s.severity || 'info';
+      const action = s.prompt_action ? renderSignalActionLink(s) : '';
+      return (
+        `<div class="strip-row">` +
+          `<span class="strip-dot ${escapeHtml(sev)}">●</span>` +
+          `<span class="strip-title">${escapeHtml(s.title)}</span>` +
+          `<span class="strip-action">${action}</span>` +
+        `</div>`
+      );
+    }).join('');
+    detailEl.querySelectorAll('.strip-action a[data-act]').forEach(a => {
+      a.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const act = a.getAttribute('data-act');
+        const taskId = a.getAttribute('data-task-id') || null;
+        const conflictId = a.getAttribute('data-conflict-id') || null;
+        await handleCoordAction(act, { task_id: taskId, conflict_id: conflictId });
+      });
+    });
+  } else {
+    detailEl.hidden = true;
+    detailEl.innerHTML = '';
+  }
+
+  if (!strip._wired) {
+    document.getElementById('coord-strip-show-all').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      // Click "show all" jumps to the Coordination tab AND expands the
+      // inline preview so the strip stays glance-able afterwards.
+      coordStripExpanded = true;
+      setActiveTab('coord');
+      poll().catch(() => {});
+    });
+    document.getElementById('coord-strip-line').addEventListener('click', (ev) => {
+      // Clicking anywhere else on the strip toggles the inline preview.
+      if (ev.target.closest('#coord-strip-show-all')) return;
+      coordStripExpanded = !coordStripExpanded;
+      poll().catch(() => {});
+    });
+    strip._wired = true;
+  }
+}
 
 function setupCoordinationTab() {
   const handoffLink = document.getElementById('coord-handoff-prompt-link');
