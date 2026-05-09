@@ -313,6 +313,37 @@ function detectWorkerProviders() {
   return launcher.detectWorkerProviders();
 }
 
+/**
+ * If a run has reached a terminal status (exited/failed/stopped/unknown)
+ * but its bound iteration row still says running/queued, patch the
+ * iteration to match. Idempotent — safe to call from any read path.
+ *
+ * Called from: getWorkerRun, extractManagedWorkerReport,
+ * continueManagedIterationReview. The launcher's `child.on('exit')`
+ * updates run.json but cannot reach the iteration JSONL (different
+ * module, no upward dep), so we converge state at the next handler-
+ * level read instead. Polling UIs (panel) hit getWorkerRun every
+ * second while a run is alive, so the worst-case staleness is one
+ * poll tick after exit.
+ */
+function syncIterationFromRun(runMeta, opts) {
+  if (!runMeta || !runMeta.iteration_id || !runMeta.project_id) return false;
+  const terminal = (runMeta.status === 'exited' || runMeta.status === 'failed'
+                 || runMeta.status === 'stopped' || runMeta.status === 'unknown');
+  if (!terminal) return false;
+  const o = opts || {};
+  const iter = iters.getIteration(runMeta.project_id, runMeta.iteration_id, { home: o.home });
+  if (!iter) return false;
+  // Only patch when the iteration disagrees — keeps the JSONL from
+  // growing on every poll once a run has terminated.
+  if (iter.worker_status === runMeta.status && iter.worker_ended_at === runMeta.ended_at) return false;
+  iters.markWorkerRunStatus(runMeta.project_id, runMeta.iteration_id, runMeta.status, {
+    home: o.home,
+    ended_at: runMeta.ended_at || Date.now(),
+  });
+  return true;
+}
+
 function launchManagedWorker(projectId, input, opts) {
   const o = opts || {};
   if (!projectId) return { ok: false, error: 'project_id_required' };
@@ -361,7 +392,9 @@ function launchManagedWorker(projectId, input, opts) {
 
 function getWorkerRun(runId, opts) {
   const o = opts || {};
-  return launcher.getWorkerRun(runId, { home: o.home });
+  const meta = launcher.getWorkerRun(runId, { home: o.home });
+  if (meta) syncIterationFromRun(meta, { home: o.home });
+  return meta;
 }
 
 function listWorkerRuns(projectId, opts) {
@@ -393,6 +426,10 @@ function extractManagedWorkerReport(projectId, input, opts) {
   const i = input || {};
   const runId = i.run_id;
   if (!runId) return { ok: false, error: 'run_id_required' };
+  // Sync iteration status before extracting — by the time the user
+  // clicks "extract report" the run has almost always exited.
+  const runMeta = launcher.getWorkerRun(runId, { home: o.home });
+  if (runMeta) syncIterationFromRun(runMeta, { home: o.home });
   const ext = launcher.extractWorkerReport(runId, { home: o.home });
   if (!ext.ok) return ext;
   // Persist as a normal worker report so review uses it.
@@ -414,6 +451,17 @@ function extractManagedWorkerReport(projectId, input, opts) {
  */
 async function continueManagedIterationReview(projectId, ctx, opts) {
   const o = opts || {};
+  // Before review: if the iteration has a bound worker_run_id, fold
+  // the run's terminal state back into the iteration so the review
+  // sees a coherent worker_status/ended_at, not stale 'running'.
+  const c = ctx || {};
+  const itLatest = (c.iteration_id)
+    ? iters.getIteration(projectId, c.iteration_id, { home: o.home })
+    : iters.getLatestOpenIteration(projectId, { home: o.home });
+  if (itLatest && itLatest.worker_run_id) {
+    const runMeta = launcher.getWorkerRun(itLatest.worker_run_id, { home: o.home });
+    if (runMeta) syncIterationFromRun(runMeta, { home: o.home });
+  }
   const ev = collectManagedEvidence(projectId, ctx || {}, o);
   if (!ev.ok) return ev;
   const verdict = await reviewManagedIteration(projectId, ctx || {}, o);

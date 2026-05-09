@@ -95,8 +95,29 @@ ok(typeof iterAfterLaunch.worker_run_dir === 'string' && iterAfterLaunch.worker_
 
 // -------- 4. wait for fixture-echo exit; getWorkerRun reflects exited
 await new Promise(r => setTimeout(r, 800));
+
+// Read iteration BEFORE calling any handler that triggers sync — we
+// want to verify the iteration was stale at this point (worker_status
+// still 'running' from launch time) so we can prove the sync flips it.
+const iterBeforeSync = iters.getIteration(PROJECT_ID, ITER_ID);
+ok(iterBeforeSync.worker_status === 'running', 'iteration starts at worker_status=running (pre-sync)');
+
 const runFinal = handlers.getWorkerRun(RUN_ID);
 ok(runFinal && runFinal.status === 'exited', `run exited (got ${runFinal && runFinal.status})`);
+
+// Sync invariant: getWorkerRun must converge the iteration row to
+// match run.json once the run has reached a terminal status.
+const iterAfterSync = iters.getIteration(PROJECT_ID, ITER_ID);
+ok(iterAfterSync.worker_status === 'exited', 'iteration.worker_status synced to exited via getWorkerRun');
+ok(iterAfterSync.worker_ended_at && iterAfterSync.worker_ended_at >= iterBeforeSync.started_at,
+   'iteration.worker_ended_at populated after sync');
+
+// Idempotency: a second getWorkerRun must NOT churn the iteration.
+const updatedAtBefore = iterAfterSync.updated_at;
+await new Promise(r => setTimeout(r, 50));
+handlers.getWorkerRun(RUN_ID);
+const iterAfterSecondSync = iters.getIteration(PROJECT_ID, ITER_ID);
+ok(iterAfterSecondSync.updated_at === updatedAtBefore, 'sync is idempotent — no extra patch when already synced');
 
 // -------- 5. listWorkerRuns scoped by project
 const list = handlers.listWorkerRuns(PROJECT_ID);
