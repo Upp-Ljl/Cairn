@@ -511,6 +511,115 @@
     margin-left: 8px;
   }
   .recovery-action:hover { color: #aef; }
+  .managed-card {
+    padding: 6px 12px;
+    background: #14181d;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #managed-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .managed-label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.74rem;
+    color: #779;
+    flex: 0 0 auto;
+  }
+  .managed-status {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: #2a2a2a;
+    color: #888;
+    flex: 0 0 auto;
+  }
+  .managed-status.managed       { background: #1a3a1a; color: #7e7; }
+  .managed-status.continue      { background: #1a3a1a; color: #7e7; }
+  .managed-status.ready         { background: #1a3a3a; color: #7ec; }
+  .managed-status.blocked       { background: #3a1a1a; color: #f99; }
+  .managed-status.needs         { background: #3a2a10; color: #ec8; }
+  .managed-meta {
+    color: #aaa;
+    font-size: 0.85em;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .managed-action {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+    margin-left: 8px;
+  }
+  .managed-action:hover { color: #aef; }
+  .managed-action-inline { margin-left: 6px; }
+  .managed-body { margin-top: 6px; }
+  .managed-profile,
+  .managed-latest,
+  .managed-evidence,
+  .managed-review {
+    color: #aaa;
+    font-size: 0.85em;
+    line-height: 1.5;
+    margin: 4px 0;
+  }
+  .managed-profile code, .managed-latest code, .managed-evidence code {
+    color: #ccc;
+    background: #0f0f0f;
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 0.92em;
+  }
+  .managed-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 6px 0;
+  }
+  .managed-btn {
+    background: #1c1f24;
+    border: 1px solid #333;
+    color: #ccc;
+    font-size: 0.82em;
+    padding: 2px 8px;
+    border-radius: 2px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .managed-btn:hover:not([disabled]) { background: #232830; color: #fff; }
+  .managed-btn[disabled] { color: #555; cursor: default; border-color: #222; }
+  .managed-area { margin-top: 6px; }
+  .managed-area-head {
+    color: #889;
+    font-size: 0.78em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+  }
+  .managed-textarea {
+    width: 100%;
+    background: #0c0c0c;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    border-radius: 2px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    padding: 4px 6px;
+    box-sizing: border-box;
+    resize: vertical;
+  }
   .recovery-last-ready {
     margin-top: 3px;
     color: #aaa;
@@ -1647,6 +1756,55 @@
       </div>
       <div id="recovery-last-ready" class="recovery-last-ready" hidden></div>
       <div id="recovery-anchors" class="recovery-anchors" hidden></div>
+    </div>
+    <!--
+      Managed Loop card — Cairn-managed external repo workflow. Compact
+      by default; expands to show profile, latest iteration, and the
+      seven user-triggered actions (register / start / generate prompt
+      / copy prompt / attach report / collect evidence / review / copy
+      next prompt seed). Every action is user-clicked. Cairn never
+      auto-launches a worker.
+    -->
+    <div id="managed-card" class="managed-card" hidden>
+      <div id="managed-line1">
+        <span class="managed-label">MANAGED LOOP</span>
+        <span id="managed-status" class="managed-status">unmanaged</span>
+        <span id="managed-meta" class="managed-meta"></span>
+        <a id="managed-toggle-link" class="managed-action">expand ▸</a>
+      </div>
+      <div id="managed-body" class="managed-body" hidden>
+        <div id="managed-profile" class="managed-profile">
+          <div class="placeholder">not registered as managed yet — click <code>register</code> below.</div>
+        </div>
+        <div id="managed-latest" class="managed-latest"></div>
+        <div id="managed-actions" class="managed-actions">
+          <button id="managed-btn-register"   type="button" class="managed-btn">register</button>
+          <button id="managed-btn-start"      type="button" class="managed-btn" disabled>start iteration</button>
+          <button id="managed-btn-prompt"     type="button" class="managed-btn" disabled>generate worker prompt</button>
+          <button id="managed-btn-copy-prompt"type="button" class="managed-btn" disabled>copy prompt</button>
+          <button id="managed-btn-evidence"   type="button" class="managed-btn" disabled>collect evidence</button>
+          <button id="managed-btn-review"     type="button" class="managed-btn" disabled>review iteration</button>
+          <button id="managed-btn-copy-seed"  type="button" class="managed-btn" disabled>copy next prompt seed</button>
+        </div>
+        <div id="managed-prompt-area" class="managed-area" hidden>
+          <div class="managed-area-head">Worker prompt (copy-paste into Claude Code / Codex / Cursor)</div>
+          <textarea id="managed-prompt-text" class="managed-textarea" readonly rows="10"></textarea>
+        </div>
+        <div id="managed-report-area" class="managed-area">
+          <div class="managed-area-head">
+            Paste worker report
+            <a id="managed-attach-report-link" class="managed-action managed-action-inline">attach</a>
+          </div>
+          <textarea id="managed-report-text" class="managed-textarea" rows="6"
+            placeholder="# Round summary&#10;Completed:&#10;- ...&#10;Remaining:&#10;- ...&#10;Blockers:&#10;- ...&#10;Next steps:&#10;- ..."></textarea>
+        </div>
+        <div id="managed-evidence-summary" class="managed-evidence" hidden></div>
+        <div id="managed-review-summary" class="managed-review" hidden></div>
+        <div id="managed-seed-area" class="managed-area" hidden>
+          <div class="managed-area-head">Next prompt seed</div>
+          <textarea id="managed-seed-text" class="managed-textarea" readonly rows="3"></textarea>
+        </div>
+      </div>
     </div>
     <!--
       Coordination strip — top 3 coordination signals on L2 hero.

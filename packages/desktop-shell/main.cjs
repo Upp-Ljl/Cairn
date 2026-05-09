@@ -60,6 +60,7 @@ const prePrGate         = require('./pre-pr-gate.cjs');
 const goalLoopPromptPack = require('./goal-loop-prompt-pack.cjs');
 const recoverySummary    = require('./recovery-summary.cjs');
 const coordinationSignals = require('./coordination-signals.cjs');
+const managedLoopHandlers = require('./managed-loop-handlers.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1765,6 +1766,83 @@ ipcMain.handle('generate-prompt-pack', async (_e, projectId, opts) => {
   });
   promptPackCache.set(projectId, { result, generated_at: Date.now() });
   return { ok: true, result };
+});
+
+// ---------------------------------------------------------------------------
+// Managed Loop — Cairn-managed external repo workflow
+// ---------------------------------------------------------------------------
+//
+// Per PRODUCT.md §1.3 + §6.4: Cairn manages the loop, never the work.
+// Every channel here is user-triggered (panel button click). We never
+// auto-launch a worker; we never push, fetch, checkout, reset, or
+// otherwise mutate the managed repo's working tree. The IPC layer is
+// a thin wrapper over managed-loop-handlers.cjs.
+
+ipcMain.handle('list-managed-projects', () => {
+  return managedLoopHandlers.listManagedProjects(reg);
+});
+
+ipcMain.handle('register-managed-project', (_e, projectId, input) => {
+  return managedLoopHandlers.registerManagedProject(reg, projectId, input || {});
+});
+
+ipcMain.handle('get-managed-project-profile', (_e, projectId) => {
+  return managedLoopHandlers.getManagedProjectProfile(projectId);
+});
+
+ipcMain.handle('start-managed-iteration', (_e, projectId, input) => {
+  return managedLoopHandlers.startManagedIteration(projectId, input || {});
+});
+
+ipcMain.handle('generate-managed-worker-prompt', (_e, projectId, opts) => {
+  // Build the heavy context (goal/rules/gate/coord) from main process
+  // state so the panel doesn't have to re-fetch each.
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const o = opts || {};
+  const goal = registry.getProjectGoal(reg, projectId);
+  const effective = registry.getEffectiveProjectRules(reg, projectId);
+  const rules = effective ? effective.rules : null;
+  const isDefault = effective ? effective.is_default : true;
+  const cachedGate = prePrGateCache.get(projectId);
+  const ctx = {
+    iteration_id: o.iteration_id || null,
+    goal,
+    project_rules: rules,
+    project_rules_is_default: isDefault,
+    pre_pr_gate: cachedGate ? cachedGate.result : null,
+  };
+  return managedLoopHandlers.generateManagedWorkerPrompt(projectId, ctx);
+});
+
+ipcMain.handle('attach-managed-worker-report', (_e, projectId, input) => {
+  return managedLoopHandlers.attachManagedWorkerReport(projectId, input || {});
+});
+
+ipcMain.handle('collect-managed-evidence', (_e, projectId, input) => {
+  return managedLoopHandlers.collectManagedEvidence(projectId, input || {});
+});
+
+ipcMain.handle('review-managed-iteration', async (_e, projectId, opts) => {
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const o = opts || {};
+  const cachedGate = prePrGateCache.get(projectId);
+  const goal = registry.getProjectGoal(reg, projectId);
+  const effective = registry.getEffectiveProjectRules(reg, projectId);
+  const ctx = {
+    iteration_id: o.iteration_id || null,
+    pre_pr_gate: cachedGate ? cachedGate.result : null,
+    goal,
+    rules: effective ? effective.rules : null,
+  };
+  return managedLoopHandlers.reviewManagedIteration(projectId, ctx, {
+    forceDeterministic: !!o.forceDeterministic,
+  });
+});
+
+ipcMain.handle('list-managed-iterations', (_e, projectId, limit) => {
+  return managedLoopHandlers.listManagedIterations(projectId, limit || 0);
 });
 
 // Project Pulse — derived signals only. No mutation, no recommendation

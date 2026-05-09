@@ -55,6 +55,16 @@ const api = {
   // Goal Loop Prompt Pack (copy-pasteable; user-driven, no auto-send)
   getPromptPack:      (projectId) => ipcRenderer.invoke('get-prompt-pack', projectId),
   generatePromptPack: (projectId, opts) => ipcRenderer.invoke('generate-prompt-pack', projectId, opts || null),
+  // Managed Loop (Cairn-managed external repo)
+  listManagedProjects:        () => ipcRenderer.invoke('list-managed-projects'),
+  registerManagedProject:     (projectId, input) => ipcRenderer.invoke('register-managed-project', projectId, input || {}),
+  getManagedProjectProfile:   (projectId) => ipcRenderer.invoke('get-managed-project-profile', projectId),
+  startManagedIteration:      (projectId, input) => ipcRenderer.invoke('start-managed-iteration', projectId, input || {}),
+  generateManagedWorkerPrompt:(projectId, opts) => ipcRenderer.invoke('generate-managed-worker-prompt', projectId, opts || null),
+  attachManagedWorkerReport:  (projectId, input) => ipcRenderer.invoke('attach-managed-worker-report', projectId, input || {}),
+  collectManagedEvidence:     (projectId, input) => ipcRenderer.invoke('collect-managed-evidence', projectId, input || {}),
+  reviewManagedIteration:     (projectId, opts) => ipcRenderer.invoke('review-managed-iteration', projectId, opts || null),
+  listManagedIterations:      (projectId, limit) => ipcRenderer.invoke('list-managed-iterations', projectId, limit || 0),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
   getRecoveryPrompt:  (projectId, opts) => ipcRenderer.invoke('get-recovery-prompt', projectId, opts || null),

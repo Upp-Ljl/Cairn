@@ -802,6 +802,292 @@ function setupRecoveryCard() {
 }
 
 // ---------------------------------------------------------------------------
+// Managed Loop card — Cairn-managed external repo workflow
+// ---------------------------------------------------------------------------
+//
+// Read-mostly card; user-driven. Every button performs ONE deterministic
+// step in the loop:
+//   register → start iteration → generate worker prompt → copy prompt →
+//   collect evidence → review → copy next prompt seed.
+//
+// "Attach report" lives inline with the textarea so pasting + attaching
+// is a single visual gesture.
+
+let managedExpanded = false;
+let managedLastRecord = null;
+let managedLastIteration = null;
+let managedLastPrompt = null;
+let managedLastReview = null;
+let managedBusy = false;
+
+function setManagedBusy(busy) {
+  managedBusy = !!busy;
+  const ids = ['managed-btn-register', 'managed-btn-start', 'managed-btn-prompt',
+               'managed-btn-evidence', 'managed-btn-review',
+               'managed-attach-report-link'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (managedBusy) el.setAttribute('disabled', 'true');
+    else el.removeAttribute('disabled');
+  }
+}
+
+function renderManagedCard(record, latestIteration) {
+  managedLastRecord = record || null;
+  managedLastIteration = latestIteration || null;
+  const card = document.getElementById('managed-card');
+  if (!card) return;
+  if (!selectedProject) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const status = document.getElementById('managed-status');
+  const meta   = document.getElementById('managed-meta');
+  const profile = document.getElementById('managed-profile');
+  const latest  = document.getElementById('managed-latest');
+
+  // Status chip + line
+  if (record && record.profile) {
+    status.textContent = 'managed';
+    status.className = 'managed-status managed';
+    const p = record.profile;
+    const bits = [];
+    if (p.package_manager) bits.push(p.package_manager);
+    if (p.languages && p.languages.length) bits.push(p.languages.slice(0, 3).join('+'));
+    if (record.default_branch) bits.push('@' + record.default_branch);
+    meta.textContent = bits.join(' · ');
+  } else if (record) {
+    status.textContent = 'no profile';
+    status.className = 'managed-status needs';
+    meta.textContent = record.profile_error || 'profile_error';
+  } else {
+    status.textContent = 'unmanaged';
+    status.className = 'managed-status';
+    meta.textContent = 'click "register" to manage this repo with Cairn';
+  }
+
+  const body = document.getElementById('managed-body');
+  body.hidden = !managedExpanded;
+  document.getElementById('managed-toggle-link').textContent = managedExpanded ? 'collapse ▾' : 'expand ▸';
+
+  // Profile detail
+  if (record && record.profile) {
+    const p = record.profile;
+    const lines = [];
+    lines.push(`<div>repo: <code>${escapeHtml(record.repo_url || record.local_path || '(none)')}</code></div>`);
+    if (p.test_commands && p.test_commands.length) {
+      lines.push(`<div>test: <code>${escapeHtml(p.test_commands.join(' | '))}</code></div>`);
+    }
+    if (p.build_commands && p.build_commands.length) {
+      lines.push(`<div>build: <code>${escapeHtml(p.build_commands.join(' | '))}</code></div>`);
+    }
+    if (p.lint_commands && p.lint_commands.length) {
+      lines.push(`<div>lint: <code>${escapeHtml(p.lint_commands.join(' | '))}</code></div>`);
+    }
+    if (p.docs && p.docs.length) {
+      lines.push(`<div>docs: ${escapeHtml(p.docs.join(', '))}</div>`);
+    }
+    profile.innerHTML = lines.join('');
+  } else if (record) {
+    profile.innerHTML = `<div class="placeholder">profile unavailable: <code>${escapeHtml(record.profile_error || 'unknown')}</code> — re-run register after fixing the local path.</div>`;
+  } else {
+    profile.innerHTML = `<div class="placeholder">not registered as managed yet — click <code>register</code> below.</div>`;
+  }
+
+  // Latest iteration line
+  if (latestIteration) {
+    const i = latestIteration;
+    const bits = [`round <code>${escapeHtml(i.id)}</code>`, `status: <code>${escapeHtml(i.status)}</code>`];
+    if (i.review_status) bits.push(`review: <code>${escapeHtml(i.review_status)}</code>`);
+    if (i.worker_report_id) bits.push('report attached');
+    if (i.evidence_summary) bits.push(`changes: ${i.evidence_summary.changed_file_count || 0}`);
+    latest.innerHTML = bits.join(' · ');
+  } else {
+    latest.innerHTML = `<div class="placeholder">no iteration yet — click "start iteration" once the project is managed.</div>`;
+  }
+
+  // Button enablement
+  const has = !!(record && record.profile);
+  const haveOpenIter = !!(latestIteration && latestIteration.status !== 'reviewed' && latestIteration.status !== 'archived');
+  const reg     = document.getElementById('managed-btn-register');
+  const start   = document.getElementById('managed-btn-start');
+  const prompt  = document.getElementById('managed-btn-prompt');
+  const copyP   = document.getElementById('managed-btn-copy-prompt');
+  const ev      = document.getElementById('managed-btn-evidence');
+  const rev     = document.getElementById('managed-btn-review');
+  const seed    = document.getElementById('managed-btn-copy-seed');
+  if (reg)    reg.removeAttribute('disabled');
+  if (start)  start[has ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (prompt) prompt[has && haveOpenIter ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (copyP)  copyP[managedLastPrompt ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (ev)     ev[has && haveOpenIter ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (rev)    rev[has && haveOpenIter ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+  if (seed)   seed[managedLastReview && managedLastReview.next_prompt_seed ? 'removeAttribute' : 'setAttribute']('disabled', 'true');
+
+  // Render persisted prompt textarea if we have one in this session
+  if (managedLastPrompt) {
+    document.getElementById('managed-prompt-area').hidden = false;
+    document.getElementById('managed-prompt-text').value = managedLastPrompt.prompt || '';
+  }
+  // Render persisted review summary
+  if (managedLastReview) {
+    const rs = document.getElementById('managed-review-summary');
+    rs.hidden = false;
+    const cls = ({
+      blocked: 'blocked', needs_evidence: 'needs', continue: 'continue',
+      ready_for_review: 'ready', unknown: '',
+    })[managedLastReview.status] || '';
+    rs.innerHTML = `<div><span class="managed-status ${cls}">${escapeHtml(managedLastReview.status)}</span> ${escapeHtml(managedLastReview.summary || '')}</div>`;
+    if (managedLastReview.next_attention && managedLastReview.next_attention.length) {
+      rs.innerHTML += `<div style="margin-top:3px;">next attention:</div>`;
+      rs.innerHTML += '<ul style="margin:2px 0 0 16px; padding:0;">' +
+        managedLastReview.next_attention.slice(0, 5).map(a => `<li>${escapeHtml(a)}</li>`).join('') + '</ul>';
+    }
+    if (managedLastReview.next_prompt_seed) {
+      const sa = document.getElementById('managed-seed-area');
+      sa.hidden = false;
+      document.getElementById('managed-seed-text').value = managedLastReview.next_prompt_seed;
+    }
+  }
+}
+
+function reportFooterError(msg) {
+  const footer = document.getElementById('footer');
+  if (!footer) return;
+  footer.textContent = msg;
+  footer.classList.add('bad');
+  setTimeout(() => {
+    footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+    footer.classList.remove('bad');
+  }, 4000);
+}
+
+function setupManagedCard() {
+  const toggle = document.getElementById('managed-toggle-link');
+  if (toggle) toggle.addEventListener('click', () => {
+    managedExpanded = !managedExpanded;
+    renderManagedCard(managedLastRecord, managedLastIteration);
+  });
+
+  document.getElementById('managed-btn-register').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.registerManagedProject(selectedProject.id, {});
+      if (!res || !res.ok) {
+        reportFooterError(`register failed: ${(res && res.error) || 'unknown'}`);
+      } else {
+        managedExpanded = true;
+      }
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-start').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const goal = await window.cairn.getProjectGoal(selectedProject.id);
+      const res = await window.cairn.startManagedIteration(selectedProject.id, {
+        goal_id: goal && goal.id || null,
+      });
+      if (!res || !res.ok) reportFooterError(`start iteration failed: ${(res && res.error) || 'unknown'}`);
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-prompt').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.generateManagedWorkerPrompt(selectedProject.id, {});
+      if (res && res.ok && res.result) {
+        managedLastPrompt = res.result;
+        document.getElementById('managed-prompt-area').hidden = false;
+        document.getElementById('managed-prompt-text').value = res.result.prompt || '';
+      } else {
+        reportFooterError(`prompt generation failed: ${(res && res.error) || 'unknown'}`);
+      }
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-copy-prompt').addEventListener('click', async () => {
+    if (!managedLastPrompt || !managedLastPrompt.prompt) return;
+    try {
+      await navigator.clipboard.writeText(managedLastPrompt.prompt);
+      const btn = document.getElementById('managed-btn-copy-prompt');
+      btn.textContent = 'copied';
+      setTimeout(() => { btn.textContent = 'copy prompt'; }, 1200);
+    } catch (_e) { /* clipboard unavailable */ }
+  });
+
+  document.getElementById('managed-attach-report-link').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    const text = document.getElementById('managed-report-text').value;
+    if (!text || !text.trim()) { reportFooterError('paste a report first'); return; }
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.attachManagedWorkerReport(selectedProject.id, { text });
+      if (!res || !res.ok) {
+        reportFooterError(`attach report failed: ${(res && res.error) || 'unknown'}`);
+      } else {
+        document.getElementById('managed-report-text').value = '';
+        const link = document.getElementById('managed-attach-report-link');
+        link.textContent = 'attached';
+        setTimeout(() => { link.textContent = 'attach'; }, 1200);
+      }
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-evidence').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.collectManagedEvidence(selectedProject.id, {});
+      if (!res || !res.ok) {
+        reportFooterError(`collect evidence failed: ${(res && res.error) || 'unknown'}`);
+      } else {
+        const ev = res.evidence;
+        const sum = res.summary;
+        const node = document.getElementById('managed-evidence-summary');
+        node.hidden = false;
+        const bits = [];
+        if (ev.branch) bits.push(`branch <code>${escapeHtml(ev.branch)}</code>`);
+        if (ev.git_short) bits.push(`HEAD <code>${escapeHtml(ev.git_short)}</code>`);
+        bits.push(`dirty: ${ev.dirty}`);
+        bits.push(`changed: ${(ev.changed_files || []).length}`);
+        if (ev.last_commit && ev.last_commit.subject) bits.push(`last: <code>${escapeHtml(ev.last_commit.subject)}</code>`);
+        node.innerHTML = bits.join(' · ');
+        if (sum && sum.error_codes && sum.error_codes.length) {
+          node.innerHTML += `<div style="color:#f99;margin-top:2px;">errors: ${escapeHtml(sum.error_codes.join(', '))}</div>`;
+        }
+      }
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-review').addEventListener('click', async () => {
+    if (!selectedProject || managedBusy) return;
+    setManagedBusy(true);
+    try {
+      const res = await window.cairn.reviewManagedIteration(selectedProject.id, { forceDeterministic: true });
+      if (!res || !res.ok) {
+        reportFooterError(`review failed: ${(res && res.error) || 'unknown'}`);
+      } else {
+        managedLastReview = res.verdict;
+      }
+    } finally { setManagedBusy(false); }
+  });
+
+  document.getElementById('managed-btn-copy-seed').addEventListener('click', async () => {
+    if (!managedLastReview || !managedLastReview.next_prompt_seed) return;
+    try {
+      await navigator.clipboard.writeText(managedLastReview.next_prompt_seed);
+      const btn = document.getElementById('managed-btn-copy-seed');
+      btn.textContent = 'copied';
+      setTimeout(() => { btn.textContent = 'copy next prompt seed'; }, 1200);
+    } catch (_e) { /* clipboard unavailable */ }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
 // ---------------------------------------------------------------------------
 //
@@ -2813,6 +3099,12 @@ async function poll() {
       const recoveryP = selectedProject
         ? window.cairn.getProjectRecovery(selectedProject.id)
         : Promise.resolve(null);
+      const managedRecordP = selectedProject
+        ? window.cairn.getManagedProjectProfile(selectedProject.id)
+        : Promise.resolve(null);
+      const managedItersP = selectedProject
+        ? window.cairn.listManagedIterations(selectedProject.id, 1)
+        : Promise.resolve(null);
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -2847,8 +3139,9 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, rules, interp, gate, pack, recovery, coordSig, coordScratch, coordConflicts, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+      const [summary, pulse, goal, rules, interp, gate, pack, recovery, managedRecord, managedIters, coordSig, coordScratch, coordConflicts, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
         summaryP, pulseP, goalP, rulesP, interpP, gateP, packP, recoveryP,
+        managedRecordP, managedItersP,
         coordSignalsP, coordScratchP, coordConflictsP,
         dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
@@ -2860,6 +3153,7 @@ async function poll() {
       renderPrePrGate(gate);
       renderPromptPack(pack);
       renderRecoveryCard(recovery);
+      renderManagedCard(managedRecord, (managedIters && managedIters[0]) || null);
       renderCoordinationStrip(coordSig);
       renderPulse(pulse);
       renderSummary(summary);
@@ -2907,6 +3201,7 @@ setupInterpretationCard();
 setupPrePrGateCard();
 setupPromptPack();
 setupRecoveryCard();
+setupManagedCard();
 setupReportsTab();
 setupCoordinationTab();
 setView('projects', null);
