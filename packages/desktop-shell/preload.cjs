@@ -55,6 +55,9 @@ const api = {
   // Goal Loop Prompt Pack (copy-pasteable; user-driven, no auto-send)
   getPromptPack:      (projectId) => ipcRenderer.invoke('get-prompt-pack', projectId),
   generatePromptPack: (projectId, opts) => ipcRenderer.invoke('generate-prompt-pack', projectId, opts || null),
+  // Recovery surface (read-only; copy-pasteable advisory prompts only)
+  getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
+  getRecoveryPrompt:  (projectId, opts) => ipcRenderer.invoke('get-recovery-prompt', projectId, opts || null),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),

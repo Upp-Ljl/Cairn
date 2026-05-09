@@ -693,6 +693,115 @@ function setupPrePrGateCard() {
 }
 
 // ---------------------------------------------------------------------------
+// Recovery Card renderer (UI hardening — checkpoint visibility)
+// ---------------------------------------------------------------------------
+//
+// Surfaces Cairn's checkpoint primitive to the user. Confidence badge,
+// last READY anchor, and a "copy recovery prompt" action. Anchors
+// list expands inline. Cairn does NOT execute rewind from the panel.
+
+let lastRecovery = null;
+let recoveryExpanded = false;
+
+function renderRecoveryCard(recovery) {
+  lastRecovery = recovery || null;
+  const card = document.getElementById('recovery-card');
+  if (!card) return;
+  // Hide when no project is selected OR there are zero checkpoints
+  // AND no goal/anchor signal that might warrant a "create one" hint.
+  // For now: hide if total=0 AND confidence=none — a project that's
+  // never had a checkpoint shouldn't take screen space.
+  if (!recovery || (recovery.counts.total === 0 && recovery.confidence === 'none')) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  const confEl = document.getElementById('recovery-confidence');
+  confEl.textContent = recovery.confidence.toUpperCase();
+  confEl.className = 'recovery-confidence ' + recovery.confidence;
+
+  document.getElementById('recovery-counts').textContent =
+    `${recovery.counts.ready} ready · ${recovery.counts.pending} pending · ${recovery.counts.corrupted} corrupted (${recovery.counts.total} total)`;
+
+  const lastReadyEl = document.getElementById('recovery-last-ready');
+  if (recovery.last_ready) {
+    const r = recovery.last_ready;
+    const labelPart = r.label
+      ? `<span style="color:#ddd">"${escapeHtml(r.label)}"</span> `
+      : '';
+    const headPart = r.git_head ? ` <span style="color:#888">@${escapeHtml(r.git_head)}</span>` : '';
+    const ageTxt = r.ready_at ? relTimeMs(r.ready_at) : (r.created_at ? relTimeMs(r.created_at) : '?');
+    const taskPart = r.task_intent
+      ? ` for <span style="color:#aab">${escapeHtml(r.task_intent.slice(0, 60))}</span>`
+      : '';
+    lastReadyEl.innerHTML =
+      `Last READY anchor: ${labelPart}<code>${escapeHtml(r.id_short)}</code>${headPart} · ` +
+      `<span style="color:#666">${escapeHtml(ageTxt)}</span>${taskPart}`;
+    lastReadyEl.hidden = false;
+  } else {
+    lastReadyEl.hidden = true;
+    lastReadyEl.innerHTML = '';
+  }
+
+  const anchorsEl = document.getElementById('recovery-anchors');
+  if (recoveryExpanded && Array.isArray(recovery.safe_anchors) && recovery.safe_anchors.length) {
+    anchorsEl.hidden = false;
+    anchorsEl.innerHTML = recovery.safe_anchors.map(a => {
+      const labelTxt = a.label ? `<span class="label">${escapeHtml(a.label)}</span> ` : '';
+      const ageTxt = a.ready_at ? relTimeMs(a.ready_at) : (a.created_at ? relTimeMs(a.created_at) : '?');
+      return (
+        `<div class="anchor-row">` +
+          `<span class="anchor-status ${escapeHtml(a.status || '?')}">${escapeHtml(a.status || '?')}</span>` +
+          `<span class="anchor-id">${labelTxt}<code>${escapeHtml(a.id_short)}</code></span>` +
+          `<span class="anchor-head">${a.git_head ? '@' + escapeHtml(a.git_head) : '—'}</span>` +
+          `<span class="anchor-time">${escapeHtml(ageTxt)}</span>` +
+        `</div>`
+      );
+    }).join('');
+    document.getElementById('recovery-toggle-link').textContent = 'hide anchors';
+  } else {
+    anchorsEl.hidden = true;
+    anchorsEl.innerHTML = '';
+    document.getElementById('recovery-toggle-link').textContent = 'show anchors';
+  }
+}
+
+function setupRecoveryCard() {
+  const copyLink   = document.getElementById('recovery-copy-prompt-link');
+  const toggleLink = document.getElementById('recovery-toggle-link');
+  if (copyLink) copyLink.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    let res;
+    try {
+      res = await window.cairn.getRecoveryPrompt(selectedProject.id, {});
+    } catch (e) {
+      res = { ok: false, error: e && e.message };
+    }
+    if (res && res.ok && res.prompt) {
+      try {
+        await navigator.clipboard.writeText(res.prompt);
+        const original = copyLink.textContent;
+        copyLink.textContent = 'copied';
+        setTimeout(() => { copyLink.textContent = original; }, 1200);
+      } catch (_e) { /* clipboard unavailable */ }
+    } else {
+      const footer = document.getElementById('footer');
+      footer.textContent = `recovery prompt failed: ${(res && res.error) || 'unknown'}`;
+      footer.classList.add('bad');
+      setTimeout(() => {
+        footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+        footer.classList.remove('bad');
+      }, 4000);
+    }
+  });
+  if (toggleLink) toggleLink.addEventListener('click', () => {
+    recoveryExpanded = !recoveryExpanded;
+    renderRecoveryCard(lastRecovery);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
 // ---------------------------------------------------------------------------
 //
@@ -886,29 +995,58 @@ function fmtBytes(n) {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
 }
 
-function renderCheckpointsSection(checkpoints) {
+function renderCheckpointsSection(checkpoints, taskId) {
   if (checkpoints == null) {
-    return `<div class="ckpt-section"><div class="head">checkpoints</div><div style="color:#666">loading…</div></div>`;
+    return `<div class="ckpt-section"><div class="head">recovery anchors</div><div style="color:#666">loading…</div></div>`;
   }
   if (!checkpoints.length) {
-    return `<div class="ckpt-section"><div class="head">checkpoints</div><div style="color:#666">none recorded</div></div>`;
+    // Make the absence-of-recovery clear, not a silent "0".
+    return `<div class="ckpt-section">` +
+             `<div class="head">recovery anchors</div>` +
+             `<div style="color:#888;font-size:0.92em">No checkpoints recorded for this task — there's nothing to rewind to. Ask an agent to create one before risky work.</div>` +
+           `</div>`;
   }
-  const rows = checkpoints.map(c => {
+  // Identify the latest READY anchor — that's the "safe rewind point"
+  // surface. Mark it visually so the user sees which one to use first.
+  const latestReadyIdx = checkpoints.findIndex(c => (c.snapshot_status || '').toUpperCase() === 'READY');
+  const safeAnchorBanner = latestReadyIdx >= 0
+    ? `<div style="color:#7e7;font-size:0.85em;margin-bottom:3px">Latest safe anchor: ` +
+      `<code>${escapeHtml(checkpoints[latestReadyIdx].id.slice(0, 12))}</code>` +
+      (checkpoints[latestReadyIdx].label ? ` (${escapeHtml(checkpoints[latestReadyIdx].label)})` : '') +
+      `</div>`
+    : `<div style="color:#ec8;font-size:0.85em;margin-bottom:3px">No READY anchor yet — pending or corrupted only.</div>`;
+
+  const rows = checkpoints.map((c, idx) => {
     const head = c.git_head ? String(c.git_head).slice(0, 7) : '—';
+    const isSafe = idx === latestReadyIdx;
     const labelTxt = c.label
       ? `<span class="label">${escapeHtml(c.label)}</span> · ${escapeHtml(c.id.slice(0, 12))}`
       : escapeHtml(c.id.slice(0, 12));
+    const safeMark = isSafe
+      ? ` <span style="color:#7e7;font-size:0.78rem">SAFE</span>`
+      : '';
     const ts = relTimeMs(c.ready_at || c.created_at);
     return (
       `<div class="ckpt">` +
         `<span class="ckpt-status ${escapeHtml(c.snapshot_status)}">${escapeHtml(c.snapshot_status)}</span>` +
-        `<span class="ckpt-id" title="${escapeHtml(c.id)}">${labelTxt} <span style="color:#666">@${escapeHtml(head)}</span></span>` +
+        `<span class="ckpt-id" title="${escapeHtml(c.id)}">${labelTxt} <span style="color:#666">@${escapeHtml(head)}</span>${safeMark}</span>` +
         `<span class="ckpt-meta">${escapeHtml(ts)} · ${escapeHtml(fmtBytes(c.size_bytes))}</span>` +
         `<button class="ckpt-copy" data-ckpt-id="${escapeHtml(c.id)}" type="button">copy id</button>` +
       `</div>`
     );
   }).join('');
-  return `<div class="ckpt-section"><div class="head">checkpoints (${checkpoints.length})</div>${rows}</div>`;
+  // Per-task recovery prompt action — copies a scoped advisory prompt
+  // the user can paste to a coding agent. Cairn does NOT execute the
+  // rewind; the prompt explicitly tells the agent to inspect first.
+  const promptAction = taskId
+    ? `<div style="margin-top:4px"><a class="ckpt-recover-prompt" data-task-id="${escapeHtml(taskId)}" style="color:#7af;cursor:pointer;font-size:0.85em">copy recovery prompt for this task</a></div>`
+    : '';
+  return `<div class="ckpt-section">` +
+           `<div class="head">recovery anchors (${checkpoints.length})</div>` +
+           safeAnchorBanner +
+           rows +
+           promptAction +
+         `</div>`;
 }
 
 function renderTaskDetail(detail, checkpoints) {
@@ -959,7 +1097,7 @@ function renderTaskDetail(detail, checkpoints) {
       `<div class="kv"><span class="k">updated</span><span class="v">${relTimeMs(t.updated_at)}</span></div>` +
       blockerSummary +
       outcomeSummary +
-      renderCheckpointsSection(checkpoints) +
+      renderCheckpointsSection(checkpoints, t && t.task_id) +
     `</div>`
   );
 }
@@ -1115,6 +1253,7 @@ function renderTasks(payload) {
       // Don't double-fire when chevron / detail children were clicked.
       if (ev.target.closest('.tk-chev[data-chev]')) return;
       if (ev.target.closest('.ckpt-copy')) return;
+      if (ev.target.closest('.ckpt-recover-prompt')) return;
       const id = row.getAttribute('data-task-id');
       if (selectedTaskId === id) {
         selectedTaskId = null;
@@ -1163,6 +1302,29 @@ function renderTasks(payload) {
           btn.classList.remove('copied');
         }, 1200);
       } catch (_e) { /* clipboard may be unavailable */ }
+    });
+  });
+
+  // Per-task recovery prompt (advisory; cairn does NOT execute rewind).
+  el.querySelectorAll('.ckpt-recover-prompt').forEach(link => {
+    link.addEventListener('click', async ev => {
+      ev.stopPropagation();
+      if (!selectedProject) return;
+      const taskId = link.getAttribute('data-task-id');
+      let res;
+      try {
+        res = await window.cairn.getRecoveryPrompt(selectedProject.id, { task_id: taskId });
+      } catch (e) {
+        res = { ok: false, error: e && e.message };
+      }
+      if (res && res.ok && res.prompt) {
+        try {
+          await navigator.clipboard.writeText(res.prompt);
+          const original = link.textContent;
+          link.textContent = 'copied';
+          setTimeout(() => { link.textContent = original; }, 1200);
+        } catch (_e) {}
+      }
     });
   });
 }
@@ -2358,6 +2520,9 @@ async function poll() {
       const packP    = selectedProject
         ? window.cairn.getPromptPack(selectedProject.id)
         : Promise.resolve(null);
+      const recoveryP = selectedProject
+        ? window.cairn.getProjectRecovery(selectedProject.id)
+        : Promise.resolve(null);
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -2379,8 +2544,8 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, rules, interp, gate, pack, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, rulesP, interpP, gateP, packP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
+      const [summary, pulse, goal, rules, interp, gate, pack, recovery, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, rulesP, interpP, gateP, packP, recoveryP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
@@ -2389,6 +2554,7 @@ async function poll() {
       renderInterpretation(interp);
       renderPrePrGate(gate);
       renderPromptPack(pack);
+      renderRecoveryCard(recovery);
       renderPulse(pulse);
       renderSummary(summary);
 
@@ -2428,6 +2594,7 @@ setupRulesCard();
 setupInterpretationCard();
 setupPrePrGateCard();
 setupPromptPack();
+setupRecoveryCard();
 setupReportsTab();
 setView('projects', null);
 poll();

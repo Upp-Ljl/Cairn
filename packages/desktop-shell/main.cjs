@@ -58,6 +58,7 @@ const llmClient         = require('./llm-client.cjs');
 const workerReports     = require('./worker-reports.cjs');
 const prePrGate         = require('./pre-pr-gate.cjs');
 const goalLoopPromptPack = require('./goal-loop-prompt-pack.cjs');
+const recoverySummary    = require('./recovery-summary.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1336,6 +1337,74 @@ ipcMain.handle('get-prompt-pack', (_e, projectId) => {
   if (!projectId || typeof projectId !== 'string') return null;
   const cached = promptPackCache.get(projectId);
   return cached ? cached.result : null;
+});
+
+// ---------------------------------------------------------------------------
+// Recovery surface (UI hardening — checkpoint visibility)
+// ---------------------------------------------------------------------------
+//
+// Read-only — uses queryProjectScopedCheckpoints against the existing
+// `checkpoints` table; no writes. The card is the first time the
+// panel exposes Cairn's checkpoint primitive to the user. Per
+// PRODUCT.md §1.3 #4 the panel does not execute rewind; users get
+// "copy recovery prompt" only.
+
+ipcMain.handle('get-project-recovery', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return null;
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return null;
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const ckpts = projectQueries.queryProjectScopedCheckpoints(
+    entry.db, entry.tables, agentIds, 50,
+  );
+  return recoverySummary.deriveProjectRecovery(ckpts, {});
+});
+
+ipcMain.handle('get-recovery-prompt', (_e, projectId, opts) => {
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+
+  const o = opts || {};
+  if (o.task_id) {
+    // Per-task recovery prompt: fetch this task's checkpoints + state.
+    const ckpts = queries.queryTaskCheckpoints(entry.db, entry.tables, o.task_id);
+    const detail = queries.queryTaskDetail(entry.db, entry.tables, o.task_id);
+    const taskRow = detail && detail.task;
+    const summary = recoverySummary.deriveProjectRecovery(
+      // Wrap the task's checkpoints as if they were project-scoped so
+      // the helper picks the latest READY one if any.
+      ckpts.map(c => Object.assign({}, c, {
+        task_id: o.task_id,
+        task_intent: taskRow ? taskRow.intent : null,
+        task_state:  taskRow ? taskRow.state  : null,
+      })),
+      {},
+    );
+    const prompt = recoverySummary.recoveryPromptForTask({
+      project_label: proj.label,
+      task_id:       o.task_id,
+      task_intent:   taskRow ? taskRow.intent : null,
+      task_state:    taskRow ? taskRow.state  : null,
+      checkpoint:    summary.last_ready || (summary.safe_anchors[0] || null),
+    });
+    return { ok: true, prompt, summary };
+  }
+
+  // Project-level prompt.
+  const ckpts = projectQueries.queryProjectScopedCheckpoints(
+    entry.db, entry.tables, agentIds, 50,
+  );
+  const summary = recoverySummary.deriveProjectRecovery(ckpts, {});
+  const prompt = recoverySummary.recoveryPromptForProject({
+    project_label: proj.label,
+    summary,
+  });
+  return { ok: true, prompt, summary };
 });
 
 ipcMain.handle('generate-prompt-pack', async (_e, projectId, opts) => {

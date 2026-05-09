@@ -883,12 +883,90 @@ function resolveAttributedAgentIdsForDb(db, tables, projects, dbPath) {
   return out;
 }
 
+/**
+ * Project-scoped checkpoint list. Returns checkpoints anchored to
+ * tasks attributed to this project, sorted by COALESCE(ready_at,
+ * created_at) DESC. Strict read-only.
+ *
+ * Why this query exists separately from queryTaskCheckpoints:
+ *   - For the project Recovery Card we need ALL of the project's
+ *     checkpoints in one shot (cross-task), not per-task.
+ *   - We also want a per-row view that includes the owning task's
+ *     intent + state, so the Recovery Card can show
+ *     "T-001 RUNNING — auth refactor" alongside the checkpoint.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string[]} hints   project's effective agent_ids (resolveProjectAgentIds output)
+ * @param {number} [limit]   default 50
+ * @returns {Array<{id:string, label:string|null, snapshot_status:string,
+ *                  git_head:string|null, size_bytes:number|null,
+ *                  created_at:number, ready_at:number|null,
+ *                  task_id:string|null, task_intent:string|null,
+ *                  task_state:string|null}>}
+ */
+function queryProjectScopedCheckpoints(db, tables, hints, limit) {
+  if (!db || !tables.has('checkpoints')) return [];
+  const hintArr = Array.isArray(hints) ? hints : [];
+  if (hintArr.length === 0) return [];
+  const lim = Math.max(1, Math.min(limit || 50, 200));
+
+  // Step 1: attributed task ids.
+  let taskRows;
+  try {
+    const inList = sqlInList(hintArr);
+    taskRows = db.prepare(`
+      SELECT task_id, intent, state FROM tasks
+       WHERE created_by_agent_id IN ${inList}
+    `).all(...hintArr);
+  } catch (_e) { return []; }
+  if (taskRows.length === 0) return [];
+
+  /** @type {Map<string, {intent:string|null, state:string|null}>} */
+  const taskMap = new Map();
+  const taskIds = [];
+  for (const t of taskRows) {
+    taskMap.set(t.task_id, { intent: t.intent || null, state: t.state || null });
+    taskIds.push(t.task_id);
+  }
+
+  // Step 2: checkpoints for those tasks.
+  let ckptRows;
+  try {
+    const taskInList = sqlInList(taskIds);
+    ckptRows = db.prepare(`
+      SELECT id, label, snapshot_status, git_head, size_bytes, created_at, ready_at, task_id
+        FROM checkpoints
+       WHERE task_id IN ${taskInList}
+       ORDER BY COALESCE(ready_at, created_at) DESC
+       LIMIT ?
+    `).all(...taskIds, lim);
+  } catch (_e) { return []; }
+
+  return ckptRows.map(r => {
+    const t = taskMap.get(r.task_id) || { intent: null, state: null };
+    return {
+      id: r.id,
+      label: r.label,
+      snapshot_status: r.snapshot_status,
+      git_head: r.git_head,
+      size_bytes: r.size_bytes,
+      created_at: r.created_at,
+      ready_at: r.ready_at,
+      task_id: r.task_id,
+      task_intent: t.intent,
+      task_state: t.state,
+    };
+  });
+}
+
 module.exports = {
   queryProjectScopedSummary,
   queryUnassignedSummary,
   queryProjectScopedSessions,
   queryUnassignedDetail,
   queryProjectScopedTasks,
+  queryProjectScopedCheckpoints,
   deriveSessionState,
   parseCapabilities,
   computeOwnsTasksByAgent,
