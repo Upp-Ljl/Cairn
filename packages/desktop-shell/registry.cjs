@@ -380,6 +380,140 @@ function addHint(reg, id, agentId) {
   return next;
 }
 
+// ---------------------------------------------------------------------------
+// Project goal (Goal Mode v1)
+// ---------------------------------------------------------------------------
+//
+// Optional `active_goal` field on a project entry. Goal Mode is the
+// product-layer reframe: Cairn explains agent activity / tasks / etc.
+// in service of one stated goal per project. This is read-mostly —
+// the goal is user-authored, never inferred. `~/.cairn/projects.json`
+// stays the single source of truth (no cairn.db writes, no
+// ~/.claude / ~/.codex writes).
+//
+// Goal shape:
+//   {
+//     id:               opaque local id (random)
+//     title:            short headline (1 line, ≤120 chars suggested)
+//     desired_outcome:  what success looks like in 1-3 sentences
+//     success_criteria: string[]    (verifiable; user-authored)
+//     non_goals:        string[]    (out-of-scope reminders)
+//     created_at:       unix ms
+//     updated_at:       unix ms
+//   }
+//
+// Cairn never decides goals. setProjectGoal validates required fields,
+// trims, and persists; nothing else. The criteria / non_goals lists
+// are passed through verbatim — Cairn isn't the editor for them.
+
+const GOAL_MAX_TITLE_LEN     = 200;
+const GOAL_MAX_OUTCOME_LEN   = 2000;
+const GOAL_MAX_CRITERIA      = 20;
+const GOAL_MAX_CRITERION_LEN = 400;
+
+/**
+ * @typedef {Object} ProjectGoal
+ * @property {string} id
+ * @property {string} title
+ * @property {string} desired_outcome
+ * @property {string[]} success_criteria
+ * @property {string[]} non_goals
+ * @property {number} created_at
+ * @property {number} updated_at
+ */
+
+function newGoalId() {
+  return 'g_' + crypto.randomBytes(6).toString('hex');
+}
+
+function _trimStr(s, max) {
+  if (typeof s !== 'string') return '';
+  const t = s.trim();
+  return t.length > max ? t.slice(0, max) : t;
+}
+
+function _trimList(xs, maxItems, maxLen) {
+  if (!Array.isArray(xs)) return [];
+  const out = [];
+  for (const x of xs) {
+    if (out.length >= maxItems) break;
+    const t = _trimStr(x, maxLen);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Read the active goal for a project, or null when absent.
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectId
+ * @returns {ProjectGoal|null}
+ */
+function getProjectGoal(reg, projectId) {
+  if (!reg || !Array.isArray(reg.projects)) return null;
+  const p = reg.projects.find(x => x.id === projectId);
+  if (!p) return null;
+  return p.active_goal || null;
+}
+
+/**
+ * Replace (or create) the active goal on a project. Returns the next
+ * registry shape and the persisted goal. Required fields: title.
+ * Other fields default to empty strings / arrays. The goal id is
+ * preserved across edits when one already exists; created_at is
+ * preserved; updated_at is bumped.
+ *
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectId
+ * @param {{ title:string, desired_outcome?:string, success_criteria?:string[], non_goals?:string[] }} input
+ * @returns {{ reg: object, goal: ProjectGoal|null, error?: string }}
+ */
+function setProjectGoal(reg, projectId, input) {
+  if (!reg || !Array.isArray(reg.projects)) {
+    return { reg, goal: null, error: 'invalid_registry' };
+  }
+  const idx = reg.projects.findIndex(x => x.id === projectId);
+  if (idx < 0) return { reg, goal: null, error: 'project_not_found' };
+  const title = _trimStr(input && input.title, GOAL_MAX_TITLE_LEN);
+  if (!title) return { reg, goal: null, error: 'title_required' };
+  const now = Date.now();
+  const prior = reg.projects[idx].active_goal || null;
+  const goal = {
+    id:               (prior && prior.id) || newGoalId(),
+    title,
+    desired_outcome:  _trimStr(input && input.desired_outcome, GOAL_MAX_OUTCOME_LEN),
+    success_criteria: _trimList(input && input.success_criteria, GOAL_MAX_CRITERIA, GOAL_MAX_CRITERION_LEN),
+    non_goals:        _trimList(input && input.non_goals,        GOAL_MAX_CRITERIA, GOAL_MAX_CRITERION_LEN),
+    created_at:       (prior && prior.created_at) || now,
+    updated_at:       now,
+  };
+  const nextProjects = reg.projects.slice();
+  nextProjects[idx] = Object.assign({}, reg.projects[idx], { active_goal: goal });
+  const next = { version: REGISTRY_VERSION, projects: nextProjects };
+  saveRegistry(next);
+  return { reg: next, goal };
+}
+
+/**
+ * Clear the active goal on a project (no-op if absent).
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectId
+ * @returns {{ reg: object, cleared: boolean }}
+ */
+function clearProjectGoal(reg, projectId) {
+  if (!reg || !Array.isArray(reg.projects)) return { reg, cleared: false };
+  const idx = reg.projects.findIndex(x => x.id === projectId);
+  if (idx < 0) return { reg, cleared: false };
+  if (!reg.projects[idx].active_goal) return { reg, cleared: false };
+  const nextEntry = Object.assign({}, reg.projects[idx]);
+  delete nextEntry.active_goal;
+  const nextProjects = reg.projects.slice();
+  nextProjects[idx] = nextEntry;
+  const next = { version: REGISTRY_VERSION, projects: nextProjects };
+  saveRegistry(next);
+  return { reg: next, cleared: true };
+}
+
 function touchProject(reg, id) {
   const now = Date.now();
   const next = {
@@ -437,6 +571,14 @@ module.exports = {
   renameProject,
   addHint,
   touchProject,
+  // goal mode
+  getProjectGoal,
+  setProjectGoal,
+  clearProjectGoal,
+  GOAL_MAX_TITLE_LEN,
+  GOAL_MAX_OUTCOME_LEN,
+  GOAL_MAX_CRITERIA,
+  GOAL_MAX_CRITERION_LEN,
   // aggregation
   uniqueDbPaths,
   hintsByDbPath,

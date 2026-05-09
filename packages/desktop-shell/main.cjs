@@ -919,6 +919,36 @@ ipcMain.handle('register-project-from-cwd', (_e, cwd, dbPath) => {
   return { ok: true, entry: result.entry };
 });
 
+// Project Goal (Goal Mode v1) — registry-only, no DB writes.
+//
+// Cairn does NOT decide goals. These IPC handlers persist user-authored
+// goals into ~/.cairn/projects.json. The goal becomes input to the
+// LLM Interpretation layer, but the goal itself is never inferred from
+// agent activity (PRODUCT.md §1.3 #4 / §7 principle 2).
+ipcMain.handle('get-project-goal', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  return registry.getProjectGoal(reg, projectId);
+});
+
+ipcMain.handle('set-project-goal', (_e, projectId, input) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return { ok: false, error: 'projectId_required' };
+  }
+  const result = registry.setProjectGoal(reg, projectId, input || {});
+  if (result.error) return { ok: false, error: result.error };
+  reg = result.reg;
+  return { ok: true, goal: result.goal };
+});
+
+ipcMain.handle('clear-project-goal', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return { ok: false, error: 'projectId_required' };
+  }
+  const result = registry.clearProjectGoal(reg, projectId);
+  reg = result.reg;
+  return { ok: true, cleared: result.cleared };
+});
+
 ipcMain.handle('add-hint', (_e, id, agentId) => {
   if (!agentId || typeof agentId !== 'string') return { ok: false, error: 'invalid agent_id' };
   const proj = reg.projects.find(p => p.id === id);

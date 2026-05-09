@@ -110,6 +110,72 @@
   }
   #menu-pop button:hover { background: #2a2a2a; color: #7af; }
 
+  /* Goal Card — sits at the very top of L2, above Pulse.
+     User-authored goal for the active project. Empty state is a
+     single-line "Set goal…" call to action; filled state shows
+     title, desired outcome, and edit/clear actions. */
+  .goal-card {
+    padding: 6px 12px;
+    background: #131a1f;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  .goal-card.goal-empty { background: #131313; }
+  .goal-label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.74rem;
+    color: #779;
+    margin-right: 6px;
+  }
+  #goal-empty-line a {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.92em;
+  }
+  #goal-empty-line a:hover { color: #aef; }
+  #goal-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  #goal-title {
+    color: #eee;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  .goal-meta {
+    color: #666;
+    font-size: 0.82em;
+    flex: 0 0 auto;
+  }
+  .goal-outcome {
+    color: #aaa;
+    font-size: 0.88em;
+    margin-top: 2px;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .goal-actions {
+    margin-top: 3px;
+    font-size: 0.78rem;
+  }
+  .goal-actions a {
+    color: #889;
+    cursor: pointer;
+    margin-right: 12px;
+  }
+  .goal-actions a:hover { color: #7af; }
+
   /* Project Pulse strip — sits above the summary card on L2.
      Compact, read-only, "needs attention?" signal only. Color matches
      the tray semantics: dim green = ok, amber = watch, red = attention.
@@ -680,6 +746,59 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Goal Card edit form (lives inside the shared modal-overlay). */
+  .goal-form {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 460px;
+    max-width: 80vw;
+  }
+  .goal-form label {
+    color: #889;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 6px;
+  }
+  .goal-form-hint {
+    color: #555;
+    font-size: 0.85em;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-left: 4px;
+  }
+  .goal-form input, .goal-form textarea {
+    background: #0f0f0f;
+    color: #ddd;
+    border: 1px solid #333;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: 0.95em;
+    resize: vertical;
+  }
+  .goal-form input:focus, .goal-form textarea:focus {
+    outline: none;
+    border-color: #557;
+    background: #131313;
+  }
+  .goal-form-actions {
+    margin-top: 8px;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .goal-form-actions button {
+    background: #1f2a3a;
+    color: #cef;
+    border: 1px solid #345;
+    padding: 4px 14px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.92em;
+  }
+  .goal-form-actions button:hover { background: #283a4f; color: #fff; }
+
   /* Modal — pick a project for "Add to project…" */
   #modal-overlay {
     position: fixed;
@@ -756,6 +875,29 @@
 
   <!-- L2 (hidden by default; revealed when user picks a project) -->
   <div id="view-project" hidden>
+    <!--
+      Goal Card (Goal Mode v1) — user-authored goal for the active
+      project. Cairn does NOT infer goals; this is the headline the
+      user wrote down. Persists in ~/.cairn/projects.json.
+    -->
+    <div id="goal-card" class="goal-card goal-empty">
+      <div id="goal-empty-line">
+        <span class="goal-label">GOAL</span>
+        <a id="goal-set-link">Set goal…</a>
+      </div>
+      <div id="goal-filled" hidden>
+        <div id="goal-line1">
+          <span class="goal-label">GOAL</span>
+          <span id="goal-title"></span>
+          <span id="goal-meta" class="goal-meta"></span>
+        </div>
+        <div id="goal-outcome" class="goal-outcome"></div>
+        <div id="goal-actions" class="goal-actions">
+          <a id="goal-edit-link">edit</a>
+          <a id="goal-clear-link">clear</a>
+        </div>
+      </div>
+    </div>
     <!--
       Project Pulse — read-only derived signals.
       Cairn does not recommend next agent actions; this strip surfaces

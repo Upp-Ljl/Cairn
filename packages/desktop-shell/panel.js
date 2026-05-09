@@ -173,6 +173,140 @@ function renderHeader(_dbPath) {
 }
 
 // ---------------------------------------------------------------------------
+// Goal Card renderer (Goal Mode v1)
+// ---------------------------------------------------------------------------
+//
+// User-authored goal headline for the active project. Cairn does NOT
+// infer goals — this surface is purely a thin editor on top of
+// `~/.cairn/projects.json`. The goal becomes downstream input for
+// LLM Interpretation but originates here.
+
+let lastGoal = null;
+
+function renderGoalCard(goal) {
+  lastGoal = goal || null;
+  const cardEl   = document.getElementById('goal-card');
+  const emptyEl  = document.getElementById('goal-empty-line');
+  const filledEl = document.getElementById('goal-filled');
+  if (!cardEl) return;
+
+  if (!goal) {
+    cardEl.classList.add('goal-empty');
+    emptyEl.hidden = false;
+    filledEl.hidden = true;
+    return;
+  }
+  cardEl.classList.remove('goal-empty');
+  emptyEl.hidden = true;
+  filledEl.hidden = false;
+
+  document.getElementById('goal-title').textContent = goal.title || '(untitled)';
+  const meta = [];
+  if (Array.isArray(goal.success_criteria) && goal.success_criteria.length) {
+    meta.push(`${goal.success_criteria.length} criteria`);
+  }
+  if (Array.isArray(goal.non_goals) && goal.non_goals.length) {
+    meta.push(`${goal.non_goals.length} non-goals`);
+  }
+  if (goal.updated_at) meta.push(`updated ${relTimeMs(goal.updated_at)}`);
+  document.getElementById('goal-meta').textContent = meta.length ? `· ${meta.join(' · ')}` : '';
+
+  const out = document.getElementById('goal-outcome');
+  if (goal.desired_outcome) {
+    out.textContent = goal.desired_outcome;
+    out.hidden = false;
+  } else {
+    out.textContent = '';
+    out.hidden = true;
+  }
+}
+
+function setupGoalCard() {
+  const setLink   = document.getElementById('goal-set-link');
+  const editLink  = document.getElementById('goal-edit-link');
+  const clearLink = document.getElementById('goal-clear-link');
+  if (setLink)   setLink.addEventListener('click', () => openGoalEditModal(null));
+  if (editLink)  editLink.addEventListener('click', () => openGoalEditModal(lastGoal));
+  if (clearLink) clearLink.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    const proceed = window.confirm('Clear the goal for this project? (the registry entry stays; only the goal is removed)');
+    if (!proceed) return;
+    await window.cairn.clearProjectGoal(selectedProject.id);
+    poll().catch(() => {});
+  });
+}
+
+function openGoalEditModal(existing) {
+  if (!selectedProject) return;
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl  = document.getElementById('modal-body');
+  titleEl.textContent = existing ? 'Edit goal' : 'Set goal';
+  // Inline form. Plain inputs — no framework, matches the rest of
+  // the panel. Multi-line criteria / non-goals: one item per line.
+  bodyEl.innerHTML =
+    `<div class="goal-form">` +
+      `<label>Title <span class="goal-form-hint">(required, 1 line)</span></label>` +
+      `<input id="goal-form-title" type="text" maxlength="200" />` +
+      `<label>Desired outcome <span class="goal-form-hint">(1-3 sentences)</span></label>` +
+      `<textarea id="goal-form-outcome" rows="3" maxlength="2000"></textarea>` +
+      `<label>Success criteria <span class="goal-form-hint">(one per line; verifiable)</span></label>` +
+      `<textarea id="goal-form-criteria" rows="4"></textarea>` +
+      `<label>Non-goals <span class="goal-form-hint">(one per line; out-of-scope reminders)</span></label>` +
+      `<textarea id="goal-form-nongoals" rows="3"></textarea>` +
+      `<div class="goal-form-actions">` +
+        `<button id="goal-form-save" type="button">Save</button>` +
+      `</div>` +
+    `</div>`;
+  overlay.classList.add('open');
+
+  // Pre-fill from existing.
+  if (existing) {
+    document.getElementById('goal-form-title').value    = existing.title || '';
+    document.getElementById('goal-form-outcome').value  = existing.desired_outcome || '';
+    document.getElementById('goal-form-criteria').value = (existing.success_criteria || []).join('\n');
+    document.getElementById('goal-form-nongoals').value = (existing.non_goals || []).join('\n');
+  }
+
+  document.getElementById('goal-form-save').addEventListener('click', async () => {
+    const title = document.getElementById('goal-form-title').value.trim();
+    if (!title) {
+      const err = document.getElementById('footer');
+      err.textContent = 'goal title required';
+      err.classList.add('bad');
+      setTimeout(() => {
+        err.textContent = 'read-only · polling 1s · Cairn project control surface';
+        err.classList.remove('bad');
+      }, 3000);
+      return;
+    }
+    const outcome  = document.getElementById('goal-form-outcome').value;
+    const criteria = document.getElementById('goal-form-criteria').value
+      .split('\n').map(s => s.trim()).filter(Boolean);
+    const nonGoals = document.getElementById('goal-form-nongoals').value
+      .split('\n').map(s => s.trim()).filter(Boolean);
+    const res = await window.cairn.setProjectGoal(selectedProject.id, {
+      title, desired_outcome: outcome,
+      success_criteria: criteria, non_goals: nonGoals,
+    });
+    if (res && res.ok) {
+      closeModal();
+      poll().catch(() => {});
+    } else {
+      const err = document.getElementById('footer');
+      err.textContent = `setProjectGoal failed: ${(res && res.error) || 'unknown'}`;
+      err.classList.add('bad');
+    }
+  });
+
+  // Focus the title field so the user can start typing immediately.
+  setTimeout(() => {
+    const t = document.getElementById('goal-form-title');
+    if (t) t.focus();
+  }, 50);
+}
+
+// ---------------------------------------------------------------------------
 // Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
 // ---------------------------------------------------------------------------
 //
@@ -1680,6 +1814,9 @@ async function poll() {
       // L2 view — Quick-Slice surface scoped to the active project.
       const summaryP = window.cairn.getProjectSummary();
       const pulseP   = window.cairn.getProjectPulse();
+      const goalP    = selectedProject
+        ? window.cairn.getProjectGoal(selectedProject.id)
+        : Promise.resolve(null);
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -1698,11 +1835,12 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
+      const [summary, pulse, goal, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
+      renderGoalCard(goal);
       renderPulse(pulse);
       renderSummary(summary);
 
@@ -1736,6 +1874,7 @@ async function poll() {
 
 setupTabs();
 setupMenu();
+setupGoalCard();
 setView('projects', null);
 poll();
 setInterval(poll, 1000);
