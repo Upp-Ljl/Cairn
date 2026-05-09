@@ -550,10 +550,26 @@
     border-bottom-color: #7af;
   }
 
-  /* Active view body */
-  #view-body {
+  /* L2 view container — must be a flex column scroll-host so that
+     the stack of cards (Goal / Rules / Interpretation / Pre-PR Gate
+     / Prompt Pack / Pulse / Summary) + Tabs + tab body all share
+     one scrollbar instead of pushing each other off-screen.
+     Without `overflow-y:auto + min-height:0`, the cards alone can
+     exceed the viewport and the user loses access to anything below. */
+  #view-project {
     flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
+  }
+
+  /* Active view body — sits inside the scrollable #view-project, so
+     it does not need its own scroll. Letting it grow naturally means
+     the tab content (which can be a long Tasks / Reports / Run Log
+     list) participates in the same outer scroll. */
+  #view-body {
+    flex: 0 0 auto;
     padding: 0;
   }
   .view { padding: 0; }
