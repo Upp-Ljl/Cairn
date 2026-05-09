@@ -24,6 +24,32 @@
 
   #app { display: flex; flex-direction: column; height: 100vh; }
 
+  /* Custom scrollbar — matches the Activity Monitor / journalctl
+     aesthetic (PRODUCT.md §8.3). Default Chromium scrollbars are
+     too wide and too bright for this panel's information density.
+     Applied globally; textareas + scroll containers inherit. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a2a2a;
+    border-radius: 4px;
+    border: 1px solid #1a1a1a;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a3a3a;
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background: #557;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   /* Header doubles as the custom titlebar (frame:false). The bar itself
      is draggable; interactive children (buttons, dropdown, etc.) opt
      out via -webkit-app-region: no-drag. */
