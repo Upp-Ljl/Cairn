@@ -1576,6 +1576,148 @@ function closeModal() {
 }
 
 // ---------------------------------------------------------------------------
+// Worker Reports renderer (Phase 3)
+// ---------------------------------------------------------------------------
+//
+// Reports come from the user pasting an agent's structured summary
+// into the Add modal, OR from a friendly agent calling the
+// add-worker-report IPC. The Reports tab lists the most recent ones,
+// newest-first; click a row to expand its sections inline.
+
+let lastReports = [];
+const expandedReportIds = new Set();
+
+function renderReports(reports) {
+  lastReports = Array.isArray(reports) ? reports : [];
+  const el = document.getElementById('reports-list');
+  if (!lastReports.length) {
+    el.innerHTML = '<div class="placeholder">no reports yet — paste an agent\'s "what I did / what\'s left / blockers" summary via Add report.</div>';
+    return;
+  }
+  el.innerHTML = lastReports.map(r => renderReportCard(r)).join('');
+  el.querySelectorAll('.report').forEach(card => {
+    card.addEventListener('click', () => {
+      const id = card.getAttribute('data-report-id');
+      if (expandedReportIds.has(id)) expandedReportIds.delete(id);
+      else expandedReportIds.add(id);
+      renderReports(lastReports);
+    });
+  });
+}
+
+function renderReportCard(r) {
+  const expanded = expandedReportIds.has(r.id);
+  const sourceChip = r.source_app
+    ? `<span class="report-source">${escapeHtml(r.source_app)}</span>` : '';
+  const needsHumanChip = r.needs_human
+    ? `<span class="report-needs-human">needs human</span>` : '';
+  const counts =
+    `done ${r.completed.length} · ` +
+    `remaining ${r.remaining.length} · ` +
+    `blockers ${r.blockers.length} · ` +
+    `next ${r.next_steps.length}`;
+  const sections = expanded
+    ? renderReportSections(r)
+    : '';
+  return (
+    `<div class="report" data-report-id="${escapeHtml(r.id)}">` +
+      `<div class="report-line1">` +
+        `<span class="report-title">${escapeHtml(r.title)}</span>` +
+        sourceChip +
+        needsHumanChip +
+        `<span class="report-meta">${escapeHtml(relTimeMs(r.created_at))}</span>` +
+      `</div>` +
+      `<div class="report-counts">${counts}</div>` +
+      sections +
+    `</div>`
+  );
+}
+
+function renderReportSections(r) {
+  const blocks = [];
+  function bullets(arr) {
+    return '<ul>' + arr.map(x => `<li>${escapeHtml(x)}</li>`).join('') + '</ul>';
+  }
+  if (r.completed.length) {
+    blocks.push(`<div class="report-section"><div class="head">COMPLETED</div>${bullets(r.completed)}</div>`);
+  }
+  if (r.remaining.length) {
+    blocks.push(`<div class="report-section"><div class="head">REMAINING</div>${bullets(r.remaining)}</div>`);
+  }
+  if (r.blockers.length) {
+    blocks.push(`<div class="report-section"><div class="head">BLOCKERS</div>${bullets(r.blockers)}</div>`);
+  }
+  if (r.next_steps.length) {
+    blocks.push(`<div class="report-section"><div class="head">NEXT STEPS</div>${bullets(r.next_steps)}</div>`);
+  }
+  if (Array.isArray(r.related_task_ids) && r.related_task_ids.length) {
+    blocks.push(
+      `<div class="report-section"><div class="head">RELATED TASKS</div>` +
+      r.related_task_ids.map(t => `<code style="margin-right:6px">${escapeHtml(t)}</code>`).join('') +
+      `</div>`
+    );
+  }
+  return blocks.join('');
+}
+
+function setupReportsTab() {
+  const addLink   = document.getElementById('reports-add-link');
+  const clearLink = document.getElementById('reports-clear-link');
+  if (addLink)   addLink.addEventListener('click', () => openAddReportModal());
+  if (clearLink) clearLink.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    const proceed = window.confirm('Clear ALL worker reports for this project? (the file is removed; cannot be undone)');
+    if (!proceed) return;
+    await window.cairn.clearWorkerReports(selectedProject.id);
+    poll().catch(() => {});
+  });
+}
+
+function openAddReportModal() {
+  if (!selectedProject) return;
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl  = document.getElementById('modal-body');
+  titleEl.textContent = 'Add worker report';
+  bodyEl.innerHTML =
+    `<div class="goal-form">` +
+      `<label>Paste the agent's summary <span class="goal-form-hint">(markdown sections recognized: Completed / Remaining / Blockers / Next steps)</span></label>` +
+      `<textarea id="report-form-text" rows="14" placeholder="# Title here\nsource: claude-code\n\n## Completed\n- did A\n\n## Blockers\n- waiting for X\n\nneeds_human: yes"></textarea>` +
+      `<div class="goal-form-actions">` +
+        `<button id="report-form-save" type="button">Save</button>` +
+      `</div>` +
+    `</div>`;
+  overlay.classList.add('open');
+  setTimeout(() => {
+    const t = document.getElementById('report-form-text');
+    if (t) t.focus();
+  }, 50);
+
+  document.getElementById('report-form-save').addEventListener('click', async () => {
+    const text = document.getElementById('report-form-text').value;
+    if (!text || !text.trim()) {
+      const err = document.getElementById('footer');
+      err.textContent = 'paste something into the report body first';
+      err.classList.add('bad');
+      setTimeout(() => {
+        err.textContent = 'read-only · polling 1s · Cairn project control surface';
+        err.classList.remove('bad');
+      }, 3000);
+      return;
+    }
+    const res = await window.cairn.addWorkerReport(selectedProject.id, { text });
+    if (res && res.ok) {
+      closeModal();
+      poll().catch(() => {});
+    } else {
+      const err = document.getElementById('footer');
+      err.textContent = `addWorkerReport failed: ${(res && res.error) || 'unknown'}`;
+      err.classList.add('bad');
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tab switching — track active tab so polling fetches only what's visible
 // ---------------------------------------------------------------------------
 
@@ -1588,6 +1730,7 @@ function setupTabs() {
     runlog:   document.getElementById('view-runlog'),
     tasks:    document.getElementById('view-tasks'),
     sessions: document.getElementById('view-sessions'),
+    reports:  document.getElementById('view-reports'),
   };
   tabs.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1931,6 +2074,9 @@ async function poll() {
       const sessionsP = activeTab === 'sessions'
         ? window.cairn.getProjectSessions()
         : Promise.resolve(null);
+      const reportsP = activeTab === 'reports' && selectedProject
+        ? window.cairn.listWorkerReports(selectedProject.id, 50)
+        : Promise.resolve(null);
       const detailP = selectedTaskId
         ? window.cairn.getTaskDetail(selectedTaskId)
         : Promise.resolve(null);
@@ -1938,8 +2084,8 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, interp, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, interpP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
+      const [summary, pulse, goal, interp, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, interpP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
@@ -1961,6 +2107,7 @@ async function poll() {
         selectedTaskCheckpoints = ckpts || [];
       }
       if (sessions) renderSessions(sessions);
+      if (reports) renderReports(reports);
     }
 
     // Reset footer if it was showing an error
@@ -1980,6 +2127,7 @@ setupTabs();
 setupMenu();
 setupGoalCard();
 setupInterpretationCard();
+setupReportsTab();
 setView('projects', null);
 poll();
 setInterval(poll, 1000);

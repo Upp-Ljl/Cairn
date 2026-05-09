@@ -40,6 +40,10 @@ const api = {
   refreshGoalInterpretation: (projectId, opts) =>
     ipcRenderer.invoke('refresh-goal-interpretation', projectId, opts || null),
   getLlmProviderInfo:        () => ipcRenderer.invoke('get-llm-provider-info'),
+  // Worker Reports (Phase 3)
+  addWorkerReport:    (projectId, input) => ipcRenderer.invoke('add-worker-report', projectId, input),
+  listWorkerReports:  (projectId, limit) => ipcRenderer.invoke('list-worker-reports', projectId, limit || 0),
+  clearWorkerReports: (projectId) => ipcRenderer.invoke('clear-worker-reports', projectId),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),

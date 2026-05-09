@@ -55,6 +55,7 @@ const agentActivity     = require('./agent-activity.cjs');
 const goalSignals       = require('./goal-signals.cjs');
 const goalInterpretation = require('./goal-interpretation.cjs');
 const llmClient         = require('./llm-client.cjs');
+const workerReports     = require('./worker-reports.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1117,11 +1118,10 @@ function buildInterpretationInput(proj, entry, agentIds) {
 
   const pulse = goalSignals.deriveProjectPulse(summary, built.activities, {});
   const goal = registry.getProjectGoal(reg, proj.id);
-  // Worker Reports (Phase 3) feed in here once landed. Until then,
-  // return an empty list so the interpretation runs against goal +
-  // pulse + activity alone.
-  const recentReports = (typeof readRecentWorkerReports === 'function')
-    ? readRecentWorkerReports(proj.id, 5) : [];
+  // Worker Reports — only counts/titles flow through; LLM never
+  // sees the report body via the interpretation path (the privacy
+  // boundary is in goal-interpretation.cjs::buildCompactState).
+  const recentReports = workerReports.listWorkerReports(proj.id, 5);
 
   return {
     goal,
@@ -1175,6 +1175,49 @@ ipcMain.handle('refresh-goal-interpretation', async (_e, projectId, opts) => {
 // Provider describe-self (NEVER includes the api key).
 ipcMain.handle('get-llm-provider-info', () => {
   return llmClient.describeProvider(llmClient.loadProvider());
+});
+
+// ---------------------------------------------------------------------------
+// Worker Reports (Phase 3)
+// ---------------------------------------------------------------------------
+//
+// Local, append-only, project-scoped. Storage lives at
+// ~/.cairn/project-reports/<projectId>.jsonl. Cairn does NOT auto-
+// extract reports from running agent transcripts; the user (or a
+// friendly agent that already produced a structured summary) drops
+// reports in via this IPC. The Goal Interpretation layer only ever
+// sees title + counts (see goal-interpretation.cjs::buildCompactState).
+
+ipcMain.handle('add-worker-report', (_e, projectId, input) => {
+  const o = (input && typeof input === 'object') ? input : {};
+  // Optional pre-parse: caller may pass `text` instead of structured
+  // fields. parseReportText handles common markdown layouts.
+  let parsed = null;
+  if (typeof o.text === 'string' && o.text.trim()) {
+    parsed = workerReports.parseReportText(o.text);
+  }
+  const merged = Object.assign({}, parsed || {}, {
+    title:            o.title            || (parsed && parsed.title)            || '',
+    source_app:       o.source_app       || (parsed && parsed.source_app)       || '',
+    session_id:       o.session_id       || (parsed && parsed.session_id)       || null,
+    agent_id:         o.agent_id         || (parsed && parsed.agent_id)         || null,
+    completed:        o.completed        || (parsed && parsed.completed)        || [],
+    remaining:        o.remaining        || (parsed && parsed.remaining)        || [],
+    blockers:         o.blockers         || (parsed && parsed.blockers)         || [],
+    next_steps:       o.next_steps       || (parsed && parsed.next_steps)       || [],
+    needs_human:      typeof o.needs_human === 'boolean' ? o.needs_human
+                      : (parsed ? parsed.needs_human : false),
+    related_task_ids: o.related_task_ids || (parsed && parsed.related_task_ids) || [],
+  });
+  return workerReports.addWorkerReport(projectId, merged);
+});
+
+ipcMain.handle('list-worker-reports', (_e, projectId, limit) => {
+  return workerReports.listWorkerReports(projectId, limit);
+});
+
+ipcMain.handle('clear-worker-reports', (_e, projectId) => {
+  return workerReports.clearWorkerReports(projectId);
 });
 
 // Project Pulse — derived signals only. No mutation, no recommendation

@@ -780,6 +780,79 @@
   }
   .sess-actions a:hover { color: #aef; }
 
+  /* Reports tab — worker report cards. Compact, like every other
+     L2 list. */
+  .reports-toolbar {
+    padding: 6px 12px;
+    background: #131313;
+    border-bottom: 1px solid #1e1e1e;
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+  }
+  .reports-toolbar a { color: #7af; cursor: pointer; font-size: 0.92em; }
+  .reports-toolbar a:hover { color: #aef; }
+  .report {
+    padding: 6px 12px;
+    border-bottom: 1px solid #1e1e1e;
+  }
+  .report-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .report-title {
+    color: #ddd;
+    font-weight: 600;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .report-source {
+    display: inline-block;
+    font-size: 0.66rem;
+    padding: 0 4px;
+    border-radius: 2px;
+    background: #20242a;
+    color: #88a;
+    text-transform: uppercase;
+  }
+  .report-meta { color: #666; font-size: 0.85em; }
+  .report-needs-human {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0 5px;
+    border-radius: 2px;
+    background: #3a2a10;
+    color: #ec8;
+    margin-left: 4px;
+  }
+  .report-counts {
+    color: #888;
+    font-size: 0.85em;
+    margin-top: 2px;
+    margin-left: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .report-section {
+    margin-top: 3px;
+    margin-left: 8px;
+    color: #aaa;
+    font-size: 0.88em;
+  }
+  .report-section .head {
+    color: #889;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .report-section ul {
+    margin: 1px 0 1px 16px;
+    padding: 0;
+  }
+  .report-section li { line-height: 1.4; }
+
   /* Tasks tab filter chip (Day 3 — when filtered by selectedAgentId) */
   .filter-chip {
     margin: 6px 12px;
@@ -1011,6 +1084,7 @@
       <button class="tab active" data-tab="runlog"   type="button">Run Log</button>
       <button class="tab"        data-tab="tasks"    type="button">Tasks</button>
       <button class="tab"        data-tab="sessions" type="button">Agent Activity</button>
+      <button class="tab"        data-tab="reports"  type="button">Reports</button>
     </div>
 
     <div id="view-body">
@@ -1028,6 +1102,15 @@
       <div id="view-sessions" class="view" hidden>
         <div id="sessions-list">
           <div class="placeholder">loading…</div>
+        </div>
+      </div>
+      <div id="view-reports" class="view" hidden>
+        <div id="reports-toolbar" class="reports-toolbar">
+          <a id="reports-add-link">+ Add report…</a>
+          <a id="reports-clear-link">clear all</a>
+        </div>
+        <div id="reports-list">
+          <div class="placeholder">no reports yet — paste an agent's "what I did / what's left / blockers" summary via Add report.</div>
         </div>
       </div>
     </div>
