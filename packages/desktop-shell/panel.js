@@ -1571,28 +1571,21 @@ let expandedActivityId = null;
 // Codex) so visual boundaries are preserved — Cairn shows distinct
 // signal sources, never one homogenized list.
 
+// Human family-group titles (UI hardening — round 3). Activity Monitor
+// uses "Working" / "Ready" / "Idle" — same vibe.
 function familyTitle(fam) {
   return ({
-    live:     'LIVE',
-    recent:   'RECENT',
-    inactive: 'INACTIVE',
-    dead:     'DEAD',
-    unknown:  'UNKNOWN',
+    live:     'Working now',
+    recent:   'Recent',
+    inactive: 'Inactive',
+    dead:     'Dead',
+    unknown:  'Unknown',
   })[fam] || fam.toUpperCase();
 }
 
 function familyAlertness(fam) {
-  // Title styling: dead is alert-red, recent is informational, live is positive.
   if (fam === 'dead') return 'alert';
   return '';
-}
-
-function appLabel(app) {
-  return ({
-    'mcp':         'MCP',
-    'claude-code': 'Claude Code',
-    'codex':       'Codex',
-  })[app] || app;
 }
 
 function appChipClass(app) {
@@ -1604,48 +1597,57 @@ function appChipClass(app) {
 }
 
 function attributionChip(a) {
-  if (!a.attribution) return '';
-  const label = ({
-    'capability': 'cap',
-    'hint':       'hint',
-    'cwd':        'cwd',
-  })[a.attribution] || a.attribution;
-  return `<span class="sess-attr" title="attributed by ${escapeHtml(a.attribution)}">${escapeHtml(label)}</span>`;
+  if (!a.attribution_label) return '';
+  // Compact form for the chip; full sentence is in detail card.
+  const compact = ({
+    'reported by Cairn MCP':     'MCP-reported',
+    'manually assigned':         'manual',
+    'matched by project folder': 'project folder',
+  })[a.attribution_label] || a.attribution_label;
+  return `<span class="sess-attr" title="${escapeHtml(a.attribution_label)}">${escapeHtml(compact)}</span>`;
 }
 
+// Detail card: technical fields. Shown only on click — primary view
+// reads as plain English.
 function renderActivityDetail(a) {
   const rows = [];
-  const kv = (k, v) => v != null && v !== '' ? `<div class="kv"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(String(v))}</span></div>` : '';
-  rows.push(kv('cwd', a.cwd || '(none)'));
-  rows.push(kv('session_id', a.session_id));
-  rows.push(kv('agent_id', a.agent_id));
-  rows.push(kv('pid', a.pid));
-  rows.push(kv('version', a.version));
-  rows.push(kv('source', a.source));
-  rows.push(kv('confidence', a.confidence));
-  rows.push(kv('attribution', a.attribution || '(unassigned)'));
-  rows.push(kv('last activity', a.last_activity_at ? relTimeMs(a.last_activity_at) : '?'));
+  const kv = (k, v) => v != null && v !== ''
+    ? `<div class="kv"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(String(v))}</span></div>`
+    : '';
+  rows.push(kv('Source',     a.source_label || a.source));
+  rows.push(kv('Confidence', a.confidence_label || a.confidence));
+  rows.push(kv('Attribution', a.attribution_label || '(unassigned)'));
+  rows.push(kv('State',      a.human_state_label));
+  if (a.state_explanation) {
+    rows.push(`<div class="kv"><span class="k">Why this state</span><span class="v" style="color:#aab">${escapeHtml(a.state_explanation)}</span></div>`);
+  }
+  rows.push(kv('Working folder', a.cwd || '(none)'));
+  rows.push(kv('Last activity', a.last_activity_at ? relTimeMs(a.last_activity_at) : '?'));
+  rows.push(kv('Session id', a.session_id));
+  rows.push(kv('Agent id',   a.agent_id));
+  rows.push(kv('PID',        a.pid));
+  rows.push(kv('Version',    a.version));
   if (a.app === 'mcp' && a.detail) {
-    rows.push(kv('agent_type', a.detail.agent_type));
-    rows.push(kv('raw status',  a.detail.raw_status));
-    rows.push(kv('heartbeat ttl', a.detail.heartbeat_ttl ? a.detail.heartbeat_ttl + 'ms' : null));
+    rows.push(kv('Agent type',    a.detail.agent_type));
+    rows.push(kv('Raw status',    a.detail.raw_status));
+    rows.push(kv('Heartbeat TTL', a.detail.heartbeat_ttl ? a.detail.heartbeat_ttl + 'ms' : null));
     if (Array.isArray(a.detail.capabilities) && a.detail.capabilities.length) {
       const caps = a.detail.capabilities.slice(0, 6).map(c => escapeHtml(c)).join(', ');
-      rows.push(`<div class="kv"><span class="k">capabilities</span><span class="v">${caps}${a.detail.capabilities.length > 6 ? ' …' : ''}</span></div>`);
+      rows.push(`<div class="kv"><span class="k">Capabilities</span><span class="v">${caps}${a.detail.capabilities.length > 6 ? ' …' : ''}</span></div>`);
     }
     if (a.detail.owns_tasks) {
       const o = a.detail.owns_tasks;
-      rows.push(kv('owns tasks', `R${o.RUNNING} / B${o.BLOCKED} / WR${o.WAITING_REVIEW} / D${o.DONE} / F${o.FAILED}`));
+      rows.push(kv('Owns tasks', `R${o.RUNNING} / B${o.BLOCKED} / WR${o.WAITING_REVIEW} / D${o.DONE} / F${o.FAILED}`));
     }
   } else if (a.app === 'claude-code' && a.detail) {
-    rows.push(kv('raw status', a.detail.raw_status));
-    rows.push(kv('reason',     a.detail.stale_reason));
-    rows.push(kv('started_at', a.detail.started_at ? relTimeMs(a.detail.started_at) : null));
+    rows.push(kv('Raw status', a.detail.raw_status));
+    rows.push(kv('Reason',     a.detail.stale_reason));
+    rows.push(kv('Started',    a.detail.started_at ? relTimeMs(a.detail.started_at) : null));
   } else if (a.app === 'codex' && a.detail) {
-    rows.push(kv('originator', a.detail.originator));
-    rows.push(kv('source app', a.detail.source_app));
-    rows.push(kv('reason',     a.detail.stale_reason));
-    rows.push(kv('started_at', a.detail.started_at ? relTimeMs(a.detail.started_at) : null));
+    rows.push(kv('Originator', a.detail.originator));
+    rows.push(kv('Source app', a.detail.source_app));
+    rows.push(kv('Reason',     a.detail.stale_reason));
+    rows.push(kv('Started',    a.detail.started_at ? relTimeMs(a.detail.started_at) : null));
   }
   return `<div class="act-detail">${rows.filter(Boolean).join('')}</div>`;
 }
@@ -1654,70 +1656,49 @@ function renderActivityRow(a, opts) {
   const allowFilter = !!(opts && opts.allowFilter);
   const allowRegister = !!(opts && opts.allowRegisterFromCwd);
   const projectRoot = opts && opts.projectRoot;
-  const stateUpper = (a.state || 'unknown').toUpperCase();
-  const stateClass = stateUpper; // CSS classes share the .s-XXX tail (s-ACTIVE/s-BUSY/s-RECENT/...)
   const cwdShort = shortPathInProject(a.cwd, projectRoot);
   const ageTxt = a.last_activity_at ? relTimeMs(a.last_activity_at) : '?';
   const expanded = (expandedActivityId === a.id);
+
+  // Friendly state badge — uses the human label, not the raw state.
+  // Lookup by (uppercased) raw state still drives badge color so
+  // existing CSS rules apply. We map to a capitalized human label
+  // for the visible text.
+  const stateClass = (a.state || 'unknown').toUpperCase();
+  const humanState = a.human_state_label || 'Unknown';
+
+  const displayLabel = a.display_label
+    || `${(a.app_label || a.app)} · ${(a.short_label || '')}`;
 
   const actions = [];
   if (allowFilter && a.app === 'mcp' && a.agent_id) {
     actions.push(`<a data-act="filter-tasks" data-agent="${escapeHtml(a.agent_id)}">filter Tasks tab →</a>`);
   }
   if (allowRegister && a.cwd) {
-    actions.push(`<a data-act="register-project" data-cwd="${escapeHtml(a.cwd)}">Register project from this cwd…</a>`);
+    actions.push(`<a data-act="register-project" data-cwd="${escapeHtml(a.cwd)}">Register project from this folder…</a>`);
   }
 
   const detailHtml = expanded ? renderActivityDetail(a) : '';
 
+  // Secondary line: short, plain English. No raw pid / source path.
+  // The user clicks through if they need those.
+  const cwdLine = a.cwd
+    ? `<div class="sess-line2"><code>${escapeHtml(cwdShort)}</code></div>`
+    : '';
+  const attrChip = attributionChip(a);
+
   return (
     `<div class="sess${expanded ? ' selected' : ''}" data-activity-id="${escapeHtml(a.id)}">` +
       `<div class="sess-line1">` +
-        `<span class="sess-state s-${escapeHtml(stateClass)}">${escapeHtml(stateUpper)}</span>` +
-        `<span class="sess-id">` +
-          `<code>${escapeHtml(a.display_name)}</code> ` +
-          `<span class="sess-source ${escapeHtml(appChipClass(a.app))}">${escapeHtml(appLabel(a.app))}</span>` +
-          attributionChip(a) +
-        `</span>` +
+        `<span class="sess-state s-${escapeHtml(stateClass)}">${escapeHtml(humanState)}</span>` +
+        `<span class="sess-id">${escapeHtml(displayLabel)} ${attrChip}</span>` +
         `<span class="sess-meta">${escapeHtml(ageTxt)}</span>` +
       `</div>` +
-      (a.cwd
-        ? `<div class="sess-line2" style="margin-left:78px"><code>${escapeHtml(cwdShort)}</code></div>`
-        : '') +
-      `<div class="sess-line3" style="margin-left:78px">` +
-        renderActivitySecondary(a) +
-      `</div>` +
+      cwdLine +
       detailHtml +
       (actions.length ? `<div class="sess-actions">${actions.join('')}</div>` : '') +
     `</div>`
   );
-}
-
-function renderActivitySecondary(a) {
-  // Source-specific informational line — cheap to glance, no action.
-  if (a.app === 'mcp') {
-    const o = a.detail && a.detail.owns_tasks;
-    const taskBit = o
-      ? ` · tasks R${o.RUNNING}/B${o.BLOCKED}/WR${o.WAITING_REVIEW}/D${o.DONE}/F${o.FAILED}`
-      : '';
-    return `${escapeHtml(a.detail && a.detail.agent_type || '?')}${taskBit}`;
-  }
-  if (a.app === 'claude-code') {
-    const pidTxt = a.pid != null ? `pid ${a.pid}` : 'no pid';
-    const verTxt = a.version ? ` · ${escapeHtml(a.version)}` : '';
-    const reasonTxt = a.detail && a.detail.stale_reason
-      ? ` <span style="color:#666">[${escapeHtml(a.detail.stale_reason)}]</span>` : '';
-    return `${escapeHtml(pidTxt)}${verTxt}${reasonTxt}`;
-  }
-  if (a.app === 'codex') {
-    const orig = a.detail && a.detail.originator
-      ? `<span style="color:#888">${escapeHtml(a.detail.originator)}</span>`
-      : `<span style="color:#555">(no originator)</span>`;
-    const verTxt = a.version ? ` · ${escapeHtml(a.version)}` : '';
-    const appTxt = a.detail && a.detail.source_app ? ` · ${escapeHtml(a.detail.source_app)}` : '';
-    return `${orig}${verTxt}${appTxt}`;
-  }
-  return '';
 }
 
 const FAMILY_ORDER = ['live', 'recent', 'inactive', 'dead', 'unknown'];
@@ -1789,8 +1770,8 @@ function renderSessions(payload) {
   lastSessions = payload.sessions || [];
   if (!activities.length) {
     el.innerHTML = (
-      '<div class="placeholder">no agent activity matched this project<br>'
-      + 'open Claude Code, Codex, or an MCP-enabled agent in this project\'s folder to see presence here'
+      '<div class="placeholder">No agents seen in this project yet.<br>'
+      + 'Open Claude Code, Codex, or a Cairn-MCP-enabled runner inside this project\'s folder and they\'ll show up here.'
       + '</div>'
     );
     return;
@@ -1860,14 +1841,22 @@ function renderUnassignedDetail(detail) {
   // typically don't).
   const activities = Array.isArray(detail.activities) ? detail.activities : [];
   if (!activities.length && !detail.agents.length) {
-    listEl.innerHTML = '<div class="placeholder">no unassigned agents — every presence row in this DB belongs to some registered project</div>';
+    listEl.innerHTML = '<div class="placeholder">Nothing unassigned right now — every agent in this DB is matched to a registered project.</div>';
     return;
   }
+  // Header banner so users see "these agents are not in any project,
+  // here\'s how to fix it" instead of just an opaque list.
+  const banner =
+    `<div style="padding:6px 12px;color:#aab;font-size:0.88em;background:#181818;border-bottom:1px solid #1e1e1e">` +
+      `These agents are not assigned to any project. ` +
+      `For Claude Code / Codex rows, click <b>Register project from this folder…</b> to mint a project. ` +
+      `For Cairn MCP rows, click <b>Add to project…</b> to attach them to an existing project.` +
+    `</div>`;
   // Render the unified list. MCP rows still need the "Add to project…"
   // action (manual hint attribution for legacy / pre-v2 rows). Claude /
   // Codex rows need "Register project from this cwd…" to mint a new
   // project entry. Both come from the same row map below.
-  let html = renderActivityBlock(activities, {
+  let html = banner + renderActivityBlock(activities, {
     projectRoot: null,
     allowFilter: false,
     allowRegisterFromCwd: true,

@@ -990,17 +990,22 @@
   .sess:hover { background: #181818; }
   .sess-line1 {
     display: grid;
-    grid-template-columns: 70px 1fr 80px;
+    grid-template-columns: 86px 1fr 80px;
     column-gap: 8px;
     align-items: baseline;
   }
   .sess-state {
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     padding: 1px 6px;
     border-radius: 3px;
     text-align: center;
     background: #2a2a2a;
     color: #aaa;
+    /* New: human labels (Working / Ready / Inactive / …) are longer
+       than the old uppercase codes; ellipsize if any overflows. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .sess-state.s-ACTIVE { background: #1a3a1a; color: #7e7; }
   .sess-state.s-STALE  { background: #3a2a10; color: #ec8; }
@@ -1048,7 +1053,7 @@
   /* Inline expanded detail card under an Agent Activity row */
   .act-detail {
     margin-top: 4px;
-    margin-left: 78px;
+    margin-left: 94px;
     padding: 4px 8px 4px 0;
     border-top: 1px dashed #2a2a2a;
     color: #aaa;
@@ -1066,7 +1071,7 @@
   .sess-id .at-type { color: #88a; }
   .sess-meta { color: #666; font-size: 0.85em; text-align: right; }
   .sess-line2, .sess-line3 {
-    margin-left: 78px;
+    margin-left: 94px;
     color: #888;
     font-size: 0.85em;
     overflow: hidden;
@@ -1089,7 +1094,7 @@
     color: #aac;
   }
   .sess-actions {
-    margin-left: 78px;
+    margin-left: 94px;
     margin-top: 4px;
     font-size: 0.78rem;
   }
