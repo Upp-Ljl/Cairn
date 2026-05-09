@@ -383,6 +383,56 @@
   .pre-pr-risks .risk-item.watch     { color: #ec8; }
   .pre-pr-risks .risk-item .detail   { color: #777; }
 
+  /* Goal Loop Prompt Pack preview card. */
+  .prompt-pack-card {
+    padding: 6px 12px 8px;
+    background: #131520;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #prompt-pack-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .prompt-pack-label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.74rem;
+    color: #779;
+    flex: 0 0 auto;
+  }
+  .prompt-pack-meta {
+    color: #666;
+    font-size: 0.82em;
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .prompt-pack-copy, .prompt-pack-close {
+    color: #7af;
+    cursor: pointer;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+    margin-left: 8px;
+  }
+  .prompt-pack-copy:hover, .prompt-pack-close:hover { color: #aef; }
+  .prompt-pack-text {
+    width: 100%;
+    margin-top: 4px;
+    background: #0a0a0a;
+    color: #ccc;
+    border: 1px solid #2a2a2a;
+    padding: 6px 8px;
+    font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    line-height: 1.45;
+    resize: vertical;
+  }
+
   /* Project Pulse strip — sits above the summary card on L2.
      Compact, read-only, "needs attention?" signal only. Color matches
      the tray semantics: dim green = ok, amber = watch, red = attention.
@@ -1223,10 +1273,26 @@
         <span id="pre-pr-meta" class="pre-pr-meta"></span>
         <a id="pre-pr-refresh-link" class="pre-pr-refresh">Refresh</a>
         <a id="pre-pr-copy-link" class="pre-pr-copy">copy checklist</a>
+        <a id="pre-pr-prompt-pack-link" class="pre-pr-copy">Generate next worker prompt</a>
       </div>
       <div id="pre-pr-summary" class="pre-pr-summary" hidden></div>
       <div id="pre-pr-checklist" class="pre-pr-checklist" hidden></div>
       <div id="pre-pr-risks" class="pre-pr-risks" hidden></div>
+    </div>
+    <!--
+      Goal Loop Prompt Pack preview. Hidden by default; revealed
+      after the user clicks Generate. The textarea holds the full
+      composed prompt; "copy prompt" puts it on the clipboard.
+      Cairn does NOT send this — it's for the user to paste.
+    -->
+    <div id="prompt-pack-card" class="prompt-pack-card" hidden>
+      <div id="prompt-pack-line1">
+        <span class="prompt-pack-label">NEXT WORKER PROMPT</span>
+        <span id="prompt-pack-meta" class="prompt-pack-meta"></span>
+        <a id="prompt-pack-copy" class="prompt-pack-copy">copy prompt</a>
+        <a id="prompt-pack-close" class="prompt-pack-close">×</a>
+      </div>
+      <textarea id="prompt-pack-text" class="prompt-pack-text" readonly rows="12"></textarea>
     </div>
     <!--
       Project Pulse — read-only derived signals.

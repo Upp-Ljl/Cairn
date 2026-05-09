@@ -52,6 +52,9 @@ const api = {
   // Pre-PR Gate (advisory)
   getPrePrGate:       (projectId) => ipcRenderer.invoke('get-pre-pr-gate', projectId),
   refreshPrePrGate:   (projectId, opts) => ipcRenderer.invoke('refresh-pre-pr-gate', projectId, opts || null),
+  // Goal Loop Prompt Pack (copy-pasteable; user-driven, no auto-send)
+  getPromptPack:      (projectId) => ipcRenderer.invoke('get-prompt-pack', projectId),
+  generatePromptPack: (projectId, opts) => ipcRenderer.invoke('generate-prompt-pack', projectId, opts || null),
   removeProject:      (id) => ipcRenderer.invoke('remove-project', id),
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),

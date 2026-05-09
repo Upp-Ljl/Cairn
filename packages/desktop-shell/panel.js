@@ -599,6 +599,66 @@ function renderPrePrGate(gate) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Goal Loop Prompt Pack renderer (advisory; copy-pasteable; not auto-sent)
+// ---------------------------------------------------------------------------
+
+let lastPromptPack = null;
+let promptPackLoading = false;
+
+function renderPromptPack(pack) {
+  lastPromptPack = pack || null;
+  const card = document.getElementById('prompt-pack-card');
+  if (!card) return;
+  if (!pack) { card.hidden = true; return; }
+  card.hidden = false;
+  const meta = [];
+  if (pack.mode) meta.push(pack.mode);
+  if (pack.model) meta.push(pack.model);
+  if (pack.error_code) meta.push(`fallback: ${pack.error_code}`);
+  if (pack.generated_at) meta.push(relTimeMs(pack.generated_at));
+  document.getElementById('prompt-pack-meta').textContent = meta.join(' · ');
+  document.getElementById('prompt-pack-text').value = pack.prompt || '';
+}
+
+function setupPromptPack() {
+  const gen   = document.getElementById('pre-pr-prompt-pack-link');
+  const copy  = document.getElementById('prompt-pack-copy');
+  const close = document.getElementById('prompt-pack-close');
+  if (gen) gen.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    if (promptPackLoading) return;
+    promptPackLoading = true;
+    const meta = document.getElementById('prompt-pack-meta');
+    const card = document.getElementById('prompt-pack-card');
+    if (card) card.hidden = false;
+    if (meta) meta.textContent = 'generating…';
+    try {
+      const res = await window.cairn.generatePromptPack(selectedProject.id, {});
+      if (res && res.ok) {
+        renderPromptPack(res.result);
+      } else {
+        const footer = document.getElementById('footer');
+        footer.textContent = `prompt-pack failed: ${(res && res.error) || 'unknown'}`;
+        footer.classList.add('bad');
+      }
+    } finally {
+      promptPackLoading = false;
+    }
+  });
+  if (copy) copy.addEventListener('click', async () => {
+    if (!lastPromptPack || !lastPromptPack.prompt) return;
+    try {
+      await navigator.clipboard.writeText(lastPromptPack.prompt);
+      copy.textContent = 'copied';
+      setTimeout(() => { copy.textContent = 'copy prompt'; }, 1200);
+    } catch (_e) { /* clipboard unavailable */ }
+  });
+  if (close) close.addEventListener('click', () => {
+    document.getElementById('prompt-pack-card').hidden = true;
+  });
+}
+
 function setupPrePrGateCard() {
   const refresh = document.getElementById('pre-pr-refresh-link');
   const copy    = document.getElementById('pre-pr-copy-link');
@@ -2295,6 +2355,9 @@ async function poll() {
       const gateP    = selectedProject
         ? window.cairn.getPrePrGate(selectedProject.id)
         : Promise.resolve(null);
+      const packP    = selectedProject
+        ? window.cairn.getPromptPack(selectedProject.id)
+        : Promise.resolve(null);
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -2316,8 +2379,8 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, rules, interp, gate, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, rulesP, interpP, gateP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
+      const [summary, pulse, goal, rules, interp, gate, pack, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, rulesP, interpP, gateP, packP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
@@ -2325,6 +2388,7 @@ async function poll() {
       renderRulesCard(rules);
       renderInterpretation(interp);
       renderPrePrGate(gate);
+      renderPromptPack(pack);
       renderPulse(pulse);
       renderSummary(summary);
 
@@ -2363,6 +2427,7 @@ setupGoalCard();
 setupRulesCard();
 setupInterpretationCard();
 setupPrePrGateCard();
+setupPromptPack();
 setupReportsTab();
 setView('projects', null);
 poll();

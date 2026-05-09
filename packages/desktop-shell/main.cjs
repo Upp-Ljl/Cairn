@@ -57,6 +57,7 @@ const goalInterpretation = require('./goal-interpretation.cjs');
 const llmClient         = require('./llm-client.cjs');
 const workerReports     = require('./worker-reports.cjs');
 const prePrGate         = require('./pre-pr-gate.cjs');
+const goalLoopPromptPack = require('./goal-loop-prompt-pack.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1316,6 +1317,46 @@ ipcMain.handle('refresh-pre-pr-gate', async (_e, projectId, opts) => {
     result,
     generated_at: Date.now(),
   });
+  return { ok: true, result };
+});
+
+// ---------------------------------------------------------------------------
+// Goal Loop Prompt Pack — copy-pasteable next-round prompt
+// ---------------------------------------------------------------------------
+//
+// User clicks "Generate next worker prompt" in the panel; we build a
+// pack from current state and (optionally) ask the LLM to rephrase
+// non-binding sections. Cairn never sends the prompt to an agent —
+// the user copies it themselves.
+
+/** @type {Map<string, { result: object, generated_at: number }>} */
+const promptPackCache = new Map();
+
+ipcMain.handle('get-prompt-pack', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const cached = promptPackCache.get(projectId);
+  return cached ? cached.result : null;
+});
+
+ipcMain.handle('generate-prompt-pack', async (_e, projectId, opts) => {
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  // Reuse the gate input — same shape (goal + rules + state + reports);
+  // also pass the cached gate result if available so the pack
+  // checklist can dedupe against it.
+  const input = Object.assign({}, buildPrePrGateInput(proj, entry, agentIds), {
+    pre_pr_gate: prePrGateCache.get(projectId)
+      ? prePrGateCache.get(projectId).result
+      : null,
+  });
+  const force = !!(opts && opts.forceDeterministic);
+  const result = await goalLoopPromptPack.generatePromptPack(input, {
+    forceDeterministic: force,
+  });
+  promptPackCache.set(projectId, { result, generated_at: Date.now() });
   return { ok: true, result };
 });
 
