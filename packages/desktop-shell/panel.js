@@ -187,42 +187,32 @@ function renderSummary(summary) {
     return;
   }
 
-  // L2 active-agents cell: show "MCP X · Claude Y · Codex Z" when any
-  // non-MCP source contributes to this project, otherwise just the MCP
-  // count. The cell CSS expects a number-or-"—" — for the multi-source
-  // case we put the composite string and add the same severity classes
-  // manually.
+  // L2 active-agents cell: show the agent_activity headline (live /
+  // recent / inactive / dead). The per-source MCP / Claude / Codex
+  // split is still rendered on the L1 card and on the project detail
+  // panel, so the L2 summary stays focused on "what should I look at
+  // first?". When no agent_activity field is present (very old payload)
+  // we fall back to MCP count alone.
   const sAgents = document.getElementById('s-agents');
-  const mcpCount = summary.agents_active || 0;
-  const claudeBusy = summary.claude_busy || 0;
-  const claudeIdle = summary.claude_idle || 0;
-  const claudeLive = claudeBusy + claudeIdle;
-  const claudeTotal = summary.claude_total || 0;
-  const codexRecent = summary.codex_recent || 0;
-  const codexTotal  = summary.codex_total  || 0;
-  if (claudeLive > 0 || claudeTotal > 0 || codexTotal > 0) {
+  const aa = summary.agent_activity || null;
+  const fam = aa ? aa.by_family : null;
+  if (fam) {
     sAgents.classList.remove('zero', 'warn', 'alert');
-    let html =
-      `<span class="${mcpCount === 0 ? 'zero' : ''}">MCP ${mcpCount}</span>`;
-    if (claudeTotal > 0) {
-      html +=
-        `<span style="color:#445;padding:0 4px">·</span>` +
-        `<span class="${claudeLive === 0 ? 'zero' : ''}">Claude ${claudeLive}</span>` +
-        ((summary.claude_dead || 0) > 0
-          ? ` <span style="color:#666;font-size:0.85em">(+${summary.claude_dead} dead)</span>`
-          : '');
-    }
-    if (codexTotal > 0) {
-      html +=
-        `<span style="color:#445;padding:0 4px">·</span>` +
-        `<span class="${codexRecent === 0 ? 'zero' : ''}">Codex ${codexRecent}</span>` +
-        ((summary.codex_inactive || 0) > 0
-          ? ` <span style="color:#666;font-size:0.85em">(+${summary.codex_inactive} inactive)</span>`
-          : '');
-    }
-    sAgents.innerHTML = html;
+    const liveCls   = fam.live   === 0 ? 'zero' : '';
+    const recentCls = fam.recent === 0 ? 'zero' : '';
+    const inactCls  = 'zero';
+    const deadHtml = fam.dead
+      ? `<span style="color:#445;padding:0 4px">·</span>` +
+        `<span class="alert">${fam.dead} dead</span>` : '';
+    sAgents.innerHTML =
+      `<span class="${liveCls}">${fam.live} live</span>` +
+      `<span style="color:#445;padding:0 4px">·</span>` +
+      `<span class="${recentCls}">${fam.recent} recent</span>` +
+      `<span style="color:#445;padding:0 4px">·</span>` +
+      `<span class="${inactCls}">${fam.inactive} inactive</span>` +
+      deadHtml;
   } else {
-    setSummaryCell(sAgents, mcpCount);
+    setSummaryCell(sAgents, summary.agents_active || 0);
   }
 
   // tasks: present three numbers in one cell, color by worst (alert if any FAIL,
@@ -817,62 +807,203 @@ function renderCodexSessionsBlock(rows, opts) {
 }
 
 let lastSessions = [];
+// AgentActivity expansion state — survives polls so a click stays open.
+let expandedActivityId = null;
 
-function renderSessions(payload) {
-  const el = document.getElementById('sessions-list');
-  if (!payload || !payload.available) {
-    el.innerHTML = '<div class="placeholder">no sessions data — DB not connected</div>';
-    return;
-  }
-  const sessions = payload.sessions || [];
-  const claudeSessions = payload.claude_sessions || [];
-  const codexSessions  = payload.codex_sessions  || [];
-  lastSessions = sessions;
-  if (!sessions.length && !claudeSessions.length && !codexSessions.length) {
-    el.innerHTML = (
-      '<div class="placeholder">no sessions matched this project<br>'
-      + 'open Claude Code, Codex, or an MCP-enabled agent in this project\'s folder to see live presence here'
-      + '</div>'
-    );
-    return;
-  }
-  // MCP rows: group ACTIVE / STALE / OTHER (DEAD or IDLE).
-  const groups = { ACTIVE: [], STALE: [], OTHER: [] };
-  for (const s of sessions) {
-    if (s.computed_state === 'ACTIVE')      groups.ACTIVE.push(s);
-    else if (s.computed_state === 'STALE')  groups.STALE.push(s);
-    else                                    groups.OTHER.push(s);
-  }
-  let html = '';
-  if (sessions.length) {
-    html += `<div class="sess-group-title">CAIRN MCP SESSIONS (${sessions.length})</div>`;
-    if (groups.ACTIVE.length) {
-      html += `<div class="sess-group-title">ACTIVE (${groups.ACTIVE.length})</div>`;
-      html += groups.ACTIVE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
-    }
-    if (groups.STALE.length) {
-      html += `<div class="sess-group-title alert">STALE (${groups.STALE.length})</div>`;
-      html += groups.STALE.map(s => renderSessionRow(s, { allowFilter: true })).join('');
-    }
-    if (groups.OTHER.length) {
-      html += `<div class="sess-group-title">DEAD / IDLE (${groups.OTHER.length})</div>`;
-      html += groups.OTHER.map(s => renderSessionRow(s, { allowFilter: true })).join('');
-    }
-  }
-  // Claude Code rows: rendered as a separate block to keep the source
-  // boundary visible and avoid faking a Cairn agent_id we don't have.
-  if (claudeSessions.length) {
-    const projectRoot = selectedProject ? selectedProject.project_root : null;
-    html += renderClaudeSessionsBlock(claudeSessions, { projectRoot });
-  }
-  // Codex rollout-file rows: same boundary-preserving treatment.
-  if (codexSessions.length) {
-    const projectRoot = selectedProject ? selectedProject.project_root : null;
-    html += renderCodexSessionsBlock(codexSessions, { projectRoot });
-  }
-  el.innerHTML = html;
+// ---------------------------------------------------------------------------
+// Agent Activity Layer renderer (Layer v1)
+// ---------------------------------------------------------------------------
+//
+// Consumes the unified activity[] feed from main.cjs (built by
+// agent-activity.cjs). Renders one row per activity, grouped by
+// state_family. Each row keeps its source chip (MCP / Claude Code /
+// Codex) so visual boundaries are preserved — Cairn shows distinct
+// signal sources, never one homogenized list.
 
-  el.querySelectorAll('.sess-actions a[data-act="filter-tasks"]').forEach(a => {
+function familyTitle(fam) {
+  return ({
+    live:     'LIVE',
+    recent:   'RECENT',
+    inactive: 'INACTIVE',
+    dead:     'DEAD',
+    unknown:  'UNKNOWN',
+  })[fam] || fam.toUpperCase();
+}
+
+function familyAlertness(fam) {
+  // Title styling: dead is alert-red, recent is informational, live is positive.
+  if (fam === 'dead') return 'alert';
+  return '';
+}
+
+function appLabel(app) {
+  return ({
+    'mcp':         'MCP',
+    'claude-code': 'Claude Code',
+    'codex':       'Codex',
+  })[app] || app;
+}
+
+function appChipClass(app) {
+  return ({
+    'mcp':         's-mcp',
+    'claude-code': 's-claude',
+    'codex':       's-codex',
+  })[app] || '';
+}
+
+function attributionChip(a) {
+  if (!a.attribution) return '';
+  const label = ({
+    'capability': 'cap',
+    'hint':       'hint',
+    'cwd':        'cwd',
+  })[a.attribution] || a.attribution;
+  return `<span class="sess-attr" title="attributed by ${escapeHtml(a.attribution)}">${escapeHtml(label)}</span>`;
+}
+
+function renderActivityDetail(a) {
+  const rows = [];
+  const kv = (k, v) => v != null && v !== '' ? `<div class="kv"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(String(v))}</span></div>` : '';
+  rows.push(kv('cwd', a.cwd || '(none)'));
+  rows.push(kv('session_id', a.session_id));
+  rows.push(kv('agent_id', a.agent_id));
+  rows.push(kv('pid', a.pid));
+  rows.push(kv('version', a.version));
+  rows.push(kv('source', a.source));
+  rows.push(kv('confidence', a.confidence));
+  rows.push(kv('attribution', a.attribution || '(unassigned)'));
+  rows.push(kv('last activity', a.last_activity_at ? relTimeMs(a.last_activity_at) : '?'));
+  if (a.app === 'mcp' && a.detail) {
+    rows.push(kv('agent_type', a.detail.agent_type));
+    rows.push(kv('raw status',  a.detail.raw_status));
+    rows.push(kv('heartbeat ttl', a.detail.heartbeat_ttl ? a.detail.heartbeat_ttl + 'ms' : null));
+    if (Array.isArray(a.detail.capabilities) && a.detail.capabilities.length) {
+      const caps = a.detail.capabilities.slice(0, 6).map(c => escapeHtml(c)).join(', ');
+      rows.push(`<div class="kv"><span class="k">capabilities</span><span class="v">${caps}${a.detail.capabilities.length > 6 ? ' …' : ''}</span></div>`);
+    }
+    if (a.detail.owns_tasks) {
+      const o = a.detail.owns_tasks;
+      rows.push(kv('owns tasks', `R${o.RUNNING} / B${o.BLOCKED} / WR${o.WAITING_REVIEW} / D${o.DONE} / F${o.FAILED}`));
+    }
+  } else if (a.app === 'claude-code' && a.detail) {
+    rows.push(kv('raw status', a.detail.raw_status));
+    rows.push(kv('reason',     a.detail.stale_reason));
+    rows.push(kv('started_at', a.detail.started_at ? relTimeMs(a.detail.started_at) : null));
+  } else if (a.app === 'codex' && a.detail) {
+    rows.push(kv('originator', a.detail.originator));
+    rows.push(kv('source app', a.detail.source_app));
+    rows.push(kv('reason',     a.detail.stale_reason));
+    rows.push(kv('started_at', a.detail.started_at ? relTimeMs(a.detail.started_at) : null));
+  }
+  return `<div class="act-detail">${rows.filter(Boolean).join('')}</div>`;
+}
+
+function renderActivityRow(a, opts) {
+  const allowFilter = !!(opts && opts.allowFilter);
+  const allowRegister = !!(opts && opts.allowRegisterFromCwd);
+  const projectRoot = opts && opts.projectRoot;
+  const stateUpper = (a.state || 'unknown').toUpperCase();
+  const stateClass = stateUpper; // CSS classes share the .s-XXX tail (s-ACTIVE/s-BUSY/s-RECENT/...)
+  const cwdShort = shortPathInProject(a.cwd, projectRoot);
+  const ageTxt = a.last_activity_at ? relTimeMs(a.last_activity_at) : '?';
+  const expanded = (expandedActivityId === a.id);
+
+  const actions = [];
+  if (allowFilter && a.app === 'mcp' && a.agent_id) {
+    actions.push(`<a data-act="filter-tasks" data-agent="${escapeHtml(a.agent_id)}">filter Tasks tab →</a>`);
+  }
+  if (allowRegister && a.cwd) {
+    actions.push(`<a data-act="register-project" data-cwd="${escapeHtml(a.cwd)}">Register project from this cwd…</a>`);
+  }
+
+  const detailHtml = expanded ? renderActivityDetail(a) : '';
+
+  return (
+    `<div class="sess${expanded ? ' selected' : ''}" data-activity-id="${escapeHtml(a.id)}">` +
+      `<div class="sess-line1">` +
+        `<span class="sess-state s-${escapeHtml(stateClass)}">${escapeHtml(stateUpper)}</span>` +
+        `<span class="sess-id">` +
+          `<code>${escapeHtml(a.display_name)}</code> ` +
+          `<span class="sess-source ${escapeHtml(appChipClass(a.app))}">${escapeHtml(appLabel(a.app))}</span>` +
+          attributionChip(a) +
+        `</span>` +
+        `<span class="sess-meta">${escapeHtml(ageTxt)}</span>` +
+      `</div>` +
+      (a.cwd
+        ? `<div class="sess-line2" style="margin-left:78px"><code>${escapeHtml(cwdShort)}</code></div>`
+        : '') +
+      `<div class="sess-line3" style="margin-left:78px">` +
+        renderActivitySecondary(a) +
+      `</div>` +
+      detailHtml +
+      (actions.length ? `<div class="sess-actions">${actions.join('')}</div>` : '') +
+    `</div>`
+  );
+}
+
+function renderActivitySecondary(a) {
+  // Source-specific informational line — cheap to glance, no action.
+  if (a.app === 'mcp') {
+    const o = a.detail && a.detail.owns_tasks;
+    const taskBit = o
+      ? ` · tasks R${o.RUNNING}/B${o.BLOCKED}/WR${o.WAITING_REVIEW}/D${o.DONE}/F${o.FAILED}`
+      : '';
+    return `${escapeHtml(a.detail && a.detail.agent_type || '?')}${taskBit}`;
+  }
+  if (a.app === 'claude-code') {
+    const pidTxt = a.pid != null ? `pid ${a.pid}` : 'no pid';
+    const verTxt = a.version ? ` · ${escapeHtml(a.version)}` : '';
+    const reasonTxt = a.detail && a.detail.stale_reason
+      ? ` <span style="color:#666">[${escapeHtml(a.detail.stale_reason)}]</span>` : '';
+    return `${escapeHtml(pidTxt)}${verTxt}${reasonTxt}`;
+  }
+  if (a.app === 'codex') {
+    const orig = a.detail && a.detail.originator
+      ? `<span style="color:#888">${escapeHtml(a.detail.originator)}</span>`
+      : `<span style="color:#555">(no originator)</span>`;
+    const verTxt = a.version ? ` · ${escapeHtml(a.version)}` : '';
+    const appTxt = a.detail && a.detail.source_app ? ` · ${escapeHtml(a.detail.source_app)}` : '';
+    return `${orig}${verTxt}${appTxt}`;
+  }
+  return '';
+}
+
+const FAMILY_ORDER = ['live', 'recent', 'inactive', 'dead', 'unknown'];
+
+function renderActivityBlock(activities, opts) {
+  if (!activities || !activities.length) return '';
+  const groups = { live: [], recent: [], inactive: [], dead: [], unknown: [] };
+  for (const a of activities) {
+    const f = a.state_family in groups ? a.state_family : 'unknown';
+    groups[f].push(a);
+  }
+  let out = '';
+  for (const fam of FAMILY_ORDER) {
+    const list = groups[fam];
+    if (!list.length) continue;
+    const cls = familyAlertness(fam);
+    out += `<div class="sess-group-title${cls ? ' ' + cls : ''}">${familyTitle(fam)} (${list.length})</div>`;
+    out += list.map(a => renderActivityRow(a, opts)).join('');
+  }
+  return out;
+}
+
+function wireActivityClicks(rootEl, opts) {
+  // Row click → toggle expansion.
+  rootEl.querySelectorAll('.sess[data-activity-id]').forEach(row => {
+    row.addEventListener('click', ev => {
+      // Don't capture clicks on inline action links.
+      if (ev.target.closest('.sess-actions a')) return;
+      const id = row.getAttribute('data-activity-id');
+      expandedActivityId = (expandedActivityId === id) ? null : id;
+      // Re-render the same view to flush expanded state.
+      poll().catch(() => {});
+    });
+  });
+
+  // Filter Tasks tab (MCP rows in Sessions tab).
+  rootEl.querySelectorAll('.sess-actions a[data-act="filter-tasks"]').forEach(a => {
     a.addEventListener('click', ev => {
       ev.stopPropagation();
       const agent = a.getAttribute('data-agent');
@@ -880,6 +1011,58 @@ function renderSessions(payload) {
       setActiveTab('tasks');
     });
   });
+
+  // Register project from cwd (Unassigned rows).
+  if (opts && opts.allowRegisterFromCwd) {
+    rootEl.querySelectorAll('.sess-actions a[data-act="register-project"]').forEach(a => {
+      a.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const cwd = a.getAttribute('data-cwd');
+        if (!cwd) return;
+        handleRegisterFromCwdClick(cwd);
+      });
+    });
+  }
+}
+
+function renderSessions(payload) {
+  const el = document.getElementById('sessions-list');
+  if (!payload || !payload.available) {
+    el.innerHTML = '<div class="placeholder">no agent activity data — DB not connected</div>';
+    return;
+  }
+  // Prefer the unified activities feed; legacy sessions/claude/codex
+  // arrays remain populated on `payload` for backward-compat readers
+  // but are no longer the canonical view.
+  const activities = Array.isArray(payload.activities) ? payload.activities : [];
+  lastSessions = payload.sessions || [];
+  if (!activities.length) {
+    el.innerHTML = (
+      '<div class="placeholder">no agent activity matched this project<br>'
+      + 'open Claude Code, Codex, or an MCP-enabled agent in this project\'s folder to see presence here'
+      + '</div>'
+    );
+    return;
+  }
+  const projectRoot = selectedProject ? selectedProject.project_root : null;
+  const summary = payload.activity_summary || null;
+  let html = '';
+  if (summary) {
+    const f = summary.by_family;
+    html += (
+      `<div class="sess-group-title" style="display:flex;justify-content:space-between">` +
+        `<span>AGENT ACTIVITY (${summary.total})</span>` +
+        `<span style="color:#888;font-weight:normal">` +
+          `${f.live} live · ${f.recent} recent · ${f.inactive} inactive` +
+          (f.dead ? ` · ${f.dead} dead` : '') +
+          (f.unknown ? ` · ${f.unknown} unknown` : '') +
+        `</span>` +
+      `</div>`
+    );
+  }
+  html += renderActivityBlock(activities, { projectRoot, allowFilter: true });
+  el.innerHTML = html;
+  wireActivityClicks(el);
 }
 
 // ---------------------------------------------------------------------------
@@ -905,12 +1088,14 @@ function renderUnassignedDetail(detail) {
 
   titleEl.textContent = `Unassigned · ${detail.total_rows || 0} row${detail.total_rows === 1 ? '' : 's'} not matched by any project's hints`;
   dbEl.textContent    = `DB: ${detail.db_path}`;
-  const claudeCount = (detail.claude_sessions || []).length;
-  const codexCount  = (detail.codex_sessions  || []).length;
+  const summary = detail.activity_summary || null;
+  const f = summary ? summary.by_family : null;
+  const activityHeadline = f
+    ? `${f.live} live · ${f.recent} recent · ${f.inactive} inactive`
+      + (f.dead ? ` · ${f.dead} dead` : '')
+    : `agents ${detail.agents.length}`;
   countsEl.innerHTML  =
-    `agents <b>${detail.agents.length}</b>` +
-    (claudeCount ? `<span class="sep">·</span>claude <b>${claudeCount}</b>` : '') +
-    (codexCount  ? `<span class="sep">·</span>codex <b>${codexCount}</b>`   : '') +
+    `<b>${activityHeadline}</b>` +
     `<span class="sep">·</span>tasks ${detail.tasks}` +
     `<span class="sep">·</span>blockers ${detail.blockers}` +
     `<span class="sep">·</span>outcomes ${detail.outcomes}` +
@@ -918,50 +1103,51 @@ function renderUnassignedDetail(detail) {
     `<span class="sep">·</span>conflicts ${detail.conflicts}` +
     `<span class="sep">·</span>dispatches ${detail.dispatches}`;
 
-  const claudeRows = detail.claude_sessions || [];
-  const codexRows  = detail.codex_sessions  || [];
-  if (!detail.agents.length && !claudeRows.length && !codexRows.length) {
+  // Activity-driven rendering: one unified row list, grouped by family.
+  // Per-row "Register project from this cwd…" action is enabled in the
+  // Unassigned context (rows that already carry a cwd; MCP rows
+  // typically don't).
+  const activities = Array.isArray(detail.activities) ? detail.activities : [];
+  if (!activities.length && !detail.agents.length) {
     listEl.innerHTML = '<div class="placeholder">no unassigned agents — every presence row in this DB belongs to some registered project</div>';
     return;
   }
-  let html = '';
-  if (detail.agents.length) {
-    html += detail.agents.map(s => renderSessionRow(s, { allowAddTo: true })).join('');
-  }
-  // Claude rows whose cwd matches no registered project. They carry no
-  // Cairn agent_id, so "Add to project…" (which adds an agent_id_hint)
-  // wouldn't help — but the row's own cwd is exactly the signal we
-  // need to register a brand-new project. Offer that as the per-row
-  // action; surfacing the row is itself the value.
-  if (claudeRows.length) {
-    html += renderClaudeSessionsBlock(claudeRows, {
-      projectRoot: null,
-      allowRegisterFromCwd: true,
-    });
-  }
-  // Codex rows: same flow as Claude — register project from cwd.
-  if (codexRows.length) {
-    html += renderCodexSessionsBlock(codexRows, {
-      projectRoot: null,
-      allowRegisterFromCwd: true,
-    });
-  }
+  // Render the unified list. MCP rows still need the "Add to project…"
+  // action (manual hint attribution for legacy / pre-v2 rows). Claude /
+  // Codex rows need "Register project from this cwd…" to mint a new
+  // project entry. Both come from the same row map below.
+  let html = renderActivityBlock(activities, {
+    projectRoot: null,
+    allowFilter: false,
+    allowRegisterFromCwd: true,
+  });
+  // MCP rows in the Unassigned bucket still benefit from the legacy
+  // "Add to project…" picker when the user wants to attach a row to an
+  // existing project via hint (e.g. a historical row whose agent_id
+  // doesn't carry capability tags). We append the action link to MCP
+  // activity rows after render.
   listEl.innerHTML = html;
+  wireActivityClicks(listEl, { allowRegisterFromCwd: true });
 
+  // Layer "Add to project…" alongside the per-row action set, but only
+  // for MCP rows (Claude / Codex have no agent_id to hint with).
+  const mcpRows = listEl.querySelectorAll('.sess[data-activity-id^="mcp:"]');
+  mcpRows.forEach(row => {
+    const id = row.getAttribute('data-activity-id');
+    const agentId = id.replace(/^mcp:/, '');
+    const actions = row.querySelector('.sess-actions');
+    const link = `<a data-act="add-to-project" data-agent="${escapeHtml(agentId)}">Add to project…</a>`;
+    if (actions) {
+      actions.insertAdjacentHTML('beforeend', ' ' + link);
+    } else {
+      row.insertAdjacentHTML('beforeend', `<div class="sess-actions">${link}</div>`);
+    }
+  });
   listEl.querySelectorAll('.sess-actions a[data-act="add-to-project"]').forEach(a => {
     a.addEventListener('click', ev => {
       ev.stopPropagation();
       const agent = a.getAttribute('data-agent');
       openAddAgentToProjectModal(agent);
-    });
-  });
-
-  listEl.querySelectorAll('.sess-actions a[data-act="register-project"]').forEach(a => {
-    a.addEventListener('click', ev => {
-      ev.stopPropagation();
-      const cwd = a.getAttribute('data-cwd');
-      if (!cwd) return;
-      handleRegisterFromCwdClick(cwd);
     });
   });
 }
@@ -1219,33 +1405,35 @@ function renderProjectCard(p) {
   // session attributes here. Format: "agents MCP X (+Y stale) · Claude B/I"
   // — dropping the Claude segment entirely when claude_total is 0 keeps
   // the card uncluttered for users without Claude.
+  // Activity-layer headline (Phase 2): the L1 card leads with the
+  // unified counts in product language. Per-source split keeps showing
+  // below as a secondary line so power users still see what the
+  // composition is. The legacy claude_*/codex_* fields are still
+  // populated by main.cjs for that breakdown.
+  const aa = s.agent_activity || null;
+  const fam = aa ? aa.by_family : null;
+  let agentsCell;
+  if (fam) {
+    agentsCell =
+      `agents ` +
+      `${countCell(fam.live, fam.live > 0 ? '' : 'idle')} live` +
+      `<span class="sep">·</span>${countCell(fam.recent, fam.recent > 0 ? '' : 'idle')} recent` +
+      `<span class="sep">·</span>${countCell(fam.inactive, 'idle')} inactive` +
+      (fam.dead ? `<span class="sep">·</span>${countCell(fam.dead, 'alert')} dead` : '');
+  } else {
+    // Legacy fallback for any caller that hasn't migrated yet.
+    agentsCell = `agents MCP ${countCell(s.agents_active, 'idle')}`;
+  }
+  // Per-source split as a quieter second line — keeps source identity
+  // visible without burying the headline.
   const claudeTotal = s.claude_total || 0;
-  const claudeBusy  = s.claude_busy  || 0;
-  const claudeIdle  = s.claude_idle  || 0;
-  const claudeDead  = s.claude_dead  || 0;
-  const codexTotal    = s.codex_total    || 0;
-  const codexRecent   = s.codex_recent   || 0;
-  const codexInactive = s.codex_inactive || 0;
-  let agentsCell =
-    `agents <span style="color:#778;font-size:0.86em">MCP</span> ${countCell(s.agents_active, 'idle')}` +
-    (s.agents_stale ? `<span style="color:#888;font-size:0.85em">(+${s.agents_stale} stale)</span>` : '');
-  if (claudeTotal > 0) {
-    agentsCell +=
-      `<span class="sep">·</span>` +
-      `<span style="color:#778;font-size:0.86em">Claude</span> ` +
-      `${countCell(claudeBusy + claudeIdle, claudeBusy + claudeIdle === 0 ? 'idle' : '')}` +
-      (claudeDead ? `<span style="color:#888;font-size:0.85em">(+${claudeDead} dead)</span>` : '');
-  }
-  if (codexTotal > 0) {
-    // Codex card segment: "Codex N (+M inactive)" — recent count is the
-    // headline; inactive shown as a quieter trailing hint so users see
-    // "open but not currently doing anything" without being misled.
-    agentsCell +=
-      `<span class="sep">·</span>` +
-      `<span style="color:#778;font-size:0.86em">Codex</span> ` +
-      `${countCell(codexRecent, codexRecent === 0 ? 'idle' : '')}` +
-      (codexInactive ? `<span style="color:#888;font-size:0.85em">(+${codexInactive} inactive)</span>` : '');
-  }
+  const codexTotal  = s.codex_total  || 0;
+  const sourceParts = [`MCP ${s.agents_active || 0}`];
+  if (claudeTotal > 0)  sourceParts.push(`Claude ${(s.claude_busy || 0) + (s.claude_idle || 0)}`);
+  if (codexTotal > 0)   sourceParts.push(`Codex ${(s.codex_recent || 0)}`);
+  const sourceSplit = aa
+    ? `<div style="color:#666;font-size:0.85em;margin-top:1px">by source: ${sourceParts.join(' · ')}</div>`
+    : '';
   const counts =
     agentsCell +
     `<span class="sep">·</span>` +
@@ -1273,6 +1461,7 @@ function renderProjectCard(p) {
       `<div class="pcard-line2">${escapeHtml(p.project_root || '(unknown)')}</div>` +
       `<div class="pcard-line3">DB: ${escapeHtml(dbBasename)} · ${escapeHtml(hintLine)}</div>` +
       `<div class="pcard-counts">${counts}</div>` +
+      sourceSplit +
       `<div class="pcard-actions">` +
         `<a data-action="rename" data-project-id="${escapeHtml(p.id)}">rename</a>` +
         `<a data-action="remove" data-project-id="${escapeHtml(p.id)}">remove</a>` +
@@ -1283,24 +1472,35 @@ function renderProjectCard(p) {
 
 function renderUnassignedCard(u) {
   const total = u.total_rows || 0;
-  const claudeTotal = u.claude_total || 0;
-  const codexTotal  = u.codex_total  || 0;
+  const aa = u.agent_activity || null;
+  const fam = aa ? aa.by_family : null;
+  let agentsCell;
+  if (fam) {
+    agentsCell =
+      `agents ${countCell(fam.live, fam.live > 0 ? '' : 'idle')} live` +
+      `<span class="sep">·</span>${countCell(fam.recent, fam.recent > 0 ? '' : 'idle')} recent` +
+      `<span class="sep">·</span>${countCell(fam.inactive, 'idle')} inactive` +
+      (fam.dead ? `<span class="sep">·</span>${countCell(fam.dead, 'alert')} dead` : '');
+  } else {
+    agentsCell = `agents MCP ${u.agents || 0}`;
+  }
   const sub =
-    `agents <span style="color:#778;font-size:0.86em">MCP</span> ${u.agents}` +
-    (claudeTotal > 0
-      ? `<span class="sep">·</span><span style="color:#778;font-size:0.86em">Claude</span> ${(u.claude_busy || 0) + (u.claude_idle || 0)}`
-        + ((u.claude_dead || 0) ? `<span style="color:#888;font-size:0.85em">(+${u.claude_dead} dead)</span>` : '')
-      : '') +
-    (codexTotal > 0
-      ? `<span class="sep">·</span><span style="color:#778;font-size:0.86em">Codex</span> ${u.codex_recent || 0}`
-        + ((u.codex_inactive || 0) ? `<span style="color:#888;font-size:0.85em">(+${u.codex_inactive} inactive)</span>` : '')
-      : '') +
+    agentsCell +
     `<span class="sep">·</span>tasks ${u.tasks}` +
     `<span class="sep">·</span>block ${u.blockers}` +
     `<span class="sep">·</span>outcome ${u.outcomes}` +
     `<span class="sep">·</span>ckpt ${u.checkpoints}` +
     `<span class="sep">·</span>conflict ${u.conflicts}` +
     `<span class="sep">·</span>disp ${u.dispatches}`;
+  // Per-source breakdown remains visible as a quieter second line.
+  const claudeTotal = u.claude_total || 0;
+  const codexTotal  = u.codex_total  || 0;
+  const sourceParts = [`MCP ${u.agents || 0}`];
+  if (claudeTotal > 0) sourceParts.push(`Claude ${(u.claude_busy || 0) + (u.claude_idle || 0)}`);
+  if (codexTotal > 0)  sourceParts.push(`Codex ${(u.codex_recent || 0)}`);
+  const sourceSplit = aa
+    ? `<div style="color:#666;font-size:0.85em;margin-top:1px;margin-left:24px">by source: ${sourceParts.join(' · ')}</div>`
+    : '';
   const lastAct = u.last_activity_at ? relTimeMs(u.last_activity_at) : '—';
 
   return (
@@ -1313,6 +1513,7 @@ function renderUnassignedCard(u) {
       `<div class="pcard-line2">DB: ${escapeHtml(u.db_path)}</div>` +
       `<div class="pcard-line3">${total} row${total === 1 ? '' : 's'} not matched by any project's hints · click to drill in</div>` +
       `<div class="pcard-counts">${sub}</div>` +
+      sourceSplit +
     `</div>`
   );
 }

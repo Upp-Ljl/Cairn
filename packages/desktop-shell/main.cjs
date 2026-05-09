@@ -51,6 +51,7 @@ const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
+const agentActivity     = require('./agent-activity.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -509,21 +510,18 @@ function refreshTray() {
   // shouldn't drive the tray to alert just because random untagged
   // rows exist in the DB).
   let worst = 'idle';
-  let mcpAgents = 0, totalBlockers = 0, totalFail = 0, totalConflicts = 0;
+  let totalBlockers = 0, totalFail = 0, totalConflicts = 0;
   let aggAvailable = false;
 
-  // Single Claude scan for the whole tray refresh — partitioned per
-  // project below so the tooltip shows attributed Claude session count.
+  // Single scan per source per tray refresh.
   const claudeAll = claudeSessionScan.scanClaudeSessions();
-  let claudeAttributed = 0;
+  const codexAll  = codexSessionScan.scanCodexSessions();
 
-  // Same idea for Codex: one scan per refresh; partitioned per project.
-  // Tray summarizes only `recent` rows — they're the closest analogue
-  // we have to "agent doing something right now". `inactive` rollout
-  // files are surfaced in the panel but kept out of the tray tooltip
-  // to avoid implying live work where there may be none.
-  const codexAll = codexSessionScan.scanCodexSessions();
-  let codexAttributed = 0;
+  // Aggregate AgentActivity across all projects + (when relevant) the
+  // primary Unassigned bucket so the tooltip can speak in product
+  // language ("3 live agents · 2 recent") instead of per-source counts.
+  /** @type {Array<object>} */
+  const allActivities = [];
 
   for (const p of reg.projects) {
     const entry = ensureDbHandle(p.db_path);
@@ -537,26 +535,23 @@ function refreshTray() {
     );
     if (s.health === 'alert') worst = 'alert';
     else if (s.health === 'warn' && worst !== 'alert') worst = 'warn';
-    mcpAgents      += s.agents_active;
     totalBlockers  += s.blockers_open;
     totalFail      += s.outcomes_failed + s.tasks_failed;
     totalConflicts += s.conflicts_open;
 
-    const { matched } = claudeSessionScan.partitionByProject(claudeAll, p);
-    const c = claudeSessionScan.summarizeClaudeRows(matched);
-    // Tray "agents" = busy + idle Claude sessions (presence). Dead/unknown
-    // are not surfaced in the tooltip — they don't represent live work.
-    claudeAttributed += c.busy + c.idle;
-
-    const { matched: codexForP } = codexSessionScan.partitionByProject(codexAll, p);
-    const cx = codexSessionScan.summarizeCodexRows(codexForP);
-    codexAttributed += cx.recent;
+    const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, p, agentIds);
+    const built = agentActivity.buildProjectActivities(
+      p, mcpForActivity, claudeAll, codexAll,
+      { claude: claudeSessionScan, codex: codexSessionScan },
+    );
+    for (const a of built.activities) allActivities.push(a);
   }
 
   // Fallback: no registry projects — show legacy queryProjectSummary
   // against the default DB so the tray is still meaningful for users
-  // who haven't configured anything yet. Claude rows still surface
-  // (claudeAttributed remains 0; show the global busy+idle instead).
+  // who haven't configured anything yet, plus surface global Claude /
+  // Codex activities so the tooltip lights up even before the user
+  // registers their first project.
   if (!aggAvailable) {
     const fallbackEntry = activeDbEntry();
     if (fallbackEntry) {
@@ -564,22 +559,17 @@ function refreshTray() {
         fallbackEntry.db, fallbackEntry.tables, activeDbPath(),
       );
       worst = deriveTrayState(s);
-      mcpAgents      = s.agents_active;
       totalBlockers  = s.blockers_open;
       totalFail      = s.outcomes_failed;
       totalConflicts = s.conflicts_open;
       aggAvailable   = s.available;
-      // Without registered projects, surface global Claude live count
-      // so the tooltip is non-empty when the user has only Claude.
-      const cAll = claudeSessionScan.summarizeClaudeRows(claudeAll);
-      claudeAttributed = cAll.busy + cAll.idle;
-      if (claudeAttributed > 0) aggAvailable = true;
-      // Same fallback for Codex: surface global recent count so a user
-      // with no MCP / no Claude but live Codex still sees the tray
-      // tooltip light up.
-      const cxAll = codexSessionScan.summarizeCodexRows(codexAll);
-      codexAttributed = cxAll.recent;
-      if (codexAttributed > 0) aggAvailable = true;
+
+      // Treat every Claude/Codex row as Unassigned in this branch
+      // (there are no projects to attribute to). MCP rows: skip — we
+      // don't have a project context to compute attribution against.
+      const builtU = agentActivity.buildUnassignedActivities([], claudeAll, codexAll);
+      for (const a of builtU.activities) allActivities.push(a);
+      if (builtU.summary.total > 0) aggAvailable = true;
     }
   }
 
@@ -591,12 +581,19 @@ function refreshTray() {
   if (!aggAvailable) {
     tray.setToolTip('Cairn — DB unavailable');
   } else {
-    const claudePart = claudeAttributed > 0 ? ` + ${claudeAttributed} Claude` : '';
-    const codexPart  = codexAttributed  > 0 ? ` + ${codexAttributed} Codex`  : '';
-    tray.setToolTip(
-      `Cairn — ${mcpAgents} MCP${claudePart}${codexPart} · ` +
-      `${totalBlockers} blockers · ${totalFail} FAIL · ${totalConflicts} conflicts`,
-    );
+    const sum = agentActivity.summarizeActivities(allActivities);
+    const live   = sum.by_family.live;
+    const recent = sum.by_family.recent;
+    // Tooltip language (PRODUCT MVP §0): product control surface, not a
+    // "list of source counts". Lead with live + recent agent activity,
+    // then the project-impact counts (blockers, FAIL, conflicts) the
+    // tray icon color also encodes.
+    const parts = [`Cairn — ${live} live agent${live === 1 ? '' : 's'}`];
+    if (recent > 0) parts.push(`${recent} recent`);
+    parts.push(`${totalBlockers} blocker${totalBlockers === 1 ? '' : 's'}`);
+    parts.push(`${totalFail} FAIL`);
+    parts.push(`${totalConflicts} conflict${totalConflicts === 1 ? '' : 's'}`);
+    tray.setToolTip(parts.join(' · '));
   }
 }
 
@@ -664,6 +661,18 @@ function getProjectsList() {
     const { matched: codexForP } = codexSessionScan.partitionByProject(codexAll, p);
     foldCodexIntoSummary(summary, codexForP);
 
+    // Activity layer: build the unified row list for this project so the
+    // L1 card and the tray can render headline counts in product
+    // language ("3 live agents · 2 recent") instead of per-source
+    // numbers. The legacy claude_*/codex_*/agents_active fields above
+    // remain populated for the per-source breakdown line.
+    const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, p, agentIds);
+    const built = agentActivity.buildProjectActivities(
+      p, mcpForActivity, claudeAll, codexAll,
+      { claude: claudeSessionScan, codex: codexSessionScan },
+    );
+    summary.agent_activity = built.summary;
+
     return {
       id: p.id, label: p.label, project_root: p.project_root,
       db_path: p.db_path, agent_id_hints: p.agent_id_hints,
@@ -690,10 +699,59 @@ function getProjectsList() {
     const isPrimaryBucket = dbPaths[0] === dbPath;
     foldClaudeIntoSummary(u, isPrimaryBucket ? claudeUnassigned : []);
     foldCodexIntoSummary(u,  isPrimaryBucket ? codexUnassigned  : []);
+
+    // Activity summary for the Unassigned bucket: same shape as
+    // projects so the panel's L1 renderer can iterate uniformly.
+    const mcpForActivity = isPrimaryBucket
+      ? buildMcpActivityRowsForUnassigned(entry.db, entry.tables, dbPath, attributed)
+      : [];
+    const builtU = agentActivity.buildUnassignedActivities(
+      mcpForActivity,
+      isPrimaryBucket ? claudeUnassigned : [],
+      isPrimaryBucket ? codexUnassigned  : [],
+    );
+    u.agent_activity = builtU.summary;
+
     unassigned.push(u);
   }
 
   return { projects, unassigned };
+}
+
+/**
+ * Pull MCP process rows attributable to a project AND mark each one
+ * with the attribution route (capability vs hint). Returned shape
+ * matches what queryProjectScopedSessions emits (agent_id, agent_type,
+ * status, computed_state, last_heartbeat, heartbeat_ttl, capabilities,
+ * registered_at, owns_tasks) plus an extra `_attribution` field that
+ * agent-activity.cjs reads to fill the activity row.
+ *
+ * Cheap re-use: queryProjectScopedSessions already does the SQL +
+ * computed_state derivation; here we only have to layer the
+ * attribution decision on top.
+ */
+function buildMcpActivityRows(db, tables, project, agentIds) {
+  const sess = projectQueries.queryProjectScopedSessions(db, tables, agentIds);
+  const hints = (project && project.agent_id_hints) || [];
+  for (const row of sess.sessions) {
+    row._attribution = agentActivity.decideMcpAttribution(
+      row.capabilities, project && project.project_root, hints, row.agent_id,
+    );
+  }
+  return sess.sessions;
+}
+
+/**
+ * Pull unassigned MCP rows for one db_path. Mirror of
+ * buildMcpActivityRows but for the Unassigned bucket: anything in
+ * processes whose agent_id is NOT in `attributedSet`. Each row is
+ * marked with `_attribution: null` so the activity row carries the
+ * "no attribution" signal cleanly.
+ */
+function buildMcpActivityRowsForUnassigned(db, tables, dbPath, attributedSet) {
+  const detail = projectQueries.queryUnassignedDetail(db, tables, dbPath, attributedSet);
+  for (const row of detail.agents) row._attribution = null;
+  return detail.agents;
 }
 
 /**
@@ -883,9 +941,17 @@ ipcMain.handle('add-hint', (_e, id, agentId) => {
 // asked for, and it would survive past the Claude session's lifetime.
 ipcMain.handle('get-project-sessions', () => {
   const proj = activeProject();
-  if (!proj) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
+  if (!proj) return {
+    available: false, sessions: [],
+    activities: [], activity_summary: agentActivity.summarizeActivities([]),
+    ts: Math.floor(Date.now() / 1000),
+  };
   const entry = ensureDbHandle(proj.db_path);
-  if (!entry) return { available: false, sessions: [], ts: Math.floor(Date.now() / 1000) };
+  if (!entry) return {
+    available: false, sessions: [],
+    activities: [], activity_summary: agentActivity.summarizeActivities([]),
+    ts: Math.floor(Date.now() / 1000),
+  };
   const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
   const mcp = projectQueries.queryProjectScopedSessions(entry.db, entry.tables, agentIds);
 
@@ -899,12 +965,33 @@ ipcMain.handle('get-project-sessions', () => {
   const codexAll = codexSessionScan.scanCodexSessions();
   const { matched: codexForProject } = codexSessionScan.partitionByProject(codexAll, proj);
 
+  // Activity layer: build the unified row list. mcp.sessions rows get
+  // tagged with `_attribution` first so each AgentActivity carries
+  // attribution = "capability" | "hint".
+  const hints = (proj && proj.agent_id_hints) || [];
+  for (const row of mcp.sessions) {
+    row._attribution = agentActivity.decideMcpAttribution(
+      row.capabilities, proj.project_root, hints, row.agent_id,
+    );
+  }
+  const built = agentActivity.buildProjectActivities(
+    proj, mcp.sessions, claudeAll, codexAll,
+    { claude: claudeSessionScan, codex: codexSessionScan },
+  );
+
   return {
     available: mcp.available || claudeAll.length > 0 || codexAll.length > 0,
     ts: mcp.ts,
-    sessions: mcp.sessions,                 // existing MCP rows (schema unchanged)
-    claude_sessions: claudeForProject,      // Claude rows for this project
-    codex_sessions:  codexForProject,       // Codex rows for this project
+    // Legacy per-source fields kept populated for any reader that hasn't
+    // migrated to `activities`. The renderer now consumes `activities`
+    // as the canonical view; per-source rows remain reachable via
+    // detail.expanded breakdown.
+    sessions: mcp.sessions,
+    claude_sessions: claudeForProject,
+    codex_sessions:  codexForProject,
+    // Unified activity view — the canonical Sessions tab feed.
+    activities: built.activities,
+    activity_summary: built.summary,
   };
 });
 
@@ -937,6 +1024,21 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
     || dbPaths[0] === dbPath;
   detail.claude_sessions = isPrimaryBucket ? claudeUnassigned : [];
   detail.codex_sessions  = isPrimaryBucket ? codexUnassigned  : [];
+
+  // Activity layer for the Unassigned bucket. MCP rows are
+  // detail.agents (queryUnassignedDetail already filtered to unassigned
+  // agent_ids); we tag them with attribution=null and feed them
+  // through buildUnassignedActivities together with the claude/codex
+  // rows for THIS bucket only (multi-DB de-dup is already enforced
+  // above by the isPrimaryBucket gate).
+  for (const row of detail.agents) row._attribution = null;
+  const built = agentActivity.buildUnassignedActivities(
+    detail.agents,
+    isPrimaryBucket ? claudeUnassigned : [],
+    isPrimaryBucket ? codexUnassigned  : [],
+  );
+  detail.activities = built.activities;
+  detail.activity_summary = built.summary;
   return detail;
 });
 
@@ -967,6 +1069,15 @@ ipcMain.handle('get-project-summary', () => {
     const codexAll = codexSessionScan.scanCodexSessions();
     const { matched: codexMatched } = codexSessionScan.partitionByProject(codexAll, proj);
     foldCodexIntoSummary(summary, codexMatched);
+
+    // Activity-layer summary alongside the legacy per-source folds so
+    // the L2 summary card can render "X live · Y recent" headline.
+    const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, proj, agentIds);
+    const built = agentActivity.buildProjectActivities(
+      proj, mcpForActivity, claudeAll, codexAll,
+      { claude: claudeSessionScan, codex: codexSessionScan },
+    );
+    summary.agent_activity = built.summary;
     return summary;
   }
   // No project selected — fall back to the legacy unscoped summary.

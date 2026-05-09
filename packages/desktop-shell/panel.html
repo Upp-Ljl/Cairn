@@ -511,6 +511,36 @@
   .sess-source.s-mcp     { background: #1f2a1f; color: #8b8; }
   .sess-source.s-claude  { background: #1f1f2e; color: #aab; }
   .sess-source.s-codex   { background: #2a2418; color: #cb8; }
+  /* Agent Activity attribution chip — appended after the source chip */
+  .sess-attr {
+    display: inline-block;
+    font-size: 0.66rem;
+    padding: 0 5px;
+    margin-left: 4px;
+    border-radius: 2px;
+    background: #1f1f1f;
+    color: #889;
+    text-transform: lowercase;
+    vertical-align: 1px;
+    border: 1px solid #2a2a2a;
+  }
+  /* Inline expanded detail card under an Agent Activity row */
+  .act-detail {
+    margin-top: 4px;
+    margin-left: 78px;
+    padding: 4px 8px 4px 0;
+    border-top: 1px dashed #2a2a2a;
+    color: #aaa;
+    font-size: 0.85em;
+    line-height: 1.55;
+  }
+  .act-detail .kv {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    column-gap: 8px;
+  }
+  .act-detail .kv .k { color: #777; }
+  .act-detail .kv .v { color: #ccc; word-break: break-all; }
   .sess-id { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sess-id .at-type { color: #88a; }
   .sess-meta { color: #666; font-size: 0.85em; text-align: right; }
@@ -671,7 +701,7 @@
     <div id="tabs">
       <button class="tab active" data-tab="runlog"   type="button">Run Log</button>
       <button class="tab"        data-tab="tasks"    type="button">Tasks</button>
-      <button class="tab"        data-tab="sessions" type="button">Sessions</button>
+      <button class="tab"        data-tab="sessions" type="button">Agent Activity</button>
     </div>
 
     <div id="view-body">
