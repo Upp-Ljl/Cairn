@@ -1158,6 +1158,11 @@ function buildInterpretationInput(proj, entry, agentIds) {
   // sees the report body via the interpretation path (the privacy
   // boundary is in goal-interpretation.cjs::buildCompactState).
   const recentReports = workerReports.listWorkerReports(proj.id, 5);
+  // Project rules (governance v1) — effective ruleset (user-set or
+  // default). buildCompactState produces a `rules_summary` envelope
+  // that's safe to send to the LLM (counts + top items + non_goals,
+  // capped widths).
+  const effRules = registry.getEffectiveProjectRules(reg, proj.id);
 
   return {
     goal,
@@ -1178,6 +1183,8 @@ function buildInterpretationInput(proj, entry, agentIds) {
     },
     checkpoints_summary: null, // not in summary; left null for v1
     recent_reports: recentReports,
+    project_rules: effRules.rules,
+    project_rules_is_default: effRules.is_default,
   };
 }
 

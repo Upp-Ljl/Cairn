@@ -162,6 +162,30 @@ function buildCompactState(input) {
       needs_human:      !!(r && r.needs_human),
     }));
 
+  // Project rules summary (governance v1). Rules are user-authored
+  // policy; we send them to the LLM so it can interpret state
+  // against the user's constraints, but we cap each section's items
+  // (top 4) to bound the payload. Counts always go through; sample
+  // items go through truncated — the same width caps as goal fields.
+  const rulesIn = o && o.project_rules;
+  const rules_summary = rulesIn ? {
+    counts: {
+      coding_standards: Array.isArray(rulesIn.coding_standards) ? rulesIn.coding_standards.length : 0,
+      testing_policy:   Array.isArray(rulesIn.testing_policy)   ? rulesIn.testing_policy.length   : 0,
+      reporting_policy: Array.isArray(rulesIn.reporting_policy) ? rulesIn.reporting_policy.length : 0,
+      pre_pr_checklist: Array.isArray(rulesIn.pre_pr_checklist) ? rulesIn.pre_pr_checklist.length : 0,
+      non_goals:        Array.isArray(rulesIn.non_goals)        ? rulesIn.non_goals.length        : 0,
+    },
+    is_default: !!o.project_rules_is_default,
+    pre_pr_top:    clipList(rulesIn.pre_pr_checklist, 4, STR_TITLE_MAX),
+    testing_top:   clipList(rulesIn.testing_policy,   4, STR_TITLE_MAX),
+    reporting_top: clipList(rulesIn.reporting_policy, 4, STR_TITLE_MAX),
+    // non_goals are the most positioning-sensitive — send all of
+    // them (already capped to ≤12 by registry); they're the LLM's
+    // boundary contract.
+    non_goals:     clipList(rulesIn.non_goals,        12, STR_TITLE_MAX),
+  } : null;
+
   return {
     goal, pulse,
     activity_summary: activitySummary,
@@ -171,6 +195,7 @@ function buildCompactState(input) {
     outcomes_summary: outcomes,
     checkpoints_summary: checkpoints,
     recent_reports,
+    rules_summary,
   };
 }
 
@@ -250,12 +275,17 @@ const SYSTEM_PROMPT = [
   '',
   'Your job: given the compact state of one project, produce a short observation that helps the human user notice what currently matters. You are NOT the decider.',
   '',
+  'The input may include a `rules_summary` field — that is the user\'s own engineering policy for this project (coding standards, testing policy, reporting policy, Pre-PR checklist, non_goals). Treat rules as ADVISORY CONSTRAINTS, not as authority to execute. You should:',
+  ' - read state through the lens of these rules (e.g. if testing_policy expects targeted smokes, note when no recent run is visible)',
+  ' - respect non_goals: never suggest anything that crosses a non_goal',
+  ' - never claim Cairn judges PR readiness or task completion based on rules — rules only inform what the human user should look at',
+  '',
   'Hard rules:',
   ' - DO NOT recommend that any agent execute any specific code/task.',
   ' - DO NOT claim a task or goal is complete unless the input state explicitly says so.',
   ' - DO NOT invent facts not present in the input.',
   ' - DO reference signal kinds verbatim (open_blocker, failed_outcome, etc.) when they appear.',
-  ' - Tone: observational, hedged. Use "worth checking" / "the user should look at" rather than imperatives.',
+  ' - Tone: observational, hedged. Use "worth checking" / "the user should look at" rather than imperatives directed at agents.',
   '',
   'Output: a single JSON object with exactly these fields:',
   '  summary:        2-4 sentence plain string',

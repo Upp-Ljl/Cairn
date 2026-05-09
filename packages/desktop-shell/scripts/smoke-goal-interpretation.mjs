@@ -366,10 +366,118 @@ ok(tRes.model === 'm' && JSON.stringify(tRes).indexOf(POISON_KEY) === -1,
    'timeout return: no api key in payload');
 
 // ---------------------------------------------------------------------------
-// Part F — read-only invariants
+// Part F — project rules awareness (governance v1)
 // ---------------------------------------------------------------------------
 
-console.log('\n==> Part F: read-only invariants');
+console.log('\n==> Part F: project rules awareness');
+
+const rulesInput = {
+  goal: { title: 'g', desired_outcome: '' },
+  pulse: { pulse_level: 'ok', signals: [] },
+  project_rules: {
+    version: 1,
+    coding_standards: ['Follow patterns', 'No unrelated refactors',
+      // Add a poison field at this level to verify the LLM doesn't
+      // see arbitrary keys; only known sections + counts flow.
+      // (Added to the section list itself wouldn't reach the payload
+      // since clipList drops non-strings — checked below.)
+    ],
+    testing_policy: ['Run targeted smoke', 'Verify mtime invariants', 'Read-only grep'],
+    reporting_policy: ['List changed files', 'Report residual risks'],
+    pre_pr_checklist: ['No new schema/dep without auth', 'No secret leakage'],
+    non_goals: ['No auto-dispatch', 'No code execution by Cairn'],
+    updated_at: 1700000000000,
+  },
+  project_rules_is_default: false,
+};
+const compactRules = goalInterp.buildCompactState(rulesInput);
+ok(compactRules.rules_summary, 'rules_summary present in compact state');
+eq(compactRules.rules_summary.counts.coding_standards, 2, 'rules_summary.counts.coding_standards');
+eq(compactRules.rules_summary.counts.non_goals, 2, 'rules_summary.counts.non_goals');
+eq(compactRules.rules_summary.is_default, false, 'rules_summary.is_default propagated');
+eq(compactRules.rules_summary.pre_pr_top.length, 2, 'rules_summary.pre_pr_top capped to ≤4');
+eq(compactRules.rules_summary.testing_top.length, 3, 'rules_summary.testing_top trimmed list');
+ok(compactRules.rules_summary.non_goals.length === 2,
+   'rules_summary.non_goals fully present (boundary contract)');
+ok(compactRules.rules_summary.non_goals.includes('No auto-dispatch'),
+   'rules_summary: non_goals contain "No auto-dispatch"');
+// updated_at is metadata, not content — it lives in rules_summary
+// only as a count/flag, never as a raw timestamp the LLM has to deal
+// with. We don't ship updated_at; check it's NOT in output.
+const compactStr2 = JSON.stringify(compactRules);
+ok(compactStr2.indexOf('1700000000000') === -1,
+   'rules updated_at NOT echoed into compact state');
+
+// LLM payload still strips sensitive fields when rules are present.
+const rulesPoisoned = {
+  ...rulesInput,
+  // Inject sensitive sibling fields to confirm rules path doesn't open
+  // a hole in the privacy boundary.
+  goal: { title: 'g', api_key: POISON_KEY, transcript: POISON },
+  top_activities: [
+    { app: 'mcp', state: 'active', state_family: 'live', display_name: 'x',
+      agent_id: 'cairn-' + POISON, cwd: 'D:\\secret\\path' },
+  ],
+};
+const compactPoisoned = goalInterp.buildCompactState(rulesPoisoned);
+const cps = JSON.stringify(compactPoisoned);
+ok(cps.indexOf(POISON) === -1, 'rules+poison: POISON marker absent');
+ok(cps.indexOf(POISON_KEY) === -1, 'rules+poison: api key absent');
+ok(cps.indexOf('secret\\\\path') === -1 && cps.indexOf('secret/path') === -1,
+   'rules+poison: cwd absent');
+// rules_summary still emitted alongside the cleaned input.
+ok(compactPoisoned.rules_summary && compactPoisoned.rules_summary.non_goals.length === 2,
+   'rules+poison: rules_summary still emitted alongside cleaned envelope');
+
+// Default rules shape:
+const defaultRulesInput = {
+  ...rulesInput,
+  project_rules_is_default: true,
+};
+const cd = goalInterp.buildCompactState(defaultRulesInput);
+eq(cd.rules_summary.is_default, true, 'default rules: is_default propagates');
+
+// LLM rewrite path: end-to-end with rules in input. Hostile mock
+// tries to add an "Auto-dispatch the Cursor agent" recommendation;
+// the LLM message goes through but we verify the system prompt told
+// the LLM not to.
+let lastPayloadRules = null;
+const mockOkRules = async (payload) => {
+  lastPayloadRules = payload;
+  return {
+    enabled: true, ok: true, model: 'fake-model',
+    text: JSON.stringify({
+      summary: 'Goal stable; rules are honored.',
+      risks: [],
+      next_attention: ['Confirm tests are green per testing policy'],
+      evidence_ids: [],
+    }),
+  };
+};
+const r_e2e = await goalInterp.interpretGoal(rulesInput, {
+  provider: { enabled: true, _apiKey: POISON_KEY, model: 'fake-model', baseUrl: 'https://x/v1' },
+  chatJson: mockOkRules,
+});
+eq(r_e2e.mode, 'llm', 'rules input + valid LLM → mode=llm');
+const lastPayloadStr2 = JSON.stringify(lastPayloadRules);
+ok(/rules_summary/.test(lastPayloadStr2),
+   'LLM payload: rules_summary key present');
+ok(/non_goals/.test(lastPayloadStr2),
+   'LLM payload: non_goals key present (boundary contract)');
+ok(lastPayloadStr2.indexOf(POISON_KEY) === -1, 'LLM payload: no api key');
+// System prompt mentions rules + non_goals + advisory.
+const sysMsg = lastPayloadRules.messages[0].content;
+ok(/rules_summary/.test(sysMsg), 'system prompt: references rules_summary');
+ok(/non_goals/.test(sysMsg), 'system prompt: references non_goals');
+ok(/ADVISORY|advisory/.test(sysMsg), 'system prompt: explicitly advisory');
+ok(/never suggest .* non_goal/i.test(sysMsg) || /respect non_goals/i.test(sysMsg),
+   'system prompt: explicit non_goals respect rule');
+
+// ---------------------------------------------------------------------------
+// Part G — read-only invariants
+// ---------------------------------------------------------------------------
+
+console.log('\n==> Part G: read-only invariants');
 
 const llmSrc = fs.readFileSync(path.join(root, 'llm-client.cjs'), 'utf8');
 ok(!/\.run\s*\(/.test(llmSrc),         'llm-client.cjs: no .run(');
