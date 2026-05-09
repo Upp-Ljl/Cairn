@@ -187,24 +187,40 @@ function renderSummary(summary) {
     return;
   }
 
-  // L2 active-agents cell: show "MCP X · Claude Y" when any Claude is
-  // attributed to this project, otherwise just the MCP count. The cell
-  // CSS expects a number-or-"—" — for the dual-source case we put the
-  // composite string and add the same severity classes manually.
+  // L2 active-agents cell: show "MCP X · Claude Y · Codex Z" when any
+  // non-MCP source contributes to this project, otherwise just the MCP
+  // count. The cell CSS expects a number-or-"—" — for the multi-source
+  // case we put the composite string and add the same severity classes
+  // manually.
   const sAgents = document.getElementById('s-agents');
   const mcpCount = summary.agents_active || 0;
   const claudeBusy = summary.claude_busy || 0;
   const claudeIdle = summary.claude_idle || 0;
   const claudeLive = claudeBusy + claudeIdle;
-  if (claudeLive > 0 || (summary.claude_total || 0) > 0) {
+  const claudeTotal = summary.claude_total || 0;
+  const codexRecent = summary.codex_recent || 0;
+  const codexTotal  = summary.codex_total  || 0;
+  if (claudeLive > 0 || claudeTotal > 0 || codexTotal > 0) {
     sAgents.classList.remove('zero', 'warn', 'alert');
-    sAgents.innerHTML =
-      `<span class="${mcpCount === 0 ? 'zero' : ''}">MCP ${mcpCount}</span>` +
-      `<span style="color:#445;padding:0 4px">·</span>` +
-      `<span class="${claudeLive === 0 ? 'zero' : ''}">Claude ${claudeLive}</span>` +
-      ((summary.claude_dead || 0) > 0
-        ? ` <span style="color:#666;font-size:0.85em">(+${summary.claude_dead} dead)</span>`
-        : '');
+    let html =
+      `<span class="${mcpCount === 0 ? 'zero' : ''}">MCP ${mcpCount}</span>`;
+    if (claudeTotal > 0) {
+      html +=
+        `<span style="color:#445;padding:0 4px">·</span>` +
+        `<span class="${claudeLive === 0 ? 'zero' : ''}">Claude ${claudeLive}</span>` +
+        ((summary.claude_dead || 0) > 0
+          ? ` <span style="color:#666;font-size:0.85em">(+${summary.claude_dead} dead)</span>`
+          : '');
+    }
+    if (codexTotal > 0) {
+      html +=
+        `<span style="color:#445;padding:0 4px">·</span>` +
+        `<span class="${codexRecent === 0 ? 'zero' : ''}">Codex ${codexRecent}</span>` +
+        ((summary.codex_inactive || 0) > 0
+          ? ` <span style="color:#666;font-size:0.85em">(+${summary.codex_inactive} inactive)</span>`
+          : '');
+    }
+    sAgents.innerHTML = html;
   } else {
     setSummaryCell(sAgents, mcpCount);
   }
@@ -721,6 +737,69 @@ function renderClaudeSessionsBlock(rows, opts) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Codex session-log rows (Real Agent Presence step 3)
+// ---------------------------------------------------------------------------
+//
+// Parallel structure to Claude rows but distinct in two important ways:
+//   - Status vocabulary is recent / inactive / unknown — never busy/idle.
+//     The Codex session_meta does not publish a current-status field
+//     and the rollout file carries no pid, so we cannot defend a
+//     stronger claim than "we saw the file get written recently".
+//   - The row carries an `originator` (e.g. "Codex Desktop" vs "Codex
+//     CLI") and a `source_app` ("vscode" when launched from there).
+//     We surface the originator as a dim line-2 hint so users can
+//     distinguish a Desktop window from a one-off CLI invocation.
+
+function renderCodexSessionRow(row, opts) {
+  const projectRoot = opts && opts.projectRoot;
+  const display = (row.status || 'unknown').toUpperCase(); // RECENT | INACTIVE | UNKNOWN
+  const sid = row.session_id ? row.session_id.slice(0, 8) : '?';
+  const cwdShort = shortPathInProject(row.cwd, projectRoot);
+  const ageTxt = row.updated_at ? relTimeMs(row.updated_at) : '?';
+  const orig = row.originator
+    ? `<span style="color:#888">${escapeHtml(row.originator)}</span>`
+    : `<span style="color:#555">(no originator)</span>`;
+  const verTxt = row.version ? ` · ${escapeHtml(row.version)}` : '';
+  const appTxt = row.source_app ? ` · ${escapeHtml(row.source_app)}` : '';
+  const reasonTxt = row.stale_reason && display === 'UNKNOWN'
+    ? ` <span style="color:#666">[${escapeHtml(row.stale_reason)}]</span>`
+    : '';
+  return (
+    `<div class="sess" data-codex-sid="${escapeHtml(row.session_id || '')}">` +
+      `<div class="sess-line1">` +
+        `<span class="sess-state s-${escapeHtml(display)}">${escapeHtml(display)}</span>` +
+        `<span class="sess-id"><code>codex:${escapeHtml(sid)}</code> <span class="sess-source s-codex">Codex</span></span>` +
+        `<span class="sess-meta">${escapeHtml(ageTxt)}</span>` +
+      `</div>` +
+      `<div class="sess-line2" style="margin-left:78px">` +
+        `<code>${escapeHtml(cwdShort)}</code>` +
+      `</div>` +
+      `<div class="sess-line3" style="margin-left:78px">` +
+        `${orig}${verTxt}${appTxt}${reasonTxt}` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+function renderCodexSessionsBlock(rows, opts) {
+  if (!rows || !rows.length) return '';
+  // Group: RECENT / INACTIVE / UNKNOWN. No DEAD bucket — adapter never
+  // produces it for Codex.
+  const groups = { RECENT: [], INACTIVE: [], UNKNOWN: [] };
+  for (const r of rows) {
+    const st = (r.status || 'unknown').toUpperCase();
+    if (groups[st]) groups[st].push(r);
+    else            groups.UNKNOWN.push(r);
+  }
+  let out = `<div class="sess-group-title">CODEX SESSIONS (${rows.length})</div>`;
+  for (const k of ['RECENT', 'INACTIVE', 'UNKNOWN']) {
+    if (!groups[k].length) continue;
+    out += groups[k].map(r => renderCodexSessionRow(r, opts)).join('');
+  }
+  return out;
+}
+
 let lastSessions = [];
 
 function renderSessions(payload) {
@@ -731,11 +810,12 @@ function renderSessions(payload) {
   }
   const sessions = payload.sessions || [];
   const claudeSessions = payload.claude_sessions || [];
+  const codexSessions  = payload.codex_sessions  || [];
   lastSessions = sessions;
-  if (!sessions.length && !claudeSessions.length) {
+  if (!sessions.length && !claudeSessions.length && !codexSessions.length) {
     el.innerHTML = (
       '<div class="placeholder">no sessions matched this project<br>'
-      + 'open Claude Code or an MCP-enabled agent in this project\'s folder to see live presence here'
+      + 'open Claude Code, Codex, or an MCP-enabled agent in this project\'s folder to see live presence here'
       + '</div>'
     );
     return;
@@ -768,6 +848,11 @@ function renderSessions(payload) {
   if (claudeSessions.length) {
     const projectRoot = selectedProject ? selectedProject.project_root : null;
     html += renderClaudeSessionsBlock(claudeSessions, { projectRoot });
+  }
+  // Codex rollout-file rows: same boundary-preserving treatment.
+  if (codexSessions.length) {
+    const projectRoot = selectedProject ? selectedProject.project_root : null;
+    html += renderCodexSessionsBlock(codexSessions, { projectRoot });
   }
   el.innerHTML = html;
 
@@ -805,9 +890,11 @@ function renderUnassignedDetail(detail) {
   titleEl.textContent = `Unassigned · ${detail.total_rows || 0} row${detail.total_rows === 1 ? '' : 's'} not matched by any project's hints`;
   dbEl.textContent    = `DB: ${detail.db_path}`;
   const claudeCount = (detail.claude_sessions || []).length;
+  const codexCount  = (detail.codex_sessions  || []).length;
   countsEl.innerHTML  =
     `agents <b>${detail.agents.length}</b>` +
     (claudeCount ? `<span class="sep">·</span>claude <b>${claudeCount}</b>` : '') +
+    (codexCount  ? `<span class="sep">·</span>codex <b>${codexCount}</b>`   : '') +
     `<span class="sep">·</span>tasks ${detail.tasks}` +
     `<span class="sep">·</span>blockers ${detail.blockers}` +
     `<span class="sep">·</span>outcomes ${detail.outcomes}` +
@@ -816,7 +903,8 @@ function renderUnassignedDetail(detail) {
     `<span class="sep">·</span>dispatches ${detail.dispatches}`;
 
   const claudeRows = detail.claude_sessions || [];
-  if (!detail.agents.length && !claudeRows.length) {
+  const codexRows  = detail.codex_sessions  || [];
+  if (!detail.agents.length && !claudeRows.length && !codexRows.length) {
     listEl.innerHTML = '<div class="placeholder">no unassigned agents — every presence row in this DB belongs to some registered project</div>';
     return;
   }
@@ -831,6 +919,12 @@ function renderUnassignedDetail(detail) {
   // project" and decides whether to register that project.
   if (claudeRows.length) {
     html += renderClaudeSessionsBlock(claudeRows, { projectRoot: null });
+  }
+  // Codex rows: same as Claude — no agent_id, no "Add to project".
+  // The point is just visibility: "I have Codex running outside any
+  // registered project; maybe I should register that project."
+  if (codexRows.length) {
+    html += renderCodexSessionsBlock(codexRows, { projectRoot: null });
   }
   listEl.innerHTML = html;
 
@@ -1039,6 +1133,9 @@ function renderProjectCard(p) {
   const claudeBusy  = s.claude_busy  || 0;
   const claudeIdle  = s.claude_idle  || 0;
   const claudeDead  = s.claude_dead  || 0;
+  const codexTotal    = s.codex_total    || 0;
+  const codexRecent   = s.codex_recent   || 0;
+  const codexInactive = s.codex_inactive || 0;
   let agentsCell =
     `agents <span style="color:#778;font-size:0.86em">MCP</span> ${countCell(s.agents_active, 'idle')}` +
     (s.agents_stale ? `<span style="color:#888;font-size:0.85em">(+${s.agents_stale} stale)</span>` : '');
@@ -1048,6 +1145,16 @@ function renderProjectCard(p) {
       `<span style="color:#778;font-size:0.86em">Claude</span> ` +
       `${countCell(claudeBusy + claudeIdle, claudeBusy + claudeIdle === 0 ? 'idle' : '')}` +
       (claudeDead ? `<span style="color:#888;font-size:0.85em">(+${claudeDead} dead)</span>` : '');
+  }
+  if (codexTotal > 0) {
+    // Codex card segment: "Codex N (+M inactive)" — recent count is the
+    // headline; inactive shown as a quieter trailing hint so users see
+    // "open but not currently doing anything" without being misled.
+    agentsCell +=
+      `<span class="sep">·</span>` +
+      `<span style="color:#778;font-size:0.86em">Codex</span> ` +
+      `${countCell(codexRecent, codexRecent === 0 ? 'idle' : '')}` +
+      (codexInactive ? `<span style="color:#888;font-size:0.85em">(+${codexInactive} inactive)</span>` : '');
   }
   const counts =
     agentsCell +
@@ -1087,11 +1194,16 @@ function renderProjectCard(p) {
 function renderUnassignedCard(u) {
   const total = u.total_rows || 0;
   const claudeTotal = u.claude_total || 0;
+  const codexTotal  = u.codex_total  || 0;
   const sub =
     `agents <span style="color:#778;font-size:0.86em">MCP</span> ${u.agents}` +
     (claudeTotal > 0
       ? `<span class="sep">·</span><span style="color:#778;font-size:0.86em">Claude</span> ${(u.claude_busy || 0) + (u.claude_idle || 0)}`
         + ((u.claude_dead || 0) ? `<span style="color:#888;font-size:0.85em">(+${u.claude_dead} dead)</span>` : '')
+      : '') +
+    (codexTotal > 0
+      ? `<span class="sep">·</span><span style="color:#778;font-size:0.86em">Codex</span> ${u.codex_recent || 0}`
+        + ((u.codex_inactive || 0) ? `<span style="color:#888;font-size:0.85em">(+${u.codex_inactive} inactive)</span>` : '')
       : '') +
     `<span class="sep">·</span>tasks ${u.tasks}` +
     `<span class="sep">·</span>block ${u.blockers}` +

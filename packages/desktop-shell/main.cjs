@@ -50,6 +50,7 @@ const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
+const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -516,6 +517,14 @@ function refreshTray() {
   const claudeAll = claudeSessionScan.scanClaudeSessions();
   let claudeAttributed = 0;
 
+  // Same idea for Codex: one scan per refresh; partitioned per project.
+  // Tray summarizes only `recent` rows — they're the closest analogue
+  // we have to "agent doing something right now". `inactive` rollout
+  // files are surfaced in the panel but kept out of the tray tooltip
+  // to avoid implying live work where there may be none.
+  const codexAll = codexSessionScan.scanCodexSessions();
+  let codexAttributed = 0;
+
   for (const p of reg.projects) {
     const entry = ensureDbHandle(p.db_path);
     if (!entry) continue;
@@ -538,6 +547,10 @@ function refreshTray() {
     // Tray "agents" = busy + idle Claude sessions (presence). Dead/unknown
     // are not surfaced in the tooltip — they don't represent live work.
     claudeAttributed += c.busy + c.idle;
+
+    const { matched: codexForP } = codexSessionScan.partitionByProject(codexAll, p);
+    const cx = codexSessionScan.summarizeCodexRows(codexForP);
+    codexAttributed += cx.recent;
   }
 
   // Fallback: no registry projects — show legacy queryProjectSummary
@@ -561,6 +574,12 @@ function refreshTray() {
       const cAll = claudeSessionScan.summarizeClaudeRows(claudeAll);
       claudeAttributed = cAll.busy + cAll.idle;
       if (claudeAttributed > 0) aggAvailable = true;
+      // Same fallback for Codex: surface global recent count so a user
+      // with no MCP / no Claude but live Codex still sees the tray
+      // tooltip light up.
+      const cxAll = codexSessionScan.summarizeCodexRows(codexAll);
+      codexAttributed = cxAll.recent;
+      if (codexAttributed > 0) aggAvailable = true;
     }
   }
 
@@ -573,8 +592,9 @@ function refreshTray() {
     tray.setToolTip('Cairn — DB unavailable');
   } else {
     const claudePart = claudeAttributed > 0 ? ` + ${claudeAttributed} Claude` : '';
+    const codexPart  = codexAttributed  > 0 ? ` + ${codexAttributed} Codex`  : '';
     tray.setToolTip(
-      `Cairn — ${mcpAgents} MCP${claudePart} · ` +
+      `Cairn — ${mcpAgents} MCP${claudePart}${codexPart} · ` +
       `${totalBlockers} blockers · ${totalFail} FAIL · ${totalConflicts} conflicts`,
     );
   }
@@ -620,6 +640,9 @@ function getProjectsList() {
   // dominated by directory enumeration, which is bounded by the number
   // of live Claude sessions (typically < 10). No caching needed yet.
   const claudeAll = claudeSessionScan.scanClaudeSessions();
+  // Codex sessions accumulate in dated subdirs — bounded by the
+  // adapter's default 7-day window. Scan once per IPC call.
+  const codexAll = codexSessionScan.scanCodexSessions();
 
   const projects = reg.projects.map(p => {
     const entry = ensureDbHandle(p.db_path);
@@ -638,6 +661,9 @@ function getProjectsList() {
     const { matched: claudeForP } = claudeSessionScan.partitionByProject(claudeAll, p);
     foldClaudeIntoSummary(summary, claudeForP);
 
+    const { matched: codexForP } = codexSessionScan.partitionByProject(codexAll, p);
+    foldCodexIntoSummary(summary, codexForP);
+
     return {
       id: p.id, label: p.label, project_root: p.project_root,
       db_path: p.db_path, agent_id_hints: p.agent_id_hints,
@@ -648,8 +674,10 @@ function getProjectsList() {
   // One Unassigned bucket per unique db_path. Claude rows whose cwd
   // matches no registered project attach to the *primary* (first) bucket
   // only — same single-attach rule as get-unassigned-detail, so a
-  // multi-DB user doesn't see the same Claude row counted twice.
+  // multi-DB user doesn't see the same Claude row counted twice. Codex
+  // follows the identical rule for the same reason.
   const claudeUnassigned = claudeSessionScan.unassignedClaudeSessions(claudeAll, reg.projects);
+  const codexUnassigned  = codexSessionScan.unassignedCodexSessions(codexAll, reg.projects);
   const dbPaths = registry.uniqueDbPaths(reg);
   const unassigned = [];
   for (const dbPath of dbPaths) {
@@ -661,6 +689,7 @@ function getProjectsList() {
     const u = projectQueries.queryUnassignedSummary(entry.db, entry.tables, dbPath, attributed);
     const isPrimaryBucket = dbPaths[0] === dbPath;
     foldClaudeIntoSummary(u, isPrimaryBucket ? claudeUnassigned : []);
+    foldCodexIntoSummary(u,  isPrimaryBucket ? codexUnassigned  : []);
     unassigned.push(u);
   }
 
@@ -685,6 +714,28 @@ function foldClaudeIntoSummary(summary, claudeRows) {
   summary.claude_dead    = c.dead;
   summary.claude_unknown = c.unknown;
   summary.claude_total   = c.total;
+  if (c.last_activity_at && c.last_activity_at > (summary.last_activity_at || 0)) {
+    summary.last_activity_at = c.last_activity_at;
+  }
+}
+
+/**
+ * Mutate `summary` in place to add Codex session-log presence counts.
+ * Adds: `codex_recent`, `codex_inactive`, `codex_unknown`,
+ * `codex_total` (always; zero when none). Also bumps `last_activity_at`
+ * if any Codex row's mtime is more recent than the existing value.
+ *
+ * Kept here (orchestration layer) for the same reason as foldClaude:
+ * Codex is a non-DB source and project-queries.cjs stays strictly about
+ * the Cairn SQLite schema.
+ */
+function foldCodexIntoSummary(summary, codexRows) {
+  if (!summary) return;
+  const c = codexSessionScan.summarizeCodexRows(codexRows);
+  summary.codex_recent   = c.recent;
+  summary.codex_inactive = c.inactive;
+  summary.codex_unknown  = c.unknown;
+  summary.codex_total    = c.total;
   if (c.last_activity_at && c.last_activity_at > (summary.last_activity_at || 0)) {
     summary.last_activity_at = c.last_activity_at;
   }
@@ -790,11 +841,18 @@ ipcMain.handle('get-project-sessions', () => {
   const claudeAll = claudeSessionScan.scanClaudeSessions();
   const { matched: claudeForProject } = claudeSessionScan.partitionByProject(claudeAll, proj);
 
+  // Codex CLI / Codex Desktop: same model — host-level rollout files,
+  // attribute by cwd. Status semantics differ (recent / inactive /
+  // unknown) so the renderer keeps the two sources visually distinct.
+  const codexAll = codexSessionScan.scanCodexSessions();
+  const { matched: codexForProject } = codexSessionScan.partitionByProject(codexAll, proj);
+
   return {
-    available: mcp.available || claudeAll.length > 0,
+    available: mcp.available || claudeAll.length > 0 || codexAll.length > 0,
     ts: mcp.ts,
     sessions: mcp.sessions,                 // existing MCP rows (schema unchanged)
-    claude_sessions: claudeForProject,      // new: Claude rows for this project
+    claude_sessions: claudeForProject,      // Claude rows for this project
+    codex_sessions:  codexForProject,       // Codex rows for this project
   };
 });
 
@@ -820,10 +878,13 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
   // thing" but this avoids duplication today.
   const claudeAll = claudeSessionScan.scanClaudeSessions();
   const claudeUnassigned = claudeSessionScan.unassignedClaudeSessions(claudeAll, reg.projects);
+  const codexAll = codexSessionScan.scanCodexSessions();
+  const codexUnassigned = codexSessionScan.unassignedCodexSessions(codexAll, reg.projects);
   const dbPaths = registry.uniqueDbPaths(reg);
   const isPrimaryBucket = dbPaths.length === 0
     || dbPaths[0] === dbPath;
   detail.claude_sessions = isPrimaryBucket ? claudeUnassigned : [];
+  detail.codex_sessions  = isPrimaryBucket ? codexUnassigned  : [];
   return detail;
 });
 
@@ -847,10 +908,13 @@ ipcMain.handle('get-project-summary', () => {
       entry.db, entry.tables, proj.db_path, agentIds,
     );
     // Fold Claude rows into the L2 summary so the active-project card
-    // shows "agents MCP X · Claude Y" identically to L1.
+    // shows "agents MCP X · Claude Y · Codex Z" identically to L1.
     const claudeAll = claudeSessionScan.scanClaudeSessions();
     const { matched } = claudeSessionScan.partitionByProject(claudeAll, proj);
     foldClaudeIntoSummary(summary, matched);
+    const codexAll = codexSessionScan.scanCodexSessions();
+    const { matched: codexMatched } = codexSessionScan.partitionByProject(codexAll, proj);
+    foldCodexIntoSummary(summary, codexMatched);
     return summary;
   }
   // No project selected — fall back to the legacy unscoped summary.

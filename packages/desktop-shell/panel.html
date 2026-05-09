@@ -489,6 +489,13 @@
   .sess-state.s-BUSY    { background: #1a3a1a; color: #7e7; }
   .sess-state.s-IDLE    { background: #20272f; color: #9ac; }
   .sess-state.s-UNKNOWN { background: #222;    color: #888; }
+  /* Codex session-log adapter — recent/inactive/unknown only.
+     Colors deliberately do NOT match Claude's BUSY/IDLE — Codex doesn't
+     publish a "currently doing X" signal, so the panel treats `recent`
+     as a softer "saw activity" green and `inactive` as a neutral slate
+     to make the source-boundary visible at a glance. */
+  .sess-state.s-RECENT   { background: #1a342a; color: #7dc; }
+  .sess-state.s-INACTIVE { background: #20272f; color: #88a; }
   /* Source badge on the right of the row's first line */
   .sess-source {
     display: inline-block;
@@ -503,6 +510,7 @@
   }
   .sess-source.s-mcp     { background: #1f2a1f; color: #8b8; }
   .sess-source.s-claude  { background: #1f1f2e; color: #aab; }
+  .sess-source.s-codex   { background: #2a2418; color: #cb8; }
   .sess-id { color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sess-id .at-type { color: #88a; }
   .sess-meta { color: #666; font-size: 0.85em; text-align: right; }
