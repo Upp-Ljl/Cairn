@@ -124,6 +124,53 @@ const lastWins = launcher.extractReportFromText([
 ok(lastWins.ok && lastWins.completed.includes('late one') && !lastWins.completed.includes('early one'),
    'extract: last block wins');
 
+// Empty bullets in a section must NOT produce phantom items — this
+// caused the real-Claude dogfood to land on verdict=blocked even
+// though Blockers was empty.
+const emptyBlockers = launcher.extractReportFromText([
+  '## Worker Report',
+  '### Completed',
+  '- did a thing',
+  '### Remaining',
+  '### Blockers',
+  '-',
+  '### Next',
+  '- next thing',
+].join('\n'));
+ok(emptyBlockers.ok, 'extract: empty bullets parse ok');
+ok(emptyBlockers.blockers.length === 0, 'empty Blockers section does not produce phantom item from bare "-"');
+ok(emptyBlockers.completed.length === 1 && emptyBlockers.next_steps.length === 1,
+   'real bullets in surrounding sections still parsed');
+
+// "(none)" / "n/a" / "none" sentinels in a section must NOT count as
+// items. Real Claude output: `- (none)` under Blockers when there
+// are no blockers; before this filter, review fell back to
+// status=blocked.
+const noneSentinel = launcher.extractReportFromText([
+  '## Worker Report',
+  '### Completed',
+  '- did a thing',
+  '### Remaining',
+  '- N/A',
+  '### Blockers',
+  '- (none)',
+  '### Next',
+  '- next thing',
+].join('\n'));
+ok(noneSentinel.ok, 'extract: sentinel-only sections parse ok');
+ok(noneSentinel.blockers.length === 0, '"(none)" in Blockers does not count as a blocker');
+ok(noneSentinel.remaining.length === 0, '"N/A" in Remaining does not count as remaining');
+ok(noneSentinel.completed.length === 1 && noneSentinel.next_steps.length === 1,
+   'real items in other sections still parse');
+
+// Variants the regex must catch.
+for (const variant of ['none', 'None.', 'nothing', 'nil', 'no', 'Nothing.', '— none —', '[none]', '<none>']) {
+  const t = launcher.extractReportFromText([
+    '## Worker Report', '### Blockers', `- ${variant}`, '### Next', '- x',
+  ].join('\n'));
+  ok(t.ok && t.blockers.length === 0, `sentinel "${variant}" treated as empty`);
+}
+
 // -------- Part D: error paths
 
 const e1 = launcher.launchWorker({});

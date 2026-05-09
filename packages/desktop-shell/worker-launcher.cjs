@@ -629,6 +629,20 @@ function extractWorkerReport(runId, opts) {
 
 const SECTION_RX = /^###\s+(Completed|Remaining|Blockers?|Next)\s*$/i;
 
+// Workers commonly fill an empty section with one of these placeholder
+// strings (claude-code typically writes "- (none)" when nothing belongs
+// in Blockers/Remaining). Treat them as empty so the review layer
+// doesn't see phantom items and flip to `blocked`.
+const NONE_SENTINEL_RX = /^(?:[\s\-*•.–—]|n\/a|none|nothing|nil|empty|no(?:ne)?\b)+\.?$/i;
+function isNoneSentinel(s) {
+  if (typeof s !== 'string') return true;
+  const t = s.trim();
+  if (!t) return true;
+  // strip surrounding parens / brackets, e.g. "(none)" -> "none"
+  const stripped = t.replace(/^[\(\[\{<]+|[\)\]\}>]+$/g, '').trim();
+  return NONE_SENTINEL_RX.test(stripped);
+}
+
 function extractReportFromText(text) {
   if (typeof text !== 'string') return { ok: false, error: 'no_log' };
   // Find the LAST "## Worker Report" header — workers may print
@@ -655,11 +669,17 @@ function extractReportFromText(text) {
     }
     // Stop at a sibling ## or # (next major header)
     if (/^##\s+/.test(trimmed) && !/^##\s+Worker\s+Report/i.test(trimmed)) break;
-    if (current && /^[-*]\s+/.test(trimmed)) {
-      fields[current].push(trimmed.replace(/^[-*]\s+/, '').trim());
+    // Empty bullet — a bare "-" or "*" with no content is the
+    // worker's way of saying "this section is empty". Skip; do
+    // NOT push it as an item (otherwise an empty Blockers section
+    // surfaces as one phantom blocker and review flips to blocked).
+    if (current && /^[-*•]\s*$/.test(trimmed)) continue;
+    if (current && /^[-*•]\s+/.test(trimmed)) {
+      const item = trimmed.replace(/^[-*•]\s+/, '').trim();
+      if (item && !isNoneSentinel(item)) fields[current].push(item);
     } else if (current && trimmed && !/^#/.test(trimmed)) {
       // accept non-bullet lines as items if they're short
-      if (trimmed.length <= 400) fields[current].push(trimmed);
+      if (trimmed.length <= 400 && !isNoneSentinel(trimmed)) fields[current].push(trimmed);
     }
   }
   return {
