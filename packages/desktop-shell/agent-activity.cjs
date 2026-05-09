@@ -327,6 +327,9 @@ function buildProjectActivities(project, mcpRows, claudeRowsAll, codexRowsAll, a
     const { matched } = adapters.codex.partitionByProject(codexRowsAll || [], project);
     for (const row of matched) activities.push(activityFromCodexRow(row, project));
   }
+  // Decorate before returning so every consumer (panel, tooltip,
+  // prompt-pack) sees the same display labels.
+  decorateActivities(activities);
   return { activities, summary: summarizeActivities(activities) };
 }
 
@@ -348,6 +351,7 @@ function buildUnassignedActivities(mcpRows, claudeRowsUnassigned, codexRowsUnass
   for (const row of codexRowsUnassigned || []) {
     activities.push(activityFromCodexRow(row, null));
   }
+  decorateActivities(activities);
   return { activities, summary: summarizeActivities(activities) };
 }
 
@@ -406,6 +410,185 @@ function decideMcpAttribution(rowCapabilities, projectRoot, projectHints, agentI
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Display identity (UI hardening)
+// ---------------------------------------------------------------------------
+//
+// The panel must speak human, not "claude-code/session-file medium-high
+// busy". This layer derives display fields once, in one place, so every
+// renderer (Sessions tab / Unassigned / Detail card) shows the same
+// labels.
+//
+// Rules:
+//   - app + numbering = primary identity ("Claude Code · 1")
+//   - state = product language ("Working" / "Ready" / "Recent" / …)
+//   - source = "Observed via …" sentence, never the raw source path
+//   - attribution = "matched by project folder" / "reported by Cairn MCP"
+//                   / "manually assigned"
+//   - raw session_id / pid / agent_id stays in `detail` only
+
+const APP_LABEL = {
+  'mcp':         'Cairn MCP',
+  'claude-code': 'Claude Code',
+  'codex':       'Codex',
+};
+
+const APP_SOURCE_KIND = {
+  'mcp':         'mcp',      // we own the source (Cairn SQLite)
+  'claude-code': 'native',   // first-party adapter on a native app
+  'codex':       'adapter',  // log-scan adapter only
+};
+
+const APP_SOURCE_SENTENCE = {
+  'mcp':         'Cairn MCP heartbeat',
+  'claude-code': 'Claude Code session file',
+  'codex':       'Codex local session log',
+};
+
+// Human-friendly state names. Mapped from state (not state_family) so
+// the user can still tell "Working" (busy) from "Ready" (idle) and
+// "Stale" (expired heartbeat) from "Inactive" (no recent file write).
+const HUMAN_STATE_LABEL = {
+  active:   'Working',     // mcp ACTIVE — heartbeating + status=ACTIVE
+  busy:     'Working',     // claude busy
+  idle:     'Ready',       // claude idle = pid alive, ready for input
+  recent:   'Recent',      // codex recent = file mtime within window
+  inactive: 'Inactive',    // mcp IDLE / codex inactive
+  stale:    'Stale',       // mcp ACTIVE w/ expired heartbeat
+  dead:     'Dead',
+  unknown:  'Unknown',
+};
+
+const STATE_EXPLANATION = {
+  active:   'Cairn MCP saw a fresh heartbeat from this runner.',
+  busy:     'Claude Code\'s session file reports it is in a turn right now.',
+  idle:     'Claude Code\'s session file reports it is between turns; the process is alive and ready.',
+  recent:   'Codex\'s local rollout log was written to in the last minute.',
+  inactive: 'No recent activity; the source still reports the session exists.',
+  stale:    'The runner claimed ACTIVE but its heartbeat is older than the TTL window.',
+  dead:     'The process is gone; the agent is no longer running.',
+  unknown:  'The source did not provide enough information to infer state.',
+};
+
+const ATTRIBUTION_LABEL = {
+  capability: 'reported by Cairn MCP',
+  hint:       'manually assigned',
+  cwd:        'matched by project folder',
+};
+
+const CONFIDENCE_LABEL = {
+  high:          'high',
+  'medium-high': 'medium-high',
+  medium:        'medium',
+};
+
+/**
+ * Stable sort key for per-app numbering. Order:
+ *   1. started_at (oldest first — first session you opened gets #1)
+ *   2. last_seen_at (fallback — sessions without a started_at)
+ *   3. session_id ASCII order (final tiebreaker so numbering is stable
+ *      across re-scans even when timestamps tie)
+ *
+ * MCP rows have detail.registered_at, claude/codex have started_at
+ * (in detail). Fall back to last_seen_at, then session_id, then id.
+ */
+function activityStableKey(a) {
+  const started = (a && a.detail && a.detail.started_at)
+    || (a && a.detail && a.detail.registered_at)
+    || a.last_seen_at || 0;
+  const sid = (a && (a.session_id || a.id)) || '';
+  return [started, sid];
+}
+
+/**
+ * Number activities of the same app within one project so the user
+ * sees "Claude Code · 1" / "Claude Code · 2" instead of two opaque
+ * UUIDs. Pure: takes an array, returns a Map<id, number>.
+ *
+ * @param {object[]} activities
+ * @returns {Map<string, number>}
+ */
+function numberActivitiesByApp(activities) {
+  const result = new Map();
+  if (!Array.isArray(activities)) return result;
+  /** @type {Map<string, object[]>} */
+  const buckets = new Map();
+  for (const a of activities) {
+    if (!a || !a.app) continue;
+    if (!buckets.has(a.app)) buckets.set(a.app, []);
+    buckets.get(a.app).push(a);
+  }
+  for (const [, list] of buckets) {
+    list.sort((x, y) => {
+      const [xt, xs] = activityStableKey(x);
+      const [yt, ys] = activityStableKey(y);
+      if (xt !== yt) return xt - yt;
+      if (xs < ys) return -1;
+      if (xs > ys) return 1;
+      return 0;
+    });
+    list.forEach((a, idx) => { result.set(a.id, idx + 1); });
+  }
+  return result;
+}
+
+/**
+ * Mutate an AgentActivity in place to add the display identity
+ * fields. Caller is responsible for passing the per-app number from
+ * numberActivitiesByApp. The display fields never include raw
+ * session id, pid, or agent_id (those stay in detail).
+ *
+ * @param {object} activity
+ * @param {number} appNumber  1-based per-app sequence within the project
+ * @returns {object}          same activity (mutated)
+ */
+function decorateActivity(activity, appNumber) {
+  if (!activity) return activity;
+  const appLabel = APP_LABEL[activity.app] || activity.app;
+  const sourceKind = APP_SOURCE_KIND[activity.app] || 'adapter';
+  const sourceSentence = APP_SOURCE_SENTENCE[activity.app] || activity.source;
+  const stateLabel = HUMAN_STATE_LABEL[activity.state] || 'Unknown';
+  const stateExplanation = STATE_EXPLANATION[activity.state]
+    || 'State not recognized.';
+  const attributionLabel = activity.attribution
+    ? (ATTRIBUTION_LABEL[activity.attribution] || activity.attribution)
+    : 'unassigned';
+
+  // For MCP, the first session in a project (#1) reads cleanest as
+  // "Cairn MCP · Runner"; subsequent ones become "Cairn MCP · Runner 2".
+  // For Claude / Codex, "Terminal 1" / "Terminal 2" reads more natural
+  // since users typically open them in terminals.
+  const seat = (activity.app === 'mcp')
+    ? (appNumber === 1 ? 'Runner' : `Runner ${appNumber}`)
+    : `Terminal ${appNumber}`;
+
+  activity.display_label   = `${appLabel} · ${seat}`;
+  activity.short_label     = (activity.app === 'mcp')
+    ? `MCP ${appNumber}`
+    : (activity.app === 'claude-code' ? `Claude ${appNumber}` : `Codex ${appNumber}`);
+  activity.app_label       = appLabel;
+  activity.seat_label      = seat;
+  activity.source_kind     = sourceKind;
+  activity.source_label    = `Observed via ${sourceSentence}`;
+  activity.confidence_label = CONFIDENCE_LABEL[activity.confidence] || activity.confidence || 'unknown';
+  activity.human_state_label = stateLabel;
+  activity.state_explanation = stateExplanation;
+  activity.attribution_label = attributionLabel;
+  return activity;
+}
+
+/**
+ * Decorate every activity in the list with display identity. Mutates
+ * input array entries. Returns the same array for chaining.
+ */
+function decorateActivities(activities) {
+  const numbers = numberActivitiesByApp(activities);
+  for (const a of (activities || [])) {
+    decorateActivity(a, numbers.get(a && a.id) || 1);
+  }
+  return activities;
+}
+
 module.exports = {
   // Pure converters (smoke tests these directly).
   activityFromMcpRow,
@@ -419,4 +602,14 @@ module.exports = {
   familyForState,
   pickCapTag,
   decideMcpAttribution,
+  // Display identity (UI hardening).
+  decorateActivity,
+  decorateActivities,
+  numberActivitiesByApp,
+  APP_LABEL,
+  APP_SOURCE_KIND,
+  APP_SOURCE_SENTENCE,
+  HUMAN_STATE_LABEL,
+  STATE_EXPLANATION,
+  ATTRIBUTION_LABEL,
 };
