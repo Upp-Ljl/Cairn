@@ -156,6 +156,12 @@ function startIteration(projectId, input, opts) {
     status: 'planned',
     worker_prompt_id: null,
     worker_prompt_title: null,
+    worker_run_id: null,
+    worker_provider: null,
+    worker_status: null,
+    worker_started_at: null,
+    worker_ended_at: null,
+    worker_run_dir: null,
     worker_report_id: null,
     evidence_summary: null,
     pre_pr_gate_summary: null,
@@ -190,6 +196,12 @@ function patchIteration(projectId, iterationId, patch, opts) {
   }
   if (patch.worker_prompt_id !== undefined)    next.worker_prompt_id    = clip(patch.worker_prompt_id, 80) || null;
   if (patch.worker_prompt_title !== undefined) next.worker_prompt_title = clip(patch.worker_prompt_title, 200) || null;
+  if (patch.worker_run_id !== undefined)       next.worker_run_id       = clip(patch.worker_run_id, 80) || null;
+  if (patch.worker_provider !== undefined)     next.worker_provider     = clip(patch.worker_provider, 40) || null;
+  if (patch.worker_status !== undefined)       next.worker_status       = clip(patch.worker_status, 24) || null;
+  if (patch.worker_started_at !== undefined)   next.worker_started_at   = Number.isFinite(patch.worker_started_at) ? patch.worker_started_at : null;
+  if (patch.worker_ended_at !== undefined)     next.worker_ended_at     = Number.isFinite(patch.worker_ended_at) ? patch.worker_ended_at : null;
+  if (patch.worker_run_dir !== undefined)      next.worker_run_dir      = clip(patch.worker_run_dir, 400) || null;
   if (patch.worker_report_id !== undefined)    next.worker_report_id    = clip(patch.worker_report_id, 80) || null;
   if (patch.evidence_summary !== undefined)    next.evidence_summary    = patch.evidence_summary || null;
   if (patch.pre_pr_gate_summary !== undefined) next.pre_pr_gate_summary = patch.pre_pr_gate_summary || null;
@@ -208,6 +220,40 @@ function attachWorkerPrompt(projectId, iterationId, prompt, opts) {
     worker_prompt_id: prompt && prompt.id || ('p_' + crypto.randomBytes(4).toString('hex')),
     worker_prompt_title: prompt && prompt.title || null,
   }, opts);
+}
+
+function attachWorkerRunToIteration(projectId, iterationId, run, opts) {
+  if (!run || !run.run_id) return { ok: false, error: 'run_required' };
+  return patchIteration(projectId, iterationId, {
+    worker_run_id: run.run_id,
+    worker_provider: run.provider || null,
+    worker_status: run.status || 'running',
+    worker_started_at: run.started_at || null,
+    worker_run_dir: run.run_dir || null,
+  }, opts);
+}
+
+function markWorkerRunStatus(projectId, iterationId, status, opts) {
+  const o = opts || {};
+  const patch = { worker_status: status };
+  if (status === 'exited' || status === 'failed' || status === 'stopped' || status === 'unknown') {
+    patch.worker_ended_at = (o.ended_at && Number.isFinite(o.ended_at)) ? o.ended_at : Date.now();
+  }
+  return patchIteration(projectId, iterationId, patch, opts);
+}
+
+function getLatestOpenIteration(projectId, opts) {
+  const xs = listIterations(projectId, 5, opts);
+  for (const it of xs) {
+    if (it.status !== 'reviewed' && it.status !== 'archived') return it;
+  }
+  return null;
+}
+
+function getIterationWithRun(projectId, iterationId, opts) {
+  const it = getIteration(projectId, iterationId, opts);
+  if (!it) return null;
+  return it; // run_dir / run_id already on the iteration; caller reads run.json itself
 }
 
 function attachWorkerReport(projectId, iterationId, reportId, opts) {
@@ -272,6 +318,10 @@ module.exports = {
   attachWorkerPrompt,
   attachWorkerReport,
   attachEvidence,
+  attachWorkerRunToIteration,
+  markWorkerRunStatus,
+  getLatestOpenIteration,
+  getIterationWithRun,
   completeIterationReview,
   listIterations,
   getIteration,
