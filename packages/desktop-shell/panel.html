@@ -176,6 +176,65 @@
   }
   .goal-actions a:hover { color: #7af; }
 
+  /* Rules Card — sits between Goal and Interpretation. */
+  .rules-card {
+    padding: 6px 12px;
+    background: #14181a;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #rules-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .rules-label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.74rem;
+    color: #779;
+    flex: 0 0 auto;
+  }
+  .rules-default-tag {
+    color: #666;
+    font-size: 0.78rem;
+    flex: 0 0 auto;
+  }
+  .rules-counts {
+    color: #aaa;
+    font-size: 0.85em;
+    flex: 1 1 auto;
+    font-variant-numeric: tabular-nums;
+  }
+  #rules-line1 a {
+    color: #889;
+    cursor: pointer;
+    font-size: 0.78rem;
+    margin-left: 8px;
+  }
+  #rules-line1 a:hover { color: #7af; }
+  .rules-preview {
+    color: #888;
+    font-size: 0.85em;
+    margin-top: 2px;
+    margin-left: 0;
+    line-height: 1.4;
+  }
+  .rules-preview .pv-section {
+    display: inline-block;
+    margin-right: 12px;
+    color: #889;
+  }
+  .rules-preview .pv-section .pv-head {
+    color: #667;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+
   /* Goal Interpretation card — advisory layer. Sits between the
      Goal Card and the Pulse strip. */
   .interp-card {
@@ -1118,6 +1177,22 @@
           <a id="goal-clear-link">clear</a>
         </div>
       </div>
+    </div>
+    <!--
+      Rules Card (governance v1) — user-authored project policy.
+      Cairn doesn't enforce these; they feed Pre-PR Gate / Interpretation
+      / Prompt Pack as advisory context. Default rules render with a
+      "(default)" tag so users know it's a template.
+    -->
+    <div id="rules-card" class="rules-card">
+      <div id="rules-line1">
+        <span class="rules-label">RULES</span>
+        <span id="rules-default-tag" class="rules-default-tag" hidden>(default)</span>
+        <span id="rules-counts" class="rules-counts"></span>
+        <a id="rules-edit-link">edit</a>
+        <a id="rules-clear-link" hidden>clear</a>
+      </div>
+      <div id="rules-preview" class="rules-preview"></div>
     </div>
     <!--
       Goal Interpretation (advisory). Either:

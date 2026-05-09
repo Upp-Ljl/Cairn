@@ -35,6 +35,11 @@ const api = {
   getProjectGoal:    (projectId) => ipcRenderer.invoke('get-project-goal', projectId),
   setProjectGoal:    (projectId, goal) => ipcRenderer.invoke('set-project-goal', projectId, goal),
   clearProjectGoal:  (projectId) => ipcRenderer.invoke('clear-project-goal', projectId),
+  // Project Rules (governance v1)
+  getProjectRules:          (projectId) => ipcRenderer.invoke('get-project-rules', projectId),
+  getEffectiveProjectRules: (projectId) => ipcRenderer.invoke('get-effective-project-rules', projectId),
+  setProjectRules:          (projectId, rules) => ipcRenderer.invoke('set-project-rules', projectId, rules),
+  clearProjectRules:        (projectId) => ipcRenderer.invoke('clear-project-rules', projectId),
   // Goal Interpretation (advisory)
   getGoalInterpretation:     (projectId) => ipcRenderer.invoke('get-goal-interpretation', projectId),
   refreshGoalInterpretation: (projectId, opts) =>

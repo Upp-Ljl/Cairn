@@ -514,6 +514,182 @@ function clearProjectGoal(reg, projectId) {
   return { reg: next, cleared: true };
 }
 
+// ---------------------------------------------------------------------------
+// Project Rules Registry (Goal Mode v2 governance layer)
+// ---------------------------------------------------------------------------
+//
+// Optional `project_rules` field on a project entry. Project rules are
+// the user's own engineering policy for one project — coding standards,
+// testing policy, reporting policy, Pre-PR checklist, non-goals.
+// Cairn does NOT enforce these; they are advisory and feed:
+//
+//   - the Pre-PR Gate's checklist (rules → suggested checks)
+//   - the LLM Interpretation compact-state envelope (rules → context)
+//   - the Goal Loop Prompt Pack (rules → "you are working under
+//     these constraints")
+//
+// Rules live in registry, not SQLite. Per-project, locally authored,
+// never inferred from agent transcripts. Length-capped so the
+// registry stays small.
+//
+// Shape:
+//   {
+//     version:           1
+//     coding_standards:  string[]
+//     testing_policy:    string[]
+//     reporting_policy:  string[]
+//     pre_pr_checklist:  string[]
+//     non_goals:         string[]
+//     updated_at:        unix ms
+//   }
+//
+// Backwards-compat: a project entry without `project_rules` still
+// works; getEffectiveProjectRules returns a small default ruleset so
+// the panel never shows a blank governance card.
+
+const RULES_VERSION = 1;
+
+const RULES_MAX_TOTAL_ITEMS  = 12;   // per section
+const RULES_MAX_ITEM_LEN     = 400;  // per item
+const RULES_DEFAULT = Object.freeze({
+  version: RULES_VERSION,
+  coding_standards: [
+    'Follow existing patterns in this project; avoid unrelated refactors.',
+    'Add comments only when the WHY is non-obvious.',
+  ],
+  testing_policy: [
+    'Run the relevant project smoke before declaring a change done.',
+    'Verify read-only invariants (cairn.db / ~/.claude / ~/.codex unchanged).',
+  ],
+  reporting_policy: [
+    'Final report must include: changed files, commands run, results, residual risks.',
+    'Note explicitly when a smoke / dogfood was NOT run, and why.',
+  ],
+  pre_pr_checklist: [
+    'No new SQLite schema / migration / MCP tool / npm dep without authorization.',
+    'No secret / API key in source, logs, or commit.',
+    'No unrelated dirty files in the diff.',
+  ],
+  non_goals: [
+    'Cairn does not write code or auto-dispatch agents.',
+    'Cairn does not block git operations or run CI.',
+    'No Cursor / Jira / Linear-style features in this product.',
+  ],
+});
+
+/**
+ * @typedef {Object} ProjectRules
+ * @property {number} version
+ * @property {string[]} coding_standards
+ * @property {string[]} testing_policy
+ * @property {string[]} reporting_policy
+ * @property {string[]} pre_pr_checklist
+ * @property {string[]} non_goals
+ * @property {number} updated_at
+ */
+
+function _trimRulesList(xs, maxItems, maxLen) {
+  if (!Array.isArray(xs)) return [];
+  const out = [];
+  for (const x of xs) {
+    if (out.length >= maxItems) break;
+    const t = (typeof x === 'string') ? x.trim() : '';
+    if (!t) continue;
+    out.push(t.length > maxLen ? t.slice(0, maxLen) : t);
+  }
+  return out;
+}
+
+/**
+ * Read the active rules for a project, or null when absent.
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectId
+ * @returns {ProjectRules|null}
+ */
+function getProjectRules(reg, projectId) {
+  if (!reg || !Array.isArray(reg.projects)) return null;
+  const p = reg.projects.find(x => x.id === projectId);
+  if (!p) return null;
+  return p.project_rules || null;
+}
+
+/**
+ * Get the effective rules: user-set rules if present, else the default
+ * ruleset frozen above. Always returns a non-null object so the UI /
+ * gate / interpretation never has to special-case "no rules". The
+ * `is_default` flag tells the UI which template is rendered.
+ *
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectId
+ * @returns {{ rules: ProjectRules, is_default: boolean }}
+ */
+function getEffectiveProjectRules(reg, projectId) {
+  const stored = getProjectRules(reg, projectId);
+  if (stored) return { rules: stored, is_default: false };
+  return { rules: Object.assign({ updated_at: 0 }, RULES_DEFAULT), is_default: true };
+}
+
+/**
+ * Replace (or create) the project's rules. Returns the next registry
+ * + persisted rules. All fields are optional individually but at
+ * least one section must contain a non-empty item, otherwise we
+ * reject — empty rules ≠ "use defaults"; the user clears via
+ * clearProjectRules instead.
+ *
+ * @param {{ projects: ProjectRegistryEntry[] }} reg
+ * @param {string} projectId
+ * @param {{ coding_standards?:string[], testing_policy?:string[], reporting_policy?:string[], pre_pr_checklist?:string[], non_goals?:string[] }} input
+ * @returns {{ reg, rules: ProjectRules|null, error?: string }}
+ */
+function setProjectRules(reg, projectId, input) {
+  if (!reg || !Array.isArray(reg.projects)) {
+    return { reg, rules: null, error: 'invalid_registry' };
+  }
+  const idx = reg.projects.findIndex(x => x.id === projectId);
+  if (idx < 0) return { reg, rules: null, error: 'project_not_found' };
+  const o = input || {};
+  const rules = {
+    version: RULES_VERSION,
+    coding_standards: _trimRulesList(o.coding_standards, RULES_MAX_TOTAL_ITEMS, RULES_MAX_ITEM_LEN),
+    testing_policy:   _trimRulesList(o.testing_policy,   RULES_MAX_TOTAL_ITEMS, RULES_MAX_ITEM_LEN),
+    reporting_policy: _trimRulesList(o.reporting_policy, RULES_MAX_TOTAL_ITEMS, RULES_MAX_ITEM_LEN),
+    pre_pr_checklist: _trimRulesList(o.pre_pr_checklist, RULES_MAX_TOTAL_ITEMS, RULES_MAX_ITEM_LEN),
+    non_goals:        _trimRulesList(o.non_goals,        RULES_MAX_TOTAL_ITEMS, RULES_MAX_ITEM_LEN),
+    updated_at: Date.now(),
+  };
+  const totalItems =
+    rules.coding_standards.length +
+    rules.testing_policy.length +
+    rules.reporting_policy.length +
+    rules.pre_pr_checklist.length +
+    rules.non_goals.length;
+  if (totalItems === 0) return { reg, rules: null, error: 'rules_empty' };
+  const nextProjects = reg.projects.slice();
+  nextProjects[idx] = Object.assign({}, reg.projects[idx], { project_rules: rules });
+  const next = { version: REGISTRY_VERSION, projects: nextProjects };
+  saveRegistry(next);
+  return { reg: next, rules };
+}
+
+/**
+ * Clear the project's rules (no-op when absent). Re-fetching after
+ * this returns null, and getEffectiveProjectRules drops back to the
+ * default ruleset.
+ */
+function clearProjectRules(reg, projectId) {
+  if (!reg || !Array.isArray(reg.projects)) return { reg, cleared: false };
+  const idx = reg.projects.findIndex(x => x.id === projectId);
+  if (idx < 0) return { reg, cleared: false };
+  if (!reg.projects[idx].project_rules) return { reg, cleared: false };
+  const nextEntry = Object.assign({}, reg.projects[idx]);
+  delete nextEntry.project_rules;
+  const nextProjects = reg.projects.slice();
+  nextProjects[idx] = nextEntry;
+  const next = { version: REGISTRY_VERSION, projects: nextProjects };
+  saveRegistry(next);
+  return { reg: next, cleared: true };
+}
+
 function touchProject(reg, id) {
   const now = Date.now();
   const next = {
@@ -579,6 +755,15 @@ module.exports = {
   GOAL_MAX_OUTCOME_LEN,
   GOAL_MAX_CRITERIA,
   GOAL_MAX_CRITERION_LEN,
+  // project rules
+  getProjectRules,
+  getEffectiveProjectRules,
+  setProjectRules,
+  clearProjectRules,
+  RULES_VERSION,
+  RULES_MAX_TOTAL_ITEMS,
+  RULES_MAX_ITEM_LEN,
+  RULES_DEFAULT,
   // aggregation
   uniqueDbPaths,
   hintsByDbPath,

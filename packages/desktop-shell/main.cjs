@@ -944,6 +944,41 @@ ipcMain.handle('set-project-goal', (_e, projectId, input) => {
   return { ok: true, goal: result.goal };
 });
 
+// Project Rules — registry-only governance layer.
+//
+// Cairn does not enforce rules; they're advisory inputs to Pre-PR
+// Gate / Interpretation / Goal Loop Prompt Pack. setProjectRules
+// rejects an all-empty payload (use clear-project-rules instead) so
+// "" never silently overwrites a real ruleset.
+ipcMain.handle('get-project-rules', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  return registry.getProjectRules(reg, projectId);
+});
+
+ipcMain.handle('get-effective-project-rules', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return null;
+  return registry.getEffectiveProjectRules(reg, projectId);
+});
+
+ipcMain.handle('set-project-rules', (_e, projectId, input) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return { ok: false, error: 'projectId_required' };
+  }
+  const result = registry.setProjectRules(reg, projectId, input || {});
+  if (result.error) return { ok: false, error: result.error };
+  reg = result.reg;
+  return { ok: true, rules: result.rules };
+});
+
+ipcMain.handle('clear-project-rules', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return { ok: false, error: 'projectId_required' };
+  }
+  const result = registry.clearProjectRules(reg, projectId);
+  reg = result.reg;
+  return { ok: true, cleared: result.cleared };
+});
+
 ipcMain.handle('clear-project-goal', (_e, projectId) => {
   if (!projectId || typeof projectId !== 'string') {
     return { ok: false, error: 'projectId_required' };

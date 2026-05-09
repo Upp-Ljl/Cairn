@@ -307,6 +307,130 @@ function openGoalEditModal(existing) {
 }
 
 // ---------------------------------------------------------------------------
+// Project Rules card renderer (governance v1)
+// ---------------------------------------------------------------------------
+//
+// User-authored policy for one project. Falls back to a default
+// ruleset so the card never goes blank — the default has its own
+// "(default)" tag so users see which template is rendered.
+
+let lastRulesEnvelope = null; // { rules, is_default }
+
+function renderRulesCard(envelope) {
+  lastRulesEnvelope = envelope || null;
+  const defaultTag = document.getElementById('rules-default-tag');
+  const countsEl   = document.getElementById('rules-counts');
+  const previewEl  = document.getElementById('rules-preview');
+  const clearLink  = document.getElementById('rules-clear-link');
+  if (!countsEl) return;
+
+  if (!envelope) {
+    defaultTag.hidden = true;
+    countsEl.textContent = '';
+    previewEl.textContent = '';
+    clearLink.hidden = true;
+    return;
+  }
+  const { rules, is_default } = envelope;
+  defaultTag.hidden = !is_default;
+  clearLink.hidden  = is_default; // can't clear the default
+
+  const sections = [
+    ['CS',     rules.coding_standards],
+    ['TEST',   rules.testing_policy],
+    ['REPORT', rules.reporting_policy],
+    ['PRE-PR', rules.pre_pr_checklist],
+    ['NON-G',  rules.non_goals],
+  ];
+  countsEl.innerHTML = sections.map(([label, list]) =>
+    `<span class="pv-section">${label} <span style="color:#aab">${list.length}</span></span>`
+  ).join('');
+
+  // Compact preview: 1-2 representative items so the card has signal.
+  const repr = [];
+  if (rules.coding_standards.length) repr.push({ k: 'CS',    v: rules.coding_standards[0] });
+  if (rules.pre_pr_checklist.length) repr.push({ k: 'PRE-PR', v: rules.pre_pr_checklist[0] });
+  if (rules.non_goals.length)        repr.push({ k: 'NON-G', v: rules.non_goals[0] });
+  previewEl.innerHTML = repr.slice(0, 2).map(r =>
+    `<div><span class="pv-head">${r.k}</span> ${escapeHtml(r.v)}</div>`
+  ).join('');
+}
+
+function setupRulesCard() {
+  const editLink  = document.getElementById('rules-edit-link');
+  const clearLink = document.getElementById('rules-clear-link');
+  if (editLink) editLink.addEventListener('click', () => openRulesEditModal(lastRulesEnvelope));
+  if (clearLink) clearLink.addEventListener('click', async () => {
+    if (!selectedProject) return;
+    const proceed = window.confirm('Clear this project\'s rules and revert to the default ruleset?');
+    if (!proceed) return;
+    await window.cairn.clearProjectRules(selectedProject.id);
+    poll().catch(() => {});
+  });
+}
+
+function openRulesEditModal(envelope) {
+  if (!selectedProject) return;
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl  = document.getElementById('modal-body');
+  const isDefault = !!(envelope && envelope.is_default);
+  titleEl.textContent = isDefault ? 'Set project rules' : 'Edit project rules';
+  // Plain inline form — five textareas, one per section. We tell the
+  // user what each section means; no DSL.
+  bodyEl.innerHTML =
+    `<div class="goal-form">` +
+      `<label>Coding standards <span class="goal-form-hint">(one per line; advisory only)</span></label>` +
+      `<textarea id="rules-form-cs" rows="3"></textarea>` +
+      `<label>Testing policy <span class="goal-form-hint">(one per line)</span></label>` +
+      `<textarea id="rules-form-test" rows="3"></textarea>` +
+      `<label>Reporting policy <span class="goal-form-hint">(one per line)</span></label>` +
+      `<textarea id="rules-form-report" rows="3"></textarea>` +
+      `<label>Pre-PR checklist <span class="goal-form-hint">(one per line; advisory)</span></label>` +
+      `<textarea id="rules-form-prepr" rows="4"></textarea>` +
+      `<label>Non-goals <span class="goal-form-hint">(one per line; out-of-scope reminders)</span></label>` +
+      `<textarea id="rules-form-nong" rows="3"></textarea>` +
+      `<div class="goal-form-actions">` +
+        `<button id="rules-form-save" type="button">Save</button>` +
+      `</div>` +
+    `</div>`;
+  overlay.classList.add('open');
+
+  const r = (envelope && envelope.rules) || {};
+  document.getElementById('rules-form-cs').value     = (r.coding_standards || []).join('\n');
+  document.getElementById('rules-form-test').value   = (r.testing_policy   || []).join('\n');
+  document.getElementById('rules-form-report').value = (r.reporting_policy || []).join('\n');
+  document.getElementById('rules-form-prepr').value  = (r.pre_pr_checklist || []).join('\n');
+  document.getElementById('rules-form-nong').value   = (r.non_goals        || []).join('\n');
+
+  document.getElementById('rules-form-save').addEventListener('click', async () => {
+    function ll(id) {
+      return document.getElementById(id).value
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    }
+    const res = await window.cairn.setProjectRules(selectedProject.id, {
+      coding_standards: ll('rules-form-cs'),
+      testing_policy:   ll('rules-form-test'),
+      reporting_policy: ll('rules-form-report'),
+      pre_pr_checklist: ll('rules-form-prepr'),
+      non_goals:        ll('rules-form-nong'),
+    });
+    if (res && res.ok) {
+      closeModal();
+      poll().catch(() => {});
+    } else {
+      const footer = document.getElementById('footer');
+      footer.textContent = `setProjectRules failed: ${(res && res.error) || 'unknown'}`;
+      footer.classList.add('bad');
+      setTimeout(() => {
+        footer.textContent = 'read-only · polling 1s · Cairn project control surface';
+        footer.classList.remove('bad');
+      }, 4000);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Goal Interpretation renderer (Goal Mode v1, advisory)
 // ---------------------------------------------------------------------------
 //
@@ -2162,6 +2286,9 @@ async function poll() {
       const goalP    = selectedProject
         ? window.cairn.getProjectGoal(selectedProject.id)
         : Promise.resolve(null);
+      const rulesP   = selectedProject
+        ? window.cairn.getEffectiveProjectRules(selectedProject.id)
+        : Promise.resolve(null);
       const interpP  = selectedProject
         ? window.cairn.getGoalInterpretation(selectedProject.id)
         : Promise.resolve(null);
@@ -2189,12 +2316,13 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, pulse, goal, interp, gate, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
-        summaryP, pulseP, goalP, interpP, gateP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
+      const [summary, pulse, goal, rules, interp, gate, _dbPath, events, tasks, sessions, reports, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, goalP, rulesP, interpP, gateP, dbPathP, eventsP, tasksP, sessionsP, reportsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
       renderGoalCard(goal);
+      renderRulesCard(rules);
       renderInterpretation(interp);
       renderPrePrGate(gate);
       renderPulse(pulse);
@@ -2232,6 +2360,7 @@ async function poll() {
 setupTabs();
 setupMenu();
 setupGoalCard();
+setupRulesCard();
 setupInterpretationCard();
 setupPrePrGateCard();
 setupReportsTab();
