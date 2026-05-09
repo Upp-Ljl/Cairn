@@ -270,10 +270,102 @@ const e5 = await gate.evaluatePrePrGate(baseInput(), {
 eq(e5.mode, 'deterministic', 'forceDeterministic skips LLM');
 
 // ---------------------------------------------------------------------------
-// Part F — read-only invariants
+// Part F — project rules awareness (governance v1)
 // ---------------------------------------------------------------------------
 
-console.log('\n==> Part F: read-only invariants');
+console.log('\n==> Part F: project rules awareness');
+
+const userRules = {
+  version: 1,
+  coding_standards: ['Follow existing patterns', 'No unrelated refactors'],
+  testing_policy: ['Run targeted smoke', 'Verify mtime invariants'],
+  reporting_policy: ['List changed files in final report'],
+  pre_pr_checklist: ['No new schema/dep without authorization', 'No secret leakage'],
+  non_goals: ['No auto-dispatch', 'No code execution by Cairn'],
+  updated_at: NOW,
+};
+
+// Status still locked: blocker > rules.
+const r_rules_blocker = gate.deterministicGate(baseInput({
+  summary: { blockers_open: 1, tasks_running: 0, tasks_blocked: 0, tasks_waiting_review: 0, tasks_failed: 0, outcomes_failed: 0, conflicts_open: 0 },
+  project_rules: userRules,
+}), { now: NOW });
+eq(r_rules_blocker.status, 'not_ready', 'rules + blocker → status still not_ready');
+ok(r_rules_blocker.rule_log.includes('rules_applied'),
+   'rule_log: rules_applied tag (user rules)');
+
+// Rules feed checklist sections.
+const r_rules_clean = gate.deterministicGate(baseInput({
+  summary: { tasks_running: 0, tasks_blocked: 0, tasks_waiting_review: 0, tasks_failed: 0, blockers_open: 0, outcomes_failed: 0, conflicts_open: 0 },
+  project_rules: userRules,
+}), { now: NOW });
+ok(r_rules_clean.checklist.some(c => c.startsWith('Pre-PR:')),
+   'checklist: Pre-PR items present');
+ok(r_rules_clean.checklist.some(c => c.startsWith('Testing:')),
+   'checklist: Testing items present');
+ok(r_rules_clean.checklist.some(c => c.startsWith('Reporting:')),
+   'checklist: Reporting items present');
+ok(r_rules_clean.checklist.some(c => c.startsWith('Coding:')),
+   'checklist: Coding (top 2) items present');
+// non_goals → evidence (not checklist) so users see boundary.
+ok(r_rules_clean.evidence.some(e => /Non-goals/i.test(e)),
+   'evidence: non_goals section surfaced');
+
+// Default rules: items tagged [default] so the user sees the floor.
+const r_default = gate.deterministicGate(baseInput({
+  summary: { tasks_running: 0, tasks_blocked: 0, tasks_waiting_review: 0, tasks_failed: 0, blockers_open: 0, outcomes_failed: 0, conflicts_open: 0 },
+  project_rules: userRules,
+  project_rules_is_default: true,
+}), { now: NOW });
+ok(r_default.checklist.every(c => !/\[default\]/.test(c) || c.endsWith(' [default]')),
+   'default-tag suffix consistent');
+ok(r_default.checklist.some(c => c.endsWith(' [default]')),
+   'default rules: items tagged [default]');
+ok(r_default.rule_log.includes('rules_default_applied'),
+   'rule_log: rules_default_applied tag');
+
+// reporting_policy sharpens no-recent-report wording.
+const r_no_report_with_policy = gate.deterministicGate(baseInput({
+  recent_reports: [],
+  project_rules: userRules,
+}), { now: NOW });
+ok(r_no_report_with_policy.rule_log.includes('no_recent_report'),
+   'no_recent_report still fires when policy set');
+ok(r_no_report_with_policy.risks.some(r =>
+   r.kind === 'no_recent_report' && /reporting policy/i.test(r.title)),
+   'no_recent_report wording sharpened by reporting policy');
+
+// LLM rewrite: rules in input still produce locked status, and a
+// hostile LLM trying to remove non_goals or change status is ignored.
+const mockHostileRules = async (payload) => {
+  return {
+    enabled: true, ok: true, model: 'fake-model',
+    text: JSON.stringify({
+      checklist: ['Run the deploy', 'Push to main now'], // hostile additions
+      risks: [],
+      summary: 'Looks ready to ship.',
+      status: 'ready_with_risks', // hostile attempt to flip from not_ready
+    }),
+  };
+};
+const r_hostile = await gate.evaluatePrePrGate(baseInput({
+  summary: { blockers_open: 1, tasks_running: 0, tasks_blocked: 0, tasks_waiting_review: 0, tasks_failed: 0, outcomes_failed: 0, conflicts_open: 0 },
+  project_rules: userRules,
+}), {
+  provider: { enabled: true, _apiKey: 'sk-FAKE', model: 'fake-model', baseUrl: 'https://x/v1' },
+  chatJson: mockHostileRules,
+});
+eq(r_hostile.status, 'not_ready', 'hostile LLM cannot flip not_ready → ready_with_risks');
+// Even though LLM tried hostile additions, the deterministic rule_log
+// is preserved (LLM cannot rewrite it).
+ok(r_hostile.rule_log.includes('open_blocker'), 'hostile LLM: rule_log preserves open_blocker');
+ok(r_hostile.rule_log.includes('rules_applied'), 'hostile LLM: rule_log preserves rules_applied');
+
+// ---------------------------------------------------------------------------
+// Part G — read-only invariants
+// ---------------------------------------------------------------------------
+
+console.log('\n==> Part G: read-only invariants');
 
 const src = fs.readFileSync(path.join(root, 'pre-pr-gate.cjs'), 'utf8');
 ok(!/\.run\s*\(/.test(src),     'pre-pr-gate.cjs: no .run(');

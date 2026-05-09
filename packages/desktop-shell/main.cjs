@@ -1271,15 +1271,21 @@ const prePrGateCache = new Map();
 function buildPrePrGateInput(proj, entry, agentIds) {
   // Same shape as buildInterpretationInput — the gate consumes
   // goal + pulse + activity_summary + recent_reports + a flat
-  // summary field (counts).
+  // summary field (counts) + project_rules (governance v1).
   const interpInput = buildInterpretationInput(proj, entry, agentIds);
   const summary = projectQueries.queryProjectScopedSummary(
     entry.db, entry.tables, proj.db_path, agentIds,
   );
-  // Carry the post-fold counts (Claude/Codex etc.) for the gate's
-  // future use; the deterministic rules currently read only the
-  // base SQLite-derived counts here.
-  return Object.assign({}, interpInput, { summary });
+  // Effective rules: user-set if present, else the default ruleset.
+  // The is_default flag tells the gate to tag default-derived
+  // checklist items with " [default]" so the user can see what's
+  // theirs vs the floor.
+  const effRules = registry.getEffectiveProjectRules(reg, proj.id);
+  return Object.assign({}, interpInput, {
+    summary,
+    project_rules: effRules.rules,
+    project_rules_is_default: effRules.is_default,
+  });
 }
 
 ipcMain.handle('get-pre-pr-gate', (_e, projectId) => {

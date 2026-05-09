@@ -59,7 +59,15 @@ function clip(s, max) {
 
 /**
  * Apply the locked set of deterministic rules. Inputs are the same
- * shape as Goal Interpretation v1 + a recent_reports list.
+ * shape as Goal Interpretation v1 + a recent_reports list, plus an
+ * optional project_rules object (governance v1).
+ *
+ * Project rules are ADVISORY — they extend the checklist (with the
+ * pre_pr_checklist items + items derived from testing_policy /
+ * reporting_policy / coding_standards) and they sharpen the
+ * "missing report" wording when reporting_policy says reports are
+ * required. They DO NOT change the locked status decision: blocker /
+ * failed_outcome / failed_task / open_conflict still wins.
  *
  * @returns {{ status, checklist, risks, evidence, rule_log }}
  */
@@ -71,6 +79,8 @@ function deterministicGate(input, opts) {
   const summary  = input && input.summary;
   const activity = input && input.activity_summary;
   const reports  = Array.isArray(input && input.recent_reports) ? input.recent_reports : [];
+  const rules    = (input && input.project_rules) || null; // already an effective ruleset
+  const isDefaultRules = !!(input && input.project_rules_is_default);
 
   const checklist = [];
   const risks = [];
@@ -140,9 +150,18 @@ function deterministicGate(input, opts) {
   // ----- Observational watch rules -----
 
   if (haveGoal && reports.length === 0) {
+    // If reporting_policy says reports are required, sharpen the
+    // wording. Otherwise it's still a watch-level "you'd benefit from
+    // one" hint.
+    const policyRequiresReport = !!(rules && Array.isArray(rules.reporting_policy)
+      && rules.reporting_policy.length > 0);
     addRisk('watch', 'no_recent_report',
-      'No recent worker report',
-      'Without a worker report from the agent, the gate has no first-person summary of "what was done / what is left / what is blocked".');
+      policyRequiresReport
+        ? 'No recent worker report (reporting policy expects one)'
+        : 'No recent worker report',
+      policyRequiresReport
+        ? `The project's reporting policy lists ${rules.reporting_policy.length} item(s); a worker report covering them is the floor.`
+        : 'Without a worker report from the agent, the gate has no first-person summary of "what was done / what is left / what is blocked".');
     addCheck('Add a worker report from the agent before PR.');
   }
   if (reports.length > 0) {
@@ -178,6 +197,46 @@ function deterministicGate(input, opts) {
         s.detail || '');
       addCheck('Confirm the in-flight task is still actively being worked on, or close it.');
     }
+  }
+
+  // ----- Rules-derived advisory checklist -----
+  //
+  // Project rules feed the checklist as advisory items (status remains
+  // locked to deterministic). Each item is a one-line reminder, NOT a
+  // "Cairn judges PR by this" claim. Order: pre_pr_checklist →
+  // testing_policy → reporting_policy → coding_standards (selective).
+  //
+  // We tag default-ruleset items with " [default]" so the user sees
+  // which floor they're inheriting; their own rules render plain.
+
+  function pushRuleItems(list, label) {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const tag = isDefaultRules ? ' [default]' : '';
+      addCheck(`${label}: ${item}${tag}`);
+    }
+  }
+
+  if (rules) {
+    pushRuleItems(rules.pre_pr_checklist, 'Pre-PR');
+    pushRuleItems(rules.testing_policy,   'Testing');
+    pushRuleItems(rules.reporting_policy, 'Reporting');
+    // Coding standards: only the first 2-3 to avoid drowning the user.
+    // The full list is visible in the Rules Card; the gate surface is
+    // a compact reminder, not a regurgitator.
+    if (Array.isArray(rules.coding_standards) && rules.coding_standards.length) {
+      const csTop = rules.coding_standards.slice(0, 2);
+      pushRuleItems(csTop, 'Coding');
+    }
+
+    // non_goals are the boundary contract — surface separately as
+    // risk-level info so the user sees them before composing the PR.
+    if (Array.isArray(rules.non_goals) && rules.non_goals.length) {
+      addEvidence(`Non-goals (${rules.non_goals.length}): ` +
+        rules.non_goals.slice(0, 3).join(' · ') +
+        (rules.non_goals.length > 3 ? ' …' : ''));
+    }
+    ruleLog.push(isDefaultRules ? 'rules_default_applied' : 'rules_applied');
   }
 
   // ----- Positive evidence -----
