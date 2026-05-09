@@ -35,6 +35,7 @@ const api = {
   renameProject:      (id, label) => ipcRenderer.invoke('rename-project', id, label),
   addHint:            (id, agentId) => ipcRenderer.invoke('add-hint', id, agentId),
   getProjectSessions: () => ipcRenderer.invoke('get-project-sessions'),
+  getProjectPulse:    () => ipcRenderer.invoke('get-project-pulse'),
   getUnassignedDetail:(dbPath) => ipcRenderer.invoke('get-unassigned-detail', dbPath),
 
   // ---- panel views (active-project routed; deprecated set-db-path) ----

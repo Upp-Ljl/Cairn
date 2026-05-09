@@ -52,6 +52,7 @@ const projectQueries = require('./project-queries.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
+const goalSignals       = require('./goal-signals.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1052,6 +1053,34 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
 // active project's hints; for Run Log / Tasks they currently return
 // DB-wide data (per-project filtering for those is Day 3+ work).
 
+// Project Pulse — derived signals only. No mutation, no recommendation
+// of next agent action. Uses the same project summary + activity feed
+// the rest of the IPC layer already produces; no new SQL.
+ipcMain.handle('get-project-pulse', () => {
+  const proj = activeProject();
+  const entry = activeDbEntry();
+  if (!proj || !entry) {
+    return goalSignals.deriveProjectPulse(null, [], {});
+  }
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const summary = projectQueries.queryProjectScopedSummary(
+    entry.db, entry.tables, proj.db_path, agentIds,
+  );
+  const claudeAll = claudeSessionScan.scanClaudeSessions();
+  const codexAll  = codexSessionScan.scanCodexSessions();
+  const { matched: claudeForP } = claudeSessionScan.partitionByProject(claudeAll, proj);
+  const { matched: codexForP }  = codexSessionScan.partitionByProject(codexAll, proj);
+  foldClaudeIntoSummary(summary, claudeForP);
+  foldCodexIntoSummary(summary, codexForP);
+  const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, proj, agentIds);
+  const built = agentActivity.buildProjectActivities(
+    proj, mcpForActivity, claudeAll, codexAll,
+    { claude: claudeSessionScan, codex: codexSessionScan },
+  );
+  summary.agent_activity = built.summary;
+  return goalSignals.deriveProjectPulse(summary, built.activities, {});
+});
+
 ipcMain.handle('get-project-summary', () => {
   const entry = activeDbEntry();
   if (!entry) return projectQueries.queryProjectScopedSummary(null, new Set(), activeDbPath(), []);
@@ -1267,6 +1296,35 @@ app.whenReady().then(() => {
     `mutations=${MUTATIONS_ENABLED ? 'on(dev)' : 'off'} ` +
     `tray=on projects=${reg.projects.length} dbs=${dbHandles.size}`
   );
+
+  // Boot smoke: when CAIRN_DESKTOP_BOOT_TEST=1 is set, run a few poll
+  // ticks to exercise tray + getProjectsList + IPC handlers, then quit
+  // gracefully so the smoke driver can assert exit code.
+  if (process.env.CAIRN_DESKTOP_BOOT_TEST === '1') {
+    // Drive one explicit tray refresh + one project-list build to
+    // catch wiring errors that wouldn't surface from the timer-only
+    // path (e.g. a missing require).
+    try { refreshTray(); } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('BOOT_TEST refreshTray failed:', e && e.message);
+      process.exit(2);
+    }
+    try {
+      const list = getProjectsList();
+      // eslint-disable-next-line no-console
+      console.log(
+        `BOOT_TEST projects=${list.projects.length} unassigned=${list.unassigned.length}`
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('BOOT_TEST getProjectsList failed:', e && e.message);
+      process.exit(2);
+    }
+    setTimeout(() => {
+      isQuitting = true;
+      app.quit();
+    }, 3000);
+  }
 });
 
 // Tray-aware lifecycle: closing all windows does NOT quit the app.

@@ -172,6 +172,75 @@ function renderHeader(_dbPath) {
   renderHeaderForView();
 }
 
+// ---------------------------------------------------------------------------
+// Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
+// ---------------------------------------------------------------------------
+//
+// Cairn does NOT decide what the agent should do next. The strip
+// answers "what should the user pay attention to right now?" only.
+// Copy is reviewed against PRODUCT.md §1.3 #4 / §7 principle 2.
+
+let pulseExpanded = false;
+
+function pulseLevelLabel(lv) {
+  return ({ ok: 'OK', watch: 'WATCH', attention: 'ATTENTION' })[lv] || lv.toUpperCase();
+}
+
+function renderPulse(pulse) {
+  const stripEl = document.getElementById('pulse');
+  if (!stripEl) return;
+  if (!pulse) {
+    stripEl.classList.add('pulse-hidden');
+    return;
+  }
+  // Hide entirely when there's nothing meaningful to show — an `ok`
+  // pulse with no signals is just visual noise. Only render when
+  // pulse_level != ok OR there's at least one info signal.
+  const sigs = Array.isArray(pulse.signals) ? pulse.signals : [];
+  const level = pulse.pulse_level || 'ok';
+  if (level === 'ok' && sigs.length === 0) {
+    stripEl.classList.add('pulse-hidden');
+    return;
+  }
+  stripEl.classList.remove('pulse-hidden');
+  stripEl.classList.remove('pulse-ok', 'pulse-watch', 'pulse-attention');
+  stripEl.classList.add('pulse-' + level);
+
+  const dotEl = document.getElementById('pulse-dot');
+  dotEl.classList.remove('ok', 'watch', 'attention');
+  dotEl.classList.add(level);
+
+  document.getElementById('pulse-level').textContent = pulseLevelLabel(level);
+  const top = (pulse.next_attention && pulse.next_attention[0]) || sigs[0] || null;
+  document.getElementById('pulse-headline').textContent = top
+    ? top.title
+    : 'no issues to surface';
+
+  const detailEl = document.getElementById('pulse-signals');
+  if (pulseExpanded && sigs.length > 0) {
+    detailEl.hidden = false;
+    detailEl.innerHTML = sigs.map(s => (
+      `<div class="sig">` +
+        `<span class="sig-dot ${escapeHtml(s.severity)}">●</span>` +
+        `<span class="sig-title">${escapeHtml(s.title)}</span>` +
+        (s.detail ? `<span class="sig-detail">${escapeHtml(s.detail)}</span>` : '') +
+      `</div>`
+    )).join('');
+  } else {
+    detailEl.hidden = true;
+    detailEl.innerHTML = '';
+  }
+
+  // Re-bind click-to-toggle (idempotent — strip is the same DOM node).
+  if (!stripEl._wired) {
+    stripEl.addEventListener('click', () => {
+      pulseExpanded = !pulseExpanded;
+      poll().catch(() => {});
+    });
+    stripEl._wired = true;
+  }
+}
+
 function renderSummary(summary) {
   if (!summary || !summary.available) {
     setSummaryCell(document.getElementById('s-agents'), 0);
@@ -1610,6 +1679,7 @@ async function poll() {
     } else {
       // L2 view — Quick-Slice surface scoped to the active project.
       const summaryP = window.cairn.getProjectSummary();
+      const pulseP   = window.cairn.getProjectPulse();
       const dbPathP  = window.cairn.getDbPath();
 
       const eventsP = activeTab === 'runlog'
@@ -1628,11 +1698,12 @@ async function poll() {
         ? window.cairn.getTaskCheckpoints(selectedTaskId)
         : Promise.resolve(null);
 
-      const [summary, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
-        summaryP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
+      const [summary, pulse, _dbPath, events, tasks, sessions, detail, ckpts] = await Promise.all([
+        summaryP, pulseP, dbPathP, eventsP, tasksP, sessionsP, detailP, ckptsP,
       ]);
 
       renderHeaderForView();
+      renderPulse(pulse);
       renderSummary(summary);
 
       if (events) renderRunLog(events);
