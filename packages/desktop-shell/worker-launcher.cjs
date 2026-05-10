@@ -120,6 +120,15 @@ const PROVIDERS = {
     acceptsStdin: false,
     fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
   },
+  'fixture-worker': {
+    id: 'fixture-worker',
+    displayName: 'Fixture (worker)',
+    command: process.execPath,
+    description: 'Local fixture that touches a marker file in cwd, emits a Worker Report (no LLM)',
+    argvFor: (_promptPath) => ['-e', FIXTURE_WORKER_SCRIPT],
+    acceptsStdin: false,
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+  },
 };
 
 // Inlined as a string so the launcher has no dep on a separate file
@@ -166,6 +175,41 @@ process.stdout.write('- [doc] README.md missing a quick-start section for new co
 process.stdout.write('- [bug_fix] tests/api/mailbox.test.ts: timeout edge case under load\\n');
 process.stdout.write('- [refactor] consolidate duplicate session-token validators across api/\\n');
 process.stdout.write('- [other] add a CHANGELOG.md entry template\\n');
+process.exit(0);
+`;
+
+// fixture-worker — exercises the *mutation* path of the Worker
+// stage: actually writes a marker file in the run's cwd and echoes
+// the candidate id. Day 3 dogfood / smoke uses this to confirm that
+// pickCandidateAndLaunchWorker really binds work to a candidate
+// (rather than just generating a prompt). The fixture intentionally
+// does NOT modify any pre-existing file — it creates one new file
+// so cleanup is trivial.
+const FIXTURE_WORKER_SCRIPT = `
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const promptPath = process.env.CAIRN_FIXTURE_PROMPT;
+const prompt = promptPath ? fs.readFileSync(promptPath, 'utf8') : '';
+const m = prompt.match(/cairn-candidate-id:\\s*(\\S+)/);
+const candidateId = m ? m[1] : 'unknown';
+const cwd = process.cwd();
+const marker = path.join(cwd, 'cairn-worker-fixture-touched.txt');
+fs.writeFileSync(marker,
+  '# fixture-worker marker\\n' +
+  'cairn-candidate-id: ' + candidateId + '\\n' +
+  'timestamp: ' + new Date().toISOString() + '\\n');
+process.stdout.write('[fixture-worker] received prompt of ' + prompt.length + ' chars\\n');
+process.stdout.write('[fixture-worker] candidate_id parsed: ' + candidateId + '\\n');
+process.stdout.write('[fixture-worker] wrote marker: ' + marker + '\\n\\n');
+process.stdout.write('## Worker Report\\n');
+process.stdout.write('### Completed\\n');
+process.stdout.write('- cairn-candidate-id: ' + candidateId + '\\n');
+process.stdout.write('- Created cairn-worker-fixture-touched.txt at repo root.\\n');
+process.stdout.write('### Remaining\\n');
+process.stdout.write('### Blockers\\n');
+process.stdout.write('### Next\\n');
+process.stdout.write('- Replace fixture-worker with a real provider for production rounds.\\n');
 process.exit(0);
 `;
 

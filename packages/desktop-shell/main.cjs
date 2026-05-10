@@ -1880,6 +1880,10 @@ ipcMain.handle('extract-scout-candidates', (_e, projectId, input) => {
   return managedLoopHandlers.extractScoutCandidates(projectId, input || {});
 });
 
+ipcMain.handle('pick-candidate-and-launch-worker', (_e, projectId, input) => {
+  return managedLoopHandlers.pickCandidateAndLaunchWorker(projectId, input || {});
+});
+
 ipcMain.handle('continue-managed-iteration-review', async (_e, projectId, opts) => {
   // Same context build as review-managed-iteration; collects evidence + reviews.
   const proj = reg.projects.find(p => p.id === projectId);

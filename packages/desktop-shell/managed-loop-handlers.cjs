@@ -28,6 +28,7 @@ const adapter   = require('./managed-loop-prompt.cjs');
 const wr        = require('./worker-reports.cjs');
 const launcher  = require('./worker-launcher.cjs');
 const candidates = require('./project-candidates.cjs');
+const workerPrompt = require('./worker-prompt.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. list — every managed project on disk, joined with the registry
@@ -431,6 +432,138 @@ function tailWorkerRun(runId, limit, opts) {
  * Returns { ok, candidate_ids, candidates } on success;
  *         { ok:false, error } on the standard error codes.
  */
+/**
+ * Pick a PROPOSED candidate and launch a Worker round on it.
+ *
+ * State-machine contract (steps run IN ORDER; each step either
+ * succeeds or short-circuits with a stable error code):
+ *
+ *   i.    candidate_not_found       — no row with that id
+ *   ii.   project_id_mismatch       — candidate belongs to another project
+ *   iii.  candidate_not_proposed    — candidate is past PROPOSED
+ *                                     (current_status returned in detail)
+ *   iv.   managed_project_not_found — no managed-project record on disk
+ *   v.    PROPOSED → PICKED         — user intent persisted before launch
+ *   vi.   prompt synthesised        — caller's prompt OR generateWorkerPrompt
+ *   vii.  startManagedIteration     — worker gets its OWN iteration row
+ *                                     (NOT the scout's iteration)
+ *   viii. launchManagedWorker
+ *   ix.   if launch failed:
+ *           candidate STAYS at PICKED (by design — no auto-rollback,
+ *           no auto-REJECT). Day 1 forbids reverse transitions and
+ *           the user is the one who decides whether to retry, abandon,
+ *           or escalate. The handler returns
+ *           { ok:false, error:'launch_failed', launch_error, candidate_status:'PICKED' }
+ *   x.    if launch succeeded:
+ *           bindWorkerIteration: PICKED → WORKING + worker_iteration_id
+ *           in a single append.
+ *
+ * The user-decides-after-failure rule is explicitly *not* "graceful
+ * recovery" — it is the intended boundary. PRODUCT.md §1.3 #4 forbids
+ * Cairn from advancing the loop on its own; failed launches are a
+ * loop-advancement decision.
+ */
+function pickCandidateAndLaunchWorker(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  if (!i.candidate_id) return { ok: false, error: 'candidate_id_required' };
+  if (!i.provider) return { ok: false, error: 'provider_required' };
+
+  // i. + ii. + iii. — candidate sanity
+  const cand = candidates.getCandidate(projectId, i.candidate_id, { home: o.home });
+  if (!cand) return { ok: false, error: 'candidate_not_found' };
+  if (cand.project_id && cand.project_id !== projectId) {
+    return { ok: false, error: 'project_id_mismatch' };
+  }
+  if (cand.status !== 'PROPOSED') {
+    return { ok: false, error: 'candidate_not_proposed', current_status: cand.status, candidate_id: cand.id };
+  }
+
+  // iv. — managed project record
+  const record = mp.readManagedProject(projectId, o.home);
+  if (!record) return { ok: false, error: 'managed_project_not_found' };
+  if (!record.local_path) return { ok: false, error: 'local_path_missing' };
+
+  // v. — persist user intent: PROPOSED → PICKED, before any launch attempt.
+  const pickRes = candidates.setCandidateStatus(projectId, cand.id, 'PICKED', null, { home: o.home });
+  if (!pickRes.ok) return { ok: false, error: 'pick_failed', detail: pickRes.error, candidate_id: cand.id };
+
+  // vi. — prompt: caller may pre-build, otherwise we synthesise.
+  let prompt;
+  if (typeof i.prompt === 'string' && i.prompt.trim()) {
+    prompt = i.prompt;
+  } else {
+    const promptInput = i.prompt_input || {};
+    try {
+      const pack = workerPrompt.generateWorkerPrompt(promptInput, {
+        candidate: cand,
+        managed_record: record,
+        forceDeterministic: true,
+      });
+      prompt = pack.prompt;
+    } catch (e) {
+      // candidate stays at PICKED (per §ix contract); user can retry.
+      return { ok: false, error: 'prompt_synthesis_failed', detail: String(e && e.message || e),
+               candidate_status: 'PICKED', candidate_id: cand.id };
+    }
+  }
+
+  // vii. — worker gets its OWN iteration row (separate from scout's).
+  const startRes = iters.startIteration(projectId, { goal_id: cand.id }, { home: o.home });
+  if (!startRes.ok) {
+    return { ok: false, error: 'iteration_start_failed', detail: startRes.error,
+             candidate_status: 'PICKED', candidate_id: cand.id };
+  }
+  const workerIterationId = startRes.iteration.id;
+
+  // viii. — launch
+  const launchRes = launchManagedWorker(projectId, {
+    provider: i.provider,
+    prompt,
+    iteration_id: workerIterationId,
+  }, { home: o.home });
+
+  if (!launchRes.ok) {
+    // ix. candidate stays at PICKED. We surface enough detail for the
+    // panel to render "launch_failed; you can retry from PICKED".
+    return {
+      ok: false,
+      error: 'launch_failed',
+      launch_error: launchRes.error,
+      candidate_status: 'PICKED',
+      candidate_id: cand.id,
+      worker_iteration_id: workerIterationId,
+    };
+  }
+
+  // x. — bind PICKED → WORKING + worker_iteration_id in one append.
+  const bindRes = candidates.bindWorkerIteration(projectId, cand.id, workerIterationId, { home: o.home });
+  if (!bindRes.ok) {
+    // The launch already happened — we report the half-state. The
+    // run is real and bound to its iteration via run.json; only the
+    // candidate->iteration link failed. User can investigate.
+    return {
+      ok: false,
+      error: 'bind_failed',
+      bind_error: bindRes.error,
+      run_id: launchRes.run_id,
+      iteration_id: workerIterationId,
+      candidate_id: cand.id,
+      candidate_status: 'PICKED',
+    };
+  }
+
+  return {
+    ok: true,
+    candidate: bindRes.candidate,
+    run_id: launchRes.run_id,
+    iteration_id: workerIterationId,
+    worker_iteration_id: workerIterationId,
+    candidate_status: 'WORKING',
+  };
+}
+
 function extractScoutCandidates(projectId, input, opts) {
   const o = opts || {};
   if (!projectId) return { ok: false, error: 'project_id_required' };
@@ -535,5 +668,6 @@ module.exports = {
   tailWorkerRun,
   extractManagedWorkerReport,
   extractScoutCandidates,
+  pickCandidateAndLaunchWorker,
   continueManagedIterationReview,
 };
