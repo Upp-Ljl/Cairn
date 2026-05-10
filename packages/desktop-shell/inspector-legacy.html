@@ -21,12 +21,37 @@
   .resolve-btn:hover:not(:disabled) { border-color: #7af; color: #7af; }
   .resolve-btn:disabled { opacity: 0.4; cursor: default; }
   .resolve-status { font-size: 0.75rem; margin-left: 4px; }
+  /* Day 5 — Three-Stage Loop card */
+  .ts-header { color: #aaa; font-size: 0.78rem; margin: 4px 0 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .ts-row { padding: 4px 0; border-bottom: 1px solid #2a2a2a; color: #ccc; line-height: 1.55; }
+  .ts-row.terminal { opacity: 0.55; }
+  .ts-kind { display: inline-block; padding: 1px 5px; border-radius: 2px; background: #232830; color: #aaa; font-size: 0.7rem; margin-right: 4px; }
+  .ts-id { color: #779; font-size: 0.75rem; margin-left: 4px; }
+  .ts-stage { display: inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 50%; font-size: 0.65rem; margin-right: 2px; background: #333; color: #777; font-weight: bold; }
+  .ts-stage.done { background: #1a3a1a; color: #7e7; }
+  .ts-stage.inprog { background: #3a3a10; color: #ec8; }
+  .ts-verdict { display: inline-block; padding: 1px 5px; border-radius: 2px; font-size: 0.72rem; margin-left: 4px; }
+  .ts-verdict.pass { background: #1a3a1a; color: #7e7; }
+  .ts-verdict.fail { background: #3a1a1a; color: #f99; }
+  .ts-verdict.needs_human { background: #3a2a10; color: #ec8; }
+  .ts-truncated { color: #ec8; font-size: 0.7rem; margin-left: 4px; }
+  .ts-reason { color: #999; font-size: 0.78rem; margin-left: 22px; }
+  .ts-action-btn { background: none; border: 1px solid #555; color: #aaa; cursor: pointer; padding: 1px 8px; font-family: monospace; font-size: 0.72rem; margin-left: 4px; border-radius: 2px; }
+  .ts-action-btn:hover:not(:disabled) { border-color: #7af; color: #7af; }
+  .ts-action-btn:disabled { opacity: 0.4; cursor: default; }
+  .ts-empty { color: #555; font-style: italic; }
+  .ts-mut-warn { color: #ec8; font-size: 0.72rem; margin-bottom: 4px; }
 </style>
 </head>
 <body>
 <div id="summary">
   <button id="close-btn">✕ close</button>
   <span id="summary-text">loading…</span>
+</div>
+<div class="section">
+  <h2>Three-Stage Loop · v1</h2>
+  <div id="ts-meta" class="ts-header">loading…</div>
+  <div id="ts-list"><span class="empty">loading…</span></div>
 </div>
 <div class="section">
   <h2>Active Agents</h2>

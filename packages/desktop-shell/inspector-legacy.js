@@ -89,6 +89,199 @@ function renderSummary(state) {
   document.getElementById('summary-text').textContent = parts.join(' · ');
 }
 
+// ---------------------------------------------------------------------------
+// Day 5 — Three-Stage Loop card
+// ---------------------------------------------------------------------------
+//
+// Renders one row per candidate from project-candidates.cjs, grouped
+// by status. Stage chips (S/W/R) reflect source_iteration_id /
+// worker_iteration_id / review_iteration_id presence; verdict chip
+// for REVIEWED rows comes from extractReviewVerdict({ candidate_id }).
+// Action buttons (Pick / Accept / Reject / Roll back) are gated on
+// MUTATIONS_ENABLED and route through window.cairn.* mutations.
+//
+// Pick is *not* wired here today — it requires the user to also
+// pick a worker provider (claude-code / codex / fixture-worker), and
+// the existing panel's Managed Loop card already owns provider
+// selection. For Day 5 the Pick button shows a status hint and does
+// not trigger a launch from the Inspector. Accept / Reject /
+// Roll back are wired.
+
+const STATUS_ORDER = ['PROPOSED', 'PICKED', 'WORKING', 'REVIEWED', 'ACCEPTED', 'REJECTED', 'ROLLED_BACK'];
+let tsActionBusy = false;
+
+function escHtml(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function tsStageDot(stage, state) {
+  const cls = state === 'done' ? 'ts-stage done'
+            : state === 'inprog' ? 'ts-stage inprog'
+            : 'ts-stage';
+  return `<span class="${cls}" title="${stage}">${stage}</span>`;
+}
+
+function tsStagesFor(c) {
+  // S — Scout proposed it (always done if the row exists; PROPOSED+ have source_iteration_id)
+  const s = c.source_iteration_id ? 'done' : 'gray';
+  // W — Worker
+  let w = 'gray';
+  if (c.status === 'PICKED') w = 'inprog';
+  else if (c.status === 'WORKING' || c.status === 'REVIEWED'
+        || c.status === 'ACCEPTED' || c.status === 'ROLLED_BACK') w = 'done';
+  // R — Review
+  let r = 'gray';
+  if (c.review_iteration_id) {
+    if (c.status === 'WORKING') r = 'inprog'; // shouldn't happen — defensive
+    else if (c.status === 'REVIEWED' || c.status === 'ACCEPTED' || c.status === 'ROLLED_BACK') r = 'done';
+  }
+  return `${tsStageDot('S', s)}${tsStageDot('W', w)}${tsStageDot('R', r)}`;
+}
+
+function tsButtonsFor(c) {
+  if (!MUTATIONS_ENABLED) return '';
+  const id = c.id;
+  const buttons = [];
+  if (c.status === 'PROPOSED') {
+    buttons.push(`<button class="ts-action-btn" disabled title="Pick is wired in the panel's Managed Loop card; provider selector lives there.">Pick</button>`);
+    buttons.push(`<button class="ts-action-btn" data-act="reject" data-id="${id}">Reject</button>`);
+  } else if (c.status === 'PICKED' || c.status === 'WORKING') {
+    buttons.push(`<button class="ts-action-btn" data-act="reject" data-id="${id}">Reject</button>`);
+  } else if (c.status === 'REVIEWED') {
+    buttons.push(`<button class="ts-action-btn" data-act="accept" data-id="${id}">Accept</button>`);
+    buttons.push(`<button class="ts-action-btn" data-act="reject" data-id="${id}">Reject</button>`);
+    buttons.push(`<button class="ts-action-btn" data-act="rollback" data-id="${id}" title="Marks state only; run git checkout -- <files> manually to revert worker's diff">Roll back</button>`);
+  }
+  return buttons.join('');
+}
+
+let tsLastVerdicts = new Map();   // candidate_id -> { verdict, reason } cache
+let tsActiveProjectId = null;
+
+async function fetchVerdictsFor(projectId, reviewedRows) {
+  // Only re-fetch verdict for rows we don't have a cached value for.
+  for (const c of reviewedRows) {
+    if (tsLastVerdicts.has(c.id)) continue;
+    try {
+      const v = await window.cairn.extractReviewVerdict(projectId, { candidate_id: c.id });
+      if (v && v.ok) tsLastVerdicts.set(c.id, { verdict: v.verdict, reason: v.reason });
+      else tsLastVerdicts.set(c.id, { verdict: null, reason: v && v.error || 'verdict_unavailable' });
+    } catch (_e) {
+      tsLastVerdicts.set(c.id, { verdict: null, reason: 'verdict_fetch_failed' });
+    }
+  }
+}
+
+function tsRenderRow(c) {
+  const isTerminal = c.status === 'ACCEPTED' || c.status === 'REJECTED' || c.status === 'ROLLED_BACK';
+  const cls = isTerminal ? 'ts-row terminal' : 'ts-row';
+  const idShort = (c.id || '').slice(0, 10);
+  const desc = trunc(c.description || '', 100);
+  const stages = tsStagesFor(c);
+  const buttons = tsButtonsFor(c);
+  let verdictHtml = '';
+  if (c.status === 'REVIEWED' || c.status === 'ACCEPTED' || c.status === 'REJECTED' || c.status === 'ROLLED_BACK') {
+    const v = tsLastVerdicts.get(c.id);
+    if (v && v.verdict) {
+      verdictHtml = ` <span class="ts-verdict ${escHtml(v.verdict)}">${escHtml(v.verdict)}</span>`;
+      if (v.reason) verdictHtml += `<div class="ts-reason">${escHtml(trunc(v.reason, 120))}</div>`;
+    }
+  }
+  return `<div class="${cls}" data-cid="${escHtml(c.id)}">`
+       + `${stages} <span class="ts-kind">${escHtml(c.candidate_kind || 'other')}</span>`
+       + `${escHtml(desc)}<span class="ts-id">${escHtml(idShort)}</span>`
+       + `<span style="float:right">${buttons}</span>`
+       + verdictHtml
+       + `</div>`;
+}
+
+function tsGroupAndRender(rows) {
+  const groups = new Map();
+  for (const s of STATUS_ORDER) groups.set(s, []);
+  for (const c of rows) (groups.get(c.status) || groups.get('PROPOSED')).push(c);
+  const parts = [];
+  if (!MUTATIONS_ENABLED) {
+    parts.push('<div class="ts-mut-warn">Read-only view — start with CAIRN_DESKTOP_ENABLE_MUTATIONS=1 to show Accept / Reject / Roll back.</div>');
+  }
+  let any = false;
+  for (const s of STATUS_ORDER) {
+    const list = groups.get(s) || [];
+    if (!list.length) continue;
+    any = true;
+    parts.push(`<div class="ts-header">${escHtml(s)} (${list.length})</div>`);
+    for (const c of list) parts.push(tsRenderRow(c));
+  }
+  if (!any) parts.push('<span class="ts-empty">no candidates yet — run a Scout round in the panel\'s Managed Loop card.</span>');
+  document.getElementById('ts-list').innerHTML = parts.join('');
+  if (MUTATIONS_ENABLED) wireTsButtons();
+}
+
+function wireTsButtons() {
+  document.querySelectorAll('#ts-list button.ts-action-btn[data-act]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (tsActionBusy) return;
+      const act = btn.getAttribute('data-act');
+      const id = btn.getAttribute('data-id');
+      if (!tsActiveProjectId || !id) return;
+      if (act === 'rollback') {
+        const proceed = window.confirm(
+          'This marks the candidate as ROLLED_BACK in Cairn.\n\n'
+          + "The worker's working-tree changes will NOT be reverted.\n"
+          + 'Run git checkout -- <files> manually if you want to discard them.\n\nContinue?'
+        );
+        if (!proceed) return;
+      }
+      tsActionBusy = true;
+      btn.disabled = true;
+      let res;
+      try {
+        if (act === 'accept')   res = await window.cairn.acceptCandidate(tsActiveProjectId, id);
+        if (act === 'reject')   res = await window.cairn.rejectCandidate(tsActiveProjectId, id);
+        if (act === 'rollback') res = await window.cairn.rollBackCandidate(tsActiveProjectId, id);
+      } catch (e) {
+        res = { ok: false, error: e && e.message || 'ipc_error' };
+      }
+      tsActionBusy = false;
+      if (res && res.ok) {
+        // re-poll on next tick will re-render
+        await pollThreeStage();
+      } else {
+        btn.disabled = false;
+        // surface error in the row's reason slot
+        const row = btn.closest('.ts-row');
+        if (row) {
+          const r = document.createElement('div');
+          r.className = 'ts-reason';
+          r.style.color = '#f99';
+          r.textContent = (res && res.error) || 'action_failed';
+          row.appendChild(r);
+        }
+      }
+    });
+  });
+}
+
+async function pollThreeStage() {
+  const meta = document.getElementById('ts-meta');
+  let proj;
+  try { proj = await window.cairn.getSelectedProject(); } catch (_e) { proj = null; }
+  if (!proj) {
+    tsActiveProjectId = null;
+    meta.textContent = 'no project selected';
+    document.getElementById('ts-list').innerHTML = '<span class="ts-empty">select a project in the panel first.</span>';
+    return;
+  }
+  tsActiveProjectId = proj.id;
+  meta.textContent = `${proj.label} · ${proj.id}`;
+  let rows = [];
+  try { rows = await window.cairn.listCandidates(proj.id, 100); } catch (_e) { rows = []; }
+  // Refresh verdicts for any REVIEWED / terminal-after-REVIEWED rows we haven't cached.
+  const verdictRows = rows.filter(c => c.review_iteration_id);
+  if (verdictRows.length) await fetchVerdictsFor(proj.id, verdictRows);
+  tsGroupAndRender(rows);
+}
+
 async function poll() {
   const [state, agents, conflicts, dispatches, lanes] = await Promise.all([
     window.cairn.getState(),
@@ -102,6 +295,9 @@ async function poll() {
   renderConflicts(conflicts);
   renderDispatches(dispatches);
   renderLanes(lanes);
+  // Three-Stage card has its own poll (separate Promise.all so a slow
+  // candidates fetch doesn't block the rest).
+  pollThreeStage();
 }
 
 poll();

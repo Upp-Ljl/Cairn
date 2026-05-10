@@ -1892,6 +1892,36 @@ ipcMain.handle('extract-review-verdict', (_e, projectId, input) => {
   return managedLoopHandlers.extractReviewVerdict(projectId, input || {});
 });
 
+// Day 5 — read-only candidate accessors (always available; Inspector
+// + smokes use these to render and inspect rows).
+ipcMain.handle('list-candidates', (_e, projectId, limit) => {
+  return managedLoopHandlers.listCandidates(projectId, limit || 100);
+});
+ipcMain.handle('list-candidates-by-status', (_e, projectId, status) => {
+  return managedLoopHandlers.listCandidatesByStatus(projectId, status);
+});
+ipcMain.handle('get-candidate', (_e, projectId, candidateId) => {
+  return managedLoopHandlers.getCandidate(projectId, candidateId);
+});
+
+// Day 5 — terminal user-action handlers. Gated on
+// CAIRN_DESKTOP_ENABLE_MUTATIONS=1 to honor PRODUCT.md §12 D9: panel
+// stays read-only, the Inspector (already opt-in for mutations via
+// the same env flag) is where users click Accept/Reject/Roll back.
+// Smokes call the handler functions directly (not through IPC) so
+// they don't depend on the env flag.
+if (MUTATIONS_ENABLED) {
+  ipcMain.handle('accept-candidate', (_e, projectId, candidateId) => {
+    return managedLoopHandlers.acceptCandidate(projectId, candidateId);
+  });
+  ipcMain.handle('reject-candidate', (_e, projectId, candidateId) => {
+    return managedLoopHandlers.rejectCandidate(projectId, candidateId);
+  });
+  ipcMain.handle('roll-back-candidate', (_e, projectId, candidateId) => {
+    return managedLoopHandlers.rollBackCandidate(projectId, candidateId);
+  });
+}
+
 ipcMain.handle('continue-managed-iteration-review', async (_e, projectId, opts) => {
   // Same context build as review-managed-iteration; collects evidence + reviews.
   const proj = reg.projects.find(p => p.id === projectId);

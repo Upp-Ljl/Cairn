@@ -77,6 +77,10 @@ const api = {
   pickCandidateAndLaunchWorker: (projectId, input) => ipcRenderer.invoke('pick-candidate-and-launch-worker', projectId, input || {}),
   runReviewForCandidate:        (projectId, input) => ipcRenderer.invoke('run-review-for-candidate', projectId, input || {}),
   extractReviewVerdict:         (projectId, input) => ipcRenderer.invoke('extract-review-verdict', projectId, input || {}),
+  // Day 5 — read-only candidate accessors
+  listCandidates:               (projectId, limit) => ipcRenderer.invoke('list-candidates', projectId, limit || 100),
+  listCandidatesByStatus:       (projectId, status) => ipcRenderer.invoke('list-candidates-by-status', projectId, status),
+  getCandidate:                 (projectId, candidateId) => ipcRenderer.invoke('get-candidate', projectId, candidateId),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
@@ -122,6 +126,13 @@ const api = {
 if (MUTATIONS_ENABLED) {
   api.resolveConflict = (id, reason) =>
     ipcRenderer.invoke('resolve-conflict', id, reason);
+  // Day 5 — three terminal candidate actions, gated identically
+  // to Resolve so PRODUCT.md §12 D9 is preserved (panel never sees
+  // mutation buttons; Inspector exposes them only when the user
+  // explicitly opted into CAIRN_DESKTOP_ENABLE_MUTATIONS=1).
+  api.acceptCandidate    = (projectId, candidateId) => ipcRenderer.invoke('accept-candidate', projectId, candidateId);
+  api.rejectCandidate    = (projectId, candidateId) => ipcRenderer.invoke('reject-candidate', projectId, candidateId);
+  api.rollBackCandidate  = (projectId, candidateId) => ipcRenderer.invoke('roll-back-candidate', projectId, candidateId);
 }
 
 contextBridge.exposeInMainWorld('cairn', api);

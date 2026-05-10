@@ -778,6 +778,107 @@ function extractReviewVerdictHandler(projectId, input, opts) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Day 5 — terminal user actions on a candidate.
+// ---------------------------------------------------------------------------
+//
+// These three handlers move a candidate to its terminal state based on
+// an explicit user click in the Inspector (gated by
+// CAIRN_DESKTOP_ENABLE_MUTATIONS=1; D9 boundary). They never run on
+// their own and never react to a verdict — verdict=pass does NOT
+// auto-promote to ACCEPTED. The user reads the verdict in the panel,
+// then chooses Accept / Reject / Roll back.
+
+const TERMINAL_STATES = new Set(['ACCEPTED', 'REJECTED', 'ROLLED_BACK']);
+
+function _candidateBoundaryCheck(projectId, candidateId, opts) {
+  const o = opts || {};
+  if (!projectId) return { _err: { ok: false, error: 'project_id_required' } };
+  if (!candidateId) return { _err: { ok: false, error: 'candidate_id_required' } };
+  const cand = candidates.getCandidate(projectId, candidateId, { home: o.home });
+  if (!cand) return { _err: { ok: false, error: 'candidate_not_found' } };
+  if (cand.project_id && cand.project_id !== projectId) {
+    return { _err: { ok: false, error: 'project_id_mismatch' } };
+  }
+  return { cand };
+}
+
+/**
+ * Move a REVIEWED candidate to ACCEPTED. Any other origin status
+ * rejects with `candidate_not_reviewed` (current_status returned in
+ * detail). Verdict is not consulted — the user decides Accept after
+ * seeing the verdict.
+ */
+function acceptCandidate(projectId, candidateId, opts) {
+  const o = opts || {};
+  const chk = _candidateBoundaryCheck(projectId, candidateId, opts);
+  if (chk._err) return chk._err;
+  if (chk.cand.status !== 'REVIEWED') {
+    return { ok: false, error: 'candidate_not_reviewed', current_status: chk.cand.status, candidate_id: chk.cand.id };
+  }
+  const r = candidates.setCandidateStatus(projectId, candidateId, 'ACCEPTED', null, { home: o.home });
+  if (!r.ok) return r;
+  return { ok: true, candidate: r.candidate };
+}
+
+/**
+ * Move ANY non-terminal candidate to REJECTED. The user can abandon
+ * a candidate at any non-terminal stage — that's the "I don't want
+ * this" exit. Already-terminal rejects with `candidate_terminal`.
+ */
+function rejectCandidate(projectId, candidateId, opts) {
+  const o = opts || {};
+  const chk = _candidateBoundaryCheck(projectId, candidateId, opts);
+  if (chk._err) return chk._err;
+  if (TERMINAL_STATES.has(chk.cand.status)) {
+    return { ok: false, error: 'candidate_terminal', current_status: chk.cand.status, candidate_id: chk.cand.id };
+  }
+  const r = candidates.setCandidateStatus(projectId, candidateId, 'REJECTED', null, { home: o.home });
+  if (!r.ok) return r;
+  return { ok: true, candidate: r.candidate };
+}
+
+/**
+ * Move a REVIEWED candidate to ROLLED_BACK. **State-only**: this
+ * does NOT run any git command and does NOT touch the worker's
+ * working-tree diff. The UI shows a confirmation dialog telling the
+ * user to `git checkout -- <files>` manually if they want to discard
+ * the diff. Per-Day-4-handoff option (a): record state only, defer
+ * a real Cairn-driven revert to a future product call.
+ */
+function rollBackCandidate(projectId, candidateId, opts) {
+  const o = opts || {};
+  const chk = _candidateBoundaryCheck(projectId, candidateId, opts);
+  if (chk._err) return chk._err;
+  if (chk.cand.status !== 'REVIEWED') {
+    return { ok: false, error: 'candidate_not_reviewed', current_status: chk.cand.status, candidate_id: chk.cand.id };
+  }
+  const r = candidates.setCandidateStatus(projectId, candidateId, 'ROLLED_BACK', null, { home: o.home });
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    candidate: r.candidate,
+    hint: 'working tree diff retained; use git checkout -- <files> to revert manually',
+  };
+}
+
+// Read-only candidate accessors (Day 5 — needed by Inspector list
+// rendering; missed by Day 1 IPC plan). These are pure pass-throughs
+// to project-candidates.cjs and require no MUTATIONS gate.
+
+function listCandidatesHandler(projectId, limit, opts) {
+  if (!projectId) return [];
+  return candidates.listCandidates(projectId, limit || 100, { home: (opts && opts.home) || undefined });
+}
+function listCandidatesByStatusHandler(projectId, status, opts) {
+  if (!projectId || !status) return [];
+  return candidates.listCandidatesByStatus(projectId, status, { home: (opts && opts.home) || undefined });
+}
+function getCandidateHandler(projectId, candidateId, opts) {
+  if (!projectId || !candidateId) return null;
+  return candidates.getCandidate(projectId, candidateId, { home: (opts && opts.home) || undefined });
+}
+
 function extractScoutCandidates(projectId, input, opts) {
   const o = opts || {};
   if (!projectId) return { ok: false, error: 'project_id_required' };
@@ -885,5 +986,13 @@ module.exports = {
   pickCandidateAndLaunchWorker,
   runReviewForCandidate,
   extractReviewVerdict: extractReviewVerdictHandler,
+  // Day 5 terminal actions (Inspector-only behind CAIRN_DESKTOP_ENABLE_MUTATIONS)
+  acceptCandidate,
+  rejectCandidate,
+  rollBackCandidate,
+  // Day 5 read-only candidate accessors (always exposed)
+  listCandidates: listCandidatesHandler,
+  listCandidatesByStatus: listCandidatesByStatusHandler,
+  getCandidate: getCandidateHandler,
   continueManagedIterationReview,
 };
