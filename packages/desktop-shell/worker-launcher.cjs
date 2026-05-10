@@ -129,6 +129,15 @@ const PROVIDERS = {
     acceptsStdin: false,
     fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
   },
+  'fixture-review': {
+    id: 'fixture-review',
+    displayName: 'Fixture (review)',
+    command: process.execPath,
+    description: 'Local fixture that emits a Review Verdict (verdict=pass) and exits (no LLM, no file writes)',
+    argvFor: (_promptPath) => ['-e', FIXTURE_REVIEW_SCRIPT],
+    acceptsStdin: false,
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+  },
 };
 
 // Inlined as a string so the launcher has no dep on a separate file
@@ -210,6 +219,28 @@ process.stdout.write('### Remaining\\n');
 process.stdout.write('### Blockers\\n');
 process.stdout.write('### Next\\n');
 process.stdout.write('- Replace fixture-worker with a real provider for production rounds.\\n');
+process.exit(0);
+`;
+
+// fixture-review — read-only verdict fixture. Writes NO files; just
+// emits a deterministic Review Verdict block with verdict=pass and
+// echoes the candidate id from the prompt. Used by Day 4 smoke +
+// dogfood scaffolding to exercise the run + parse pipeline without
+// burning API credits or touching the managed repo.
+const FIXTURE_REVIEW_SCRIPT = `
+'use strict';
+const fs = require('fs');
+const promptPath = process.env.CAIRN_FIXTURE_PROMPT;
+const prompt = promptPath ? fs.readFileSync(promptPath, 'utf8') : '';
+const m = prompt.match(/cairn-candidate-id:\\s*(\\S+)/);
+const candidateId = m ? m[1] : 'unknown';
+process.stdout.write('[fixture-review] received prompt of ' + prompt.length + ' chars\\n');
+process.stdout.write('[fixture-review] candidate_id parsed: ' + candidateId + '\\n');
+process.stdout.write('[fixture-review] read-only review; emitting verdict block.\\n\\n');
+process.stdout.write('## Review Verdict\\n');
+process.stdout.write('cairn-candidate-id: ' + candidateId + '\\n');
+process.stdout.write('verdict: pass\\n');
+process.stdout.write('reason: fixture review approves the candidate\\n');
 process.exit(0);
 `;
 
@@ -849,6 +880,67 @@ function extractScoutCandidatesFromText(text) {
   return { ok: true, candidates };
 }
 
+// ---------------------------------------------------------------------------
+// Review Verdict extraction (deterministic, never LLM)
+// ---------------------------------------------------------------------------
+//
+// A Review run is asked to end its output with:
+//
+//   ## Review Verdict
+//   cairn-candidate-id: <id>
+//   verdict: pass | fail | needs_human
+//   reason: <one sentence>
+//
+// We scan the LAST occurrence of the header. The verdict value is
+// validated against a closed set; anything else returns
+// invalid_verdict_value with the raw value in `got` so the caller
+// can decide (Day 5 panel will show "review agent answered X — not
+// a valid verdict; mark as needs_human"). reason is single-lined +
+// clipped to 200 chars.
+
+const VERDICT_VALUE_SET = new Set(['pass', 'fail', 'needs_human']);
+const REVIEW_REASON_MAX = 200;
+
+function extractReviewVerdict(runId, opts) {
+  const o = opts || {};
+  const tail = tailRunLog(runId, o.bytes || MAX_LOG_BYTES, o.home);
+  if (!tail) return { ok: false, error: 'no_log' };
+  return extractReviewVerdictFromText(tail);
+}
+
+function extractReviewVerdictFromText(text) {
+  if (typeof text !== 'string') return { ok: false, error: 'no_log' };
+  const matches = Array.from(text.matchAll(/^##\s+Review\s+Verdict\s*$/gim));
+  if (!matches.length) return { ok: false, error: 'no_verdict_block' };
+  const start = matches[matches.length - 1].index;
+  const block = text.slice(start);
+  const lines = block.split(/\r?\n/);
+  let verdictRaw = null;
+  let reasonRaw = null;
+  for (let i = 1; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    // Stop at any sibling ## or # major header.
+    if (/^##\s+/.test(trimmed) && !/^##\s+Review\s+Verdict/i.test(trimmed)) break;
+    const v = trimmed.match(/^verdict\s*:\s*(.+)$/i);
+    if (v && verdictRaw == null) { verdictRaw = v[1].trim(); continue; }
+    const r = trimmed.match(/^reason\s*:\s*(.+)$/i);
+    if (r && reasonRaw == null) { reasonRaw = r[1].trim(); continue; }
+    // ignore other lines (cairn-candidate-id echo etc — caller
+    // verifies that elsewhere).
+  }
+  if (verdictRaw == null) return { ok: false, error: 'no_verdict_value' };
+  const verdict = String(verdictRaw).toLowerCase().trim();
+  if (!VERDICT_VALUE_SET.has(verdict)) {
+    return { ok: false, error: 'invalid_verdict_value', got: verdictRaw };
+  }
+  // Single-line + clip the reason. Newline-collapse defends against
+  // a reviewer that wrote a wrapped paragraph.
+  let reason = reasonRaw == null ? '' : String(reasonRaw).replace(/\s+/g, ' ').trim();
+  if (reason.length > REVIEW_REASON_MAX) reason = reason.slice(0, REVIEW_REASON_MAX);
+  return { ok: true, verdict, reason };
+}
+
 module.exports = {
   // constants
   STATUS_VALUES,
@@ -859,6 +951,8 @@ module.exports = {
   PROVIDERS,
   SCOUT_KIND_SET,
   MAX_SCOUT_CANDIDATES,
+  VERDICT_VALUE_SET,
+  REVIEW_REASON_MAX,
   // detection
   whichCommand,
   detectWorkerProviders,
@@ -876,6 +970,9 @@ module.exports = {
   // scout extraction (Day 2)
   extractScoutCandidates,
   extractScoutCandidatesFromText,
+  // review verdict extraction (Day 4)
+  extractReviewVerdict,
+  extractReviewVerdictFromText,
   // paths
   runsDir,
   runDir,

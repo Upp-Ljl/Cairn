@@ -29,6 +29,7 @@ const wr        = require('./worker-reports.cjs');
 const launcher  = require('./worker-launcher.cjs');
 const candidates = require('./project-candidates.cjs');
 const workerPrompt = require('./worker-prompt.cjs');
+const reviewPrompt = require('./review-prompt.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. list — every managed project on disk, joined with the registry
@@ -564,6 +565,219 @@ function pickCandidateAndLaunchWorker(projectId, input, opts) {
   };
 }
 
+/**
+ * Run a Review round on a WORKING candidate.
+ *
+ * State-machine contract (steps run IN ORDER; each step either
+ * succeeds or short-circuits with a stable error code):
+ *
+ *   i.    candidate_not_found         — no row with that id
+ *   ii.   project_id_mismatch         — candidate.project_id ≠ projectId
+ *   iii.  candidate_not_working       — status ≠ 'WORKING'
+ *                                       (current_status returned in detail)
+ *   iv.   worker_iteration_missing    — candidate has no worker_iteration_id
+ *                                       (defensive — should never happen
+ *                                        post Day 3 bind, but smoked anyway)
+ *   v.    managed_project_not_found   — no record on disk
+ *   vi.   worker_iteration_not_found  — worker iteration row missing
+ *                                       (defensive)
+ *   vii.  fetch worker diff via collectWorkerDiff
+ *   viii. fetch worker report via worker_iteration.worker_report_id
+ *         (allowed to be null — review can run on diff alone)
+ *   ix.   compose prompt (caller-provided OR generateReviewPrompt)
+ *   x.    startManagedIteration — review gets its OWN iteration row
+ *   xi.   launchManagedWorker on review provider
+ *   xii.  if launch failed:
+ *           candidate STAYS at WORKING (mirroring Day 3 launch_failed
+ *           leaving candidate at PICKED). No auto-rollback, no
+ *           auto-REJECT. The orphan review iteration row is left in
+ *           place as a history trail, but candidate.review_iteration_id
+ *           remains null — the user retries.
+ *   xiii. if launch succeeded:
+ *           bindReviewIteration: WORKING → REVIEWED + review_iteration_id
+ *           in one append.
+ *
+ * IMPORTANT: this handler does NOT touch candidate's terminal state.
+ * verdict extraction (extractReviewVerdict, below) is a separate
+ * read-only call. Day 5 panel is where the user clicks ACCEPT /
+ * REJECT / ROLLED_BACK after seeing the verdict — by design Cairn
+ * does not advance the loop on its own (PRODUCT.md §1.3 #4).
+ */
+function runReviewForCandidate(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  if (!i.candidate_id) return { ok: false, error: 'candidate_id_required' };
+  if (!i.provider) return { ok: false, error: 'provider_required' };
+
+  // i. + ii. + iii. + iv. — candidate sanity
+  const cand = candidates.getCandidate(projectId, i.candidate_id, { home: o.home });
+  if (!cand) return { ok: false, error: 'candidate_not_found' };
+  if (cand.project_id && cand.project_id !== projectId) {
+    return { ok: false, error: 'project_id_mismatch' };
+  }
+  if (cand.status !== 'WORKING') {
+    return { ok: false, error: 'candidate_not_working', current_status: cand.status, candidate_id: cand.id };
+  }
+  if (!cand.worker_iteration_id) {
+    return { ok: false, error: 'worker_iteration_missing', candidate_id: cand.id };
+  }
+
+  // v. — managed project record
+  const record = mp.readManagedProject(projectId, o.home);
+  if (!record) return { ok: false, error: 'managed_project_not_found' };
+  if (!record.local_path) return { ok: false, error: 'local_path_missing' };
+
+  // vi. — worker iteration row (defensive)
+  const workerIter = iters.getIteration(projectId, cand.worker_iteration_id, { home: o.home });
+  if (!workerIter) return { ok: false, error: 'worker_iteration_not_found' };
+
+  // vii. — worker diff
+  const diff = evidenceM.collectWorkerDiff(record.local_path, { home: o.home });
+  if (!diff.ok) {
+    return { ok: false, error: 'worker_diff_failed', detail: diff.error,
+             candidate_status: 'WORKING', candidate_id: cand.id };
+  }
+
+  // viii. — worker report (optional)
+  let workerReport = null;
+  if (workerIter.worker_report_id) {
+    const reports = wr.listWorkerReports(projectId, 50, { home: o.home });
+    workerReport = reports.find(r => r.id === workerIter.worker_report_id) || null;
+  }
+
+  // ix. — prompt
+  let prompt;
+  if (typeof i.prompt === 'string' && i.prompt.trim()) {
+    prompt = i.prompt;
+  } else {
+    try {
+      const pack = reviewPrompt.generateReviewPrompt(i.prompt_input || {}, {
+        candidate: cand,
+        managed_record: record,
+        worker_diff_text: diff.diff_text,
+        worker_diff_truncated: diff.truncated,
+        worker_report: workerReport,
+        forceDeterministic: true,
+      });
+      prompt = pack.prompt;
+    } catch (e) {
+      return { ok: false, error: 'prompt_synthesis_failed', detail: String(e && e.message || e),
+               candidate_status: 'WORKING', candidate_id: cand.id };
+    }
+  }
+
+  // x. — review gets its OWN iteration row (separate from worker's).
+  const startRes = iters.startIteration(projectId, { goal_id: cand.id }, { home: o.home });
+  if (!startRes.ok) {
+    return { ok: false, error: 'iteration_start_failed', detail: startRes.error,
+             candidate_status: 'WORKING', candidate_id: cand.id };
+  }
+  const reviewIterationId = startRes.iteration.id;
+
+  // xi. — launch
+  const launchRes = launchManagedWorker(projectId, {
+    provider: i.provider,
+    prompt,
+    iteration_id: reviewIterationId,
+  }, { home: o.home });
+
+  if (!launchRes.ok) {
+    return {
+      ok: false,
+      error: 'launch_failed',
+      launch_error: launchRes.error,
+      candidate_status: 'WORKING',
+      candidate_id: cand.id,
+      review_iteration_id: reviewIterationId,
+    };
+  }
+
+  // xiii. — bind WORKING → REVIEWED + review_iteration_id
+  const bindRes = candidates.bindReviewIteration(projectId, cand.id, reviewIterationId, { home: o.home });
+  if (!bindRes.ok) {
+    return {
+      ok: false,
+      error: 'bind_failed',
+      bind_error: bindRes.error,
+      run_id: launchRes.run_id,
+      iteration_id: reviewIterationId,
+      candidate_id: cand.id,
+      candidate_status: 'WORKING',
+    };
+  }
+
+  return {
+    ok: true,
+    candidate: bindRes.candidate,
+    run_id: launchRes.run_id,
+    iteration_id: reviewIterationId,
+    review_iteration_id: reviewIterationId,
+    candidate_status: 'REVIEWED',
+    worker_diff_truncated: diff.truncated,
+  };
+}
+
+/**
+ * Extract a Review Verdict from a finished review run's tail.log.
+ * Two entry points:
+ *   - { run_id }                       — direct
+ *   - { candidate_id }                 — read candidate, walk to its
+ *                                        review_iteration_id, look up
+ *                                        the review iteration's run_id,
+ *                                        then parse.
+ *
+ * IMPORTANT: this handler does NOT mutate candidate state. The
+ * verdict is advisory data; Day 5 panel surfaces it and the user
+ * decides ACCEPTED / REJECTED / ROLLED_BACK manually.
+ */
+function extractReviewVerdictHandler(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  let runId = i.run_id || null;
+  let candidate = null;
+  let reviewIterationId = null;
+
+  if (!runId && i.candidate_id) {
+    candidate = candidates.getCandidate(projectId, i.candidate_id, { home: o.home });
+    if (!candidate) return { ok: false, error: 'candidate_not_found' };
+    if (candidate.project_id && candidate.project_id !== projectId) {
+      return { ok: false, error: 'project_id_mismatch' };
+    }
+    if (candidate.status !== 'REVIEWED') {
+      return { ok: false, error: 'candidate_not_reviewed', current_status: candidate.status };
+    }
+    if (!candidate.review_iteration_id) return { ok: false, error: 'review_iteration_missing' };
+    reviewIterationId = candidate.review_iteration_id;
+    const reviewIter = iters.getIteration(projectId, reviewIterationId, { home: o.home });
+    if (!reviewIter) return { ok: false, error: 'review_iteration_not_found' };
+    if (!reviewIter.worker_run_id) return { ok: false, error: 'review_run_id_missing' };
+    runId = reviewIter.worker_run_id;
+  }
+  if (!runId) return { ok: false, error: 'run_id_or_candidate_id_required' };
+
+  // Verify run.json's project_id matches.
+  const runMeta = launcher.getWorkerRun(runId, { home: o.home });
+  if (!runMeta) return { ok: false, error: 'run_not_found' };
+  if (runMeta.project_id && runMeta.project_id !== projectId) {
+    return { ok: false, error: 'project_id_mismatch' };
+  }
+  syncIterationFromRun(runMeta, { home: o.home });
+
+  const ext = launcher.extractReviewVerdict(runId, { home: o.home });
+  if (!ext.ok) return ext;
+
+  return {
+    ok: true,
+    verdict: ext.verdict,
+    reason: ext.reason,
+    run_id: runId,
+    candidate_id: candidate ? candidate.id : (i.candidate_id || runMeta.iteration_id ? null : null),
+    review_iteration_id: reviewIterationId,
+  };
+}
+
 function extractScoutCandidates(projectId, input, opts) {
   const o = opts || {};
   if (!projectId) return { ok: false, error: 'project_id_required' };
@@ -669,5 +883,7 @@ module.exports = {
   extractManagedWorkerReport,
   extractScoutCandidates,
   pickCandidateAndLaunchWorker,
+  runReviewForCandidate,
+  extractReviewVerdict: extractReviewVerdictHandler,
   continueManagedIterationReview,
 };

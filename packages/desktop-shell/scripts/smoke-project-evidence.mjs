@@ -97,6 +97,42 @@ const ngEv = ev.collectGitEvidence(notGit, { profile });
 ok(ngEv.errors.some(e => e.includes('not_a_git_repo')), 'not_a_git_repo error');
 ok(ngEv.tests_suggested.length > 0, 'profile-derived suggestions still flow');
 
+// -------- Part D2: collectWorkerDiff (Day 4 — full diff for review)
+
+ok(ev.isAllowedGitArgs(['diff', '--no-color']), 'diff --no-color is in ALLOWED_GIT_ARGS');
+
+// fixture repo currently has staged `changed.txt` (added) — git diff
+// on staged-only changes returns empty; modify a tracked file instead
+// to make the diff non-empty for the assertion.
+fs.writeFileSync(path.join(fix, 'README.md'), '# fixture\n\nedited line\n');
+const wd1 = ev.collectWorkerDiff(fix);
+ok(wd1.ok, 'collectWorkerDiff ok on dirty repo');
+ok(typeof wd1.diff_text === 'string' && wd1.diff_text.length > 0, 'diff_text non-empty for modified file');
+ok(wd1.byte_count === wd1.diff_text.length, 'byte_count matches diff length');
+ok(wd1.truncated === false, 'small diff is not truncated');
+
+const wdMissing = ev.collectWorkerDiff(path.join(fix, 'no-such'));
+ok(!wdMissing.ok && wdMissing.error === 'local_path_missing', 'collectWorkerDiff: missing path → local_path_missing');
+
+const wdNotGit = ev.collectWorkerDiff(notGit);
+ok(!wdNotGit.ok && wdNotGit.error === 'not_a_git_repo', 'collectWorkerDiff: not a git repo → not_a_git_repo');
+
+// truncation flag — write a tracked file, then bloat it past 16KB.
+import { spawnSync as _ssTrunc } from 'node:child_process';
+const fixBig = fs.mkdtempSync(path.join(os.tmpdir(), 'cairn-evidence-big-'));
+function gitBig(args) { return _ssTrunc('git', args, { cwd: fixBig, encoding: 'utf8' }); }
+gitBig(['init']);
+gitBig(['config', 'user.email', 'big@example.com']);
+gitBig(['config', 'user.name', 'Big']);
+gitBig(['checkout', '-b', 'main']);
+fs.writeFileSync(path.join(fixBig, 'huge.txt'), 'x\n'.repeat(100));
+gitBig(['add', '.']);
+gitBig(['commit', '-m', 'init']);
+fs.writeFileSync(path.join(fixBig, 'huge.txt'), 'y this is a long replacement line that makes diff bigger\n'.repeat(2000));
+const wdBig = ev.collectWorkerDiff(fixBig);
+ok(wdBig.ok, 'collectWorkerDiff ok on big diff');
+ok(wdBig.truncated === true, 'big diff sets truncated=true');
+
 // -------- Part E: source-level safety greps
 
 const src = fs.readFileSync(path.join(root, 'project-evidence.cjs'), 'utf8');

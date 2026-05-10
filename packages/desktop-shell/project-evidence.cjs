@@ -57,6 +57,7 @@ const ALLOWED_GIT_ARGS = [
   ['diff', '--stat'],
   ['diff', '--name-only'],
   ['diff', '--name-only', 'HEAD'],
+  ['diff', '--no-color'],   // Day 4: review needs full diff content, not just names/stat
   ['log', '-1', '--format=%h\t%s'],
 ];
 
@@ -271,10 +272,37 @@ function summarizeEvidence(evidence) {
   };
 }
 
+/**
+ * Read the worker's pending diff (working tree vs HEAD), with the
+ * launcher-style 16KB truncation. Used by Day 4 review to feed real
+ * diff content to the reviewer agent. Same read-only argv-whitelist
+ * gate as the rest of this module — `git diff --no-color` is in
+ * ALLOWED_GIT_ARGS.
+ *
+ * Returns:
+ *   { ok: true, diff_text, truncated, byte_count }
+ *   { ok: false, error }
+ *
+ * `truncated` is true when the underlying truncateBuf cap fired
+ * (output exceeded MAX_OUTPUT_BYTES). Caller should pass this flag
+ * to the review prompt so the reviewer is told the diff is partial.
+ */
+function collectWorkerDiff(localPath, opts) {
+  const _o = opts || {};
+  if (!localPath || !fs.existsSync(localPath)) return { ok: false, error: 'local_path_missing' };
+  if (!fs.existsSync(path.join(localPath, '.git'))) return { ok: false, error: 'not_a_git_repo' };
+  const r = runGit(['diff', '--no-color'], localPath);
+  if (!r.ok) return { ok: false, error: r.error || 'git_diff_failed' };
+  const text = r.stdout || '';
+  const truncated = /\n…\[truncated\]$/.test(text);
+  return { ok: true, diff_text: text, truncated, byte_count: text.length };
+}
+
 module.exports = {
   ALLOWED_GIT_ARGS,
   isAllowedGitArgs,
   collectGitEvidence,
+  collectWorkerDiff,
   summarizeEvidence,
   runGit,
   // exposed for tests

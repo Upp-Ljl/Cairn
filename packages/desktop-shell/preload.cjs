@@ -75,6 +75,8 @@ const api = {
   extractWorkerReport:        (projectId, input) => ipcRenderer.invoke('extract-worker-report', projectId, input || {}),
   extractScoutCandidates:     (projectId, input) => ipcRenderer.invoke('extract-scout-candidates', projectId, input || {}),
   pickCandidateAndLaunchWorker: (projectId, input) => ipcRenderer.invoke('pick-candidate-and-launch-worker', projectId, input || {}),
+  runReviewForCandidate:        (projectId, input) => ipcRenderer.invoke('run-review-for-candidate', projectId, input || {}),
+  extractReviewVerdict:         (projectId, input) => ipcRenderer.invoke('extract-review-verdict', projectId, input || {}),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
