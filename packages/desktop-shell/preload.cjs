@@ -81,6 +81,7 @@ const api = {
   listCandidates:               (projectId, limit) => ipcRenderer.invoke('list-candidates', projectId, limit || 100),
   listCandidatesByStatus:       (projectId, status) => ipcRenderer.invoke('list-candidates-by-status', projectId, status),
   getCandidate:                 (projectId, candidateId) => ipcRenderer.invoke('get-candidate', projectId, candidateId),
+  verifyWorkerBoundary:         (projectId, input) => ipcRenderer.invoke('verify-worker-boundary', projectId, input || {}),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),

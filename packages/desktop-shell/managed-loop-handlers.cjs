@@ -779,6 +779,194 @@ function extractReviewVerdictHandler(projectId, input, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// Day 6 — boundary verify (post-flight)
+// ---------------------------------------------------------------------------
+//
+// Heuristic: extract path-like tokens from candidate.description, add
+// kind-aware default scope (doc → *.md, missing_test → tests/, etc.),
+// then check each changed file against this in-scope set.
+//
+// Conservative-failure mode: if no scope can be inferred (description
+// is too abstract AND kind=other), return heuristic_notes='no_scope_inferred'
+// and DO NOT write boundary_violations — better silent than false-positive.
+
+// Default scope per kind. Deliberately narrow — `doc` does NOT
+// blanket-include `*.md` (a rogue worker that drops some-marker.md at
+// repo root would slip through). Use named-file + dir-prefix matchers
+// only; an explicit description like "update prompts/x.md" still
+// reaches scope via PATH_TOKEN_RX before the kind defaults are
+// consulted.
+const KIND_DEFAULT_SCOPE = {
+  doc:          [/^README(?:\.md)?$/i, /^CHANGELOG(?:\.md)?$/i, /^LICENSE$/i, /^docs\//i],
+  missing_test: [/^tests?\//i, /\.test\.[jt]sx?$/i, /\.spec\.[jt]sx?$/i],
+  bug_fix:      [/^src\//i, /^lib\//i, /^packages\//i],
+  refactor:     [/^src\//i, /^lib\//i, /^packages\//i],
+  other:        [],
+};
+const PATH_TOKEN_RX = /([\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|toml|yaml|yml|py|rs|go|rb|java|html|css|scss|sql))/g;
+const DIR_PREFIX_RX = /\b(src|tests|test|docs|lib|prompts|packages|scripts)\/[\w./-]*/g;
+const NAMED_FILE_RX = /\b(README(?:\.md)?|CHANGELOG(?:\.md)?|LICENSE|package\.json|tsconfig\.json|Cargo\.toml|go\.mod|Gemfile|pyproject\.toml)\b/gi;
+
+function inferScopeFromCandidate(candidate) {
+  const desc = (candidate && candidate.description) || '';
+  const kind = (candidate && candidate.candidate_kind) || 'other';
+  const explicitFiles = new Set();
+  const explicitDirs = new Set();
+  const matchers = [];
+
+  // Extract explicit file paths via matchAll (same convention as
+  // Worker Report / Scout extractors so audit greps stay clean).
+  for (const m of desc.matchAll(PATH_TOKEN_RX)) {
+    explicitFiles.add(m[1]);
+    // Add the file's containing directory as a prefix too — "Add JSDoc
+    // to src/foo.ts" should accept changes inside `src/` (e.g. helper
+    // files the worker had to touch).
+    const lastSlash = m[1].lastIndexOf('/');
+    if (lastSlash > 0) explicitDirs.add(m[1].slice(0, lastSlash + 1));
+  }
+  for (const m of desc.matchAll(DIR_PREFIX_RX)) {
+    explicitDirs.add(m[0].endsWith('/') ? m[0] : m[0] + '/');
+  }
+  for (const m of desc.matchAll(NAMED_FILE_RX)) {
+    explicitFiles.add(m[1]);
+  }
+
+  for (const f of explicitFiles) matchers.push(new RegExp('^' + f.replace(/[.+^${}()|[\]\\]/g, '\\$&') + '$', 'i'));
+  for (const d of explicitDirs)  matchers.push(new RegExp('^' + d.replace(/[.+^${}()|[\]\\]/g, '\\$&'),       'i'));
+
+  // missing_test special case: if a src/foo.ts is referenced, also
+  // accept tests/foo.test.* and tests/foo/.
+  if (kind === 'missing_test') {
+    for (const f of explicitFiles) {
+      const m2 = f.match(/^(?:src|lib|packages)\/(.+?)\.(?:ts|tsx|js|jsx|mjs|cjs)$/i);
+      if (m2) {
+        const stem = m2[1];
+        matchers.push(new RegExp('^tests?/.*' + stem.replace(/[.+^${}()|[\]\\]/g, '\\$&') + '\\.(?:test|spec)\\.[jt]sx?$', 'i'));
+        matchers.push(new RegExp('^tests?/' + stem.replace(/[.+^${}()|[\]\\]/g, '\\$&') + '/', 'i'));
+      }
+    }
+  }
+
+  // Add kind-default scope.
+  const defaults = KIND_DEFAULT_SCOPE[kind] || [];
+  for (const rx of defaults) matchers.push(rx);
+
+  // If no matchers at all (kind=other and no explicit paths in desc),
+  // signal "no scope inferred" — caller should NOT mark violations.
+  const noScope = matchers.length === 0;
+
+  return {
+    matchers,
+    explicitFiles: Array.from(explicitFiles),
+    explicitDirs: Array.from(explicitDirs),
+    kind,
+    noScope,
+  };
+}
+
+function classifyChangedFiles(scope, changedFiles) {
+  const inScope = [];
+  const outOfScope = [];
+  for (const f of (changedFiles || [])) {
+    const matched = scope.matchers.some(rx => rx.test(f));
+    if (matched) inScope.push(f);
+    else outOfScope.push(f);
+  }
+  return { inScope, outOfScope };
+}
+
+/**
+ * Verify the worker stayed in the candidate's inferred scope.
+ *
+ * State requirement: candidate has actually had a worker run (status
+ * ∈ WORKING / REVIEWED / ACCEPTED / REJECTED / ROLLED_BACK; for
+ * PROPOSED / PICKED returns worker_not_run because there is no diff
+ * to verify).
+ *
+ * Side effects (write only when scope was inferable):
+ *   - patchCandidate: boundary_violations = out_of_scope (overwrite)
+ *   - patchIteration: evidence_summary merged with
+ *       { boundary_violations_count, boundary_in_scope_count }
+ *
+ * Idempotent — re-running with the same diff produces the same writes.
+ */
+function verifyWorkerBoundary(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  if (!i.candidate_id) return { ok: false, error: 'candidate_id_required' };
+
+  const cand = candidates.getCandidate(projectId, i.candidate_id, { home: o.home });
+  if (!cand) return { ok: false, error: 'candidate_not_found' };
+  if (cand.project_id && cand.project_id !== projectId) {
+    return { ok: false, error: 'project_id_mismatch' };
+  }
+  // PROPOSED / PICKED → worker hasn't actually written anything yet.
+  const VERIFIABLE = new Set(['WORKING', 'REVIEWED', 'ACCEPTED', 'REJECTED', 'ROLLED_BACK']);
+  if (!VERIFIABLE.has(cand.status)) {
+    return { ok: false, error: 'worker_not_run', current_status: cand.status, candidate_id: cand.id };
+  }
+  if (!cand.worker_iteration_id) {
+    return { ok: false, error: 'worker_iteration_missing', candidate_id: cand.id };
+  }
+
+  const record = mp.readManagedProject(projectId, o.home);
+  if (!record) return { ok: false, error: 'managed_project_not_found' };
+  if (!record.local_path) return { ok: false, error: 'local_path_missing' };
+
+  const workerIter = iters.getIteration(projectId, cand.worker_iteration_id, { home: o.home });
+  if (!workerIter) return { ok: false, error: 'worker_iteration_not_found' };
+
+  const ev = evidenceM.collectGitEvidence(record.local_path, { profile: record.profile });
+  const changedFiles = ev && Array.isArray(ev.changed_files) ? ev.changed_files : [];
+
+  const scope = inferScopeFromCandidate(cand);
+
+  if (scope.noScope) {
+    // Conservative: do NOT write boundary_violations. Leave the field
+    // alone (might be [] from propose, or carry an earlier verify
+    // result that this run can't second-guess).
+    return {
+      ok: true,
+      violations: [],
+      in_scope: [],
+      out_of_scope: [],
+      heuristic_notes: 'no_scope_inferred',
+      changed_files: changedFiles,
+      candidate_id: cand.id,
+    };
+  }
+
+  const { inScope, outOfScope } = classifyChangedFiles(scope, changedFiles);
+
+  // Persist boundary_violations on the candidate (overwrite).
+  candidates.patchCandidate(projectId, cand.id, { boundary_violations: outOfScope }, { home: o.home });
+
+  // Merge counts into the worker iteration's evidence_summary.
+  const existingEv = workerIter.evidence_summary || {};
+  const mergedEv = Object.assign({}, existingEv, {
+    boundary_violations_count: outOfScope.length,
+    boundary_in_scope_count:   inScope.length,
+  });
+  iters.patchIteration(projectId, cand.worker_iteration_id, { evidence_summary: mergedEv }, { home: o.home });
+
+  const noteParts = [];
+  if (scope.explicitFiles.length) noteParts.push('files: ' + scope.explicitFiles.join(', '));
+  if (scope.explicitDirs.length)  noteParts.push('dirs: '  + scope.explicitDirs.join(', '));
+  noteParts.push('kind=' + scope.kind);
+
+  return {
+    ok: true,
+    violations: outOfScope,
+    in_scope: inScope,
+    out_of_scope: outOfScope,
+    heuristic_notes: noteParts.join('; '),
+    changed_files: changedFiles,
+    candidate_id: cand.id,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Day 5 — terminal user actions on a candidate.
 // ---------------------------------------------------------------------------
 //
@@ -994,5 +1182,9 @@ module.exports = {
   listCandidates: listCandidatesHandler,
   listCandidatesByStatus: listCandidatesByStatusHandler,
   getCandidate: getCandidateHandler,
+  // Day 6 boundary verify
+  verifyWorkerBoundary,
+  inferScopeFromCandidate,
+  classifyChangedFiles,
   continueManagedIterationReview,
 };

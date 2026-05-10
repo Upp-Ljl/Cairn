@@ -294,6 +294,63 @@ ok(!/require\(['"]electron/.test(code), 'no electron import');
 ok(!/require\(['"]child_process/.test(code), 'no child_process import');
 ok(!/cairn\.db/.test(code), 'no cairn.db reference in code');
 
+// -------- Part I2 — boundary_violations field (Day 6) --------
+
+console.log('  -- boundary_violations --');
+
+const cBV = cand.proposeCandidate(PID, { description: 'bv test', candidate_kind: 'doc' });
+ok(Array.isArray(cBV.candidate.boundary_violations) && cBV.candidate.boundary_violations.length === 0,
+   'proposeCandidate initializes boundary_violations to []');
+
+const bvId = cBV.candidate.id;
+// Patch boundary_violations directly via patchCandidate.
+const bvPatch1 = cand.patchCandidate(PID, bvId, { boundary_violations: ['out/foo.md', 'out/bar.md'] });
+ok(bvPatch1.ok && bvPatch1.candidate.boundary_violations.length === 2,
+   'patchCandidate accepts boundary_violations and persists 2 entries');
+
+// Overwrite semantics — second patch replaces, not appends.
+const bvPatch2 = cand.patchCandidate(PID, bvId, { boundary_violations: ['out/baz.md'] });
+ok(bvPatch2.ok && bvPatch2.candidate.boundary_violations.length === 1
+   && bvPatch2.candidate.boundary_violations[0] === 'out/baz.md',
+   'patchCandidate boundary_violations is overwrite, not append');
+
+// Fold (re-read after patch) preserves the latest value.
+const bvFold = cand.getCandidate(PID, bvId);
+ok(bvFold && bvFold.boundary_violations.length === 1 && bvFold.boundary_violations[0] === 'out/baz.md',
+   'fold preserves latest boundary_violations across reload');
+
+// Hostile inputs are coerced.
+const bvHostile = cand.patchCandidate(PID, bvId, { boundary_violations: 'not-an-array' });
+ok(bvHostile.ok && bvHostile.candidate.boundary_violations.length === 0,
+   'non-array boundary_violations coerced to []');
+const bvLong = cand.patchCandidate(PID, bvId, {
+  boundary_violations: Array.from({ length: 100 }, (_, i) => 'p/file' + i + '.md'),
+});
+ok(bvLong.ok && bvLong.candidate.boundary_violations.length === 50,
+   'boundary_violations capped at 50 entries');
+
+// New candidates also have boundary_violations on listCandidates output.
+const listAll = cand.listCandidates(PID, 200);
+ok(listAll.every(c => Array.isArray(c.boundary_violations)),
+   'every candidate in listCandidates has boundary_violations array');
+
+// Forward-compat: forge a pre-Day-6 JSONL row (no boundary_violations field)
+// and verify it reads back as [].
+const oldFile = cand.candFile('p_old_compat');
+fs.mkdirSync(path.dirname(oldFile), { recursive: true });
+const oldRow = {
+  id: 'c_old_compat', project_id: 'p_old_compat',
+  source_iteration_id: null, source_run_id: null,
+  description: 'old', candidate_kind: 'doc', status: 'PROPOSED',
+  worker_iteration_id: null, review_iteration_id: null,
+  created_at: Date.now(), updated_at: Date.now(),
+  // no boundary_violations field — represents a pre-Day-6 row
+};
+fs.writeFileSync(oldFile, JSON.stringify(oldRow) + '\n');
+const oldRead = cand.getCandidate('p_old_compat', 'c_old_compat');
+ok(oldRead && Array.isArray(oldRead.boundary_violations) && oldRead.boundary_violations.length === 0,
+   'pre-Day-6 row without boundary_violations field reads back with []');
+
 // -------- Part J — exported constants --------
 
 ok(Array.isArray(cand.STATUS_VALUES) && cand.STATUS_VALUES.length === 7,

@@ -132,6 +132,9 @@ function foldCandidates(parsedLines) {
   const byId = new Map();
   for (const obj of parsedLines) {
     if (!obj || typeof obj !== 'object' || !obj.id) continue;
+    // Forward-compat: older JSONL rows (pre-Day-6) lack boundary_violations.
+    // Default to [] on read so consumers don't have to special-case.
+    if (!Array.isArray(obj.boundary_violations)) obj.boundary_violations = [];
     const cur = byId.get(obj.id);
     if (!cur || (obj.updated_at || 0) >= (cur.updated_at || 0)) {
       byId.set(obj.id, obj);
@@ -170,6 +173,7 @@ function proposeCandidate(projectId, input, opts) {
     status: 'PROPOSED',
     worker_iteration_id: null,
     review_iteration_id: null,
+    boundary_violations: [],
     created_at: now,
     updated_at: now,
   };
@@ -209,6 +213,20 @@ function patchCandidate(projectId, candidateId, patch, opts) {
   }
   if (patch.worker_iteration_id !== undefined) next.worker_iteration_id = clip(patch.worker_iteration_id, STR_ID_MAX) || null;
   if (patch.review_iteration_id !== undefined) next.review_iteration_id = clip(patch.review_iteration_id, STR_ID_MAX) || null;
+  if (patch.boundary_violations !== undefined) {
+    // Overwrite semantics — verify can re-run idempotently. Coerce to
+    // string[] of bounded length so a hostile patch can't blow the
+    // JSONL line up.
+    if (!Array.isArray(patch.boundary_violations)) {
+      next.boundary_violations = [];
+    } else {
+      next.boundary_violations = patch.boundary_violations
+        .filter(s => typeof s === 'string')
+        .map(s => clip(s, 240))
+        .filter(Boolean)
+        .slice(0, 50);
+    }
+  }
   next.updated_at = Date.now();
   const r = appendLine(file, next, { home: o.home });
   if (!r.ok) return r;

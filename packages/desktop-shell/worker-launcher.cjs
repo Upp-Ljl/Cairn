@@ -138,6 +138,15 @@ const PROVIDERS = {
     acceptsStdin: false,
     fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
   },
+  'fixture-worker-rogue': {
+    id: 'fixture-worker-rogue',
+    displayName: 'Fixture (worker — rogue / out-of-scope)',
+    command: process.execPath,
+    description: 'Local fixture that DELIBERATELY writes one in-scope and one out-of-scope file; used by Day 6 boundary verify to demonstrate ⚠ detection',
+    argvFor: (_promptPath) => ['-e', FIXTURE_WORKER_ROGUE_SCRIPT],
+    acceptsStdin: false,
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+  },
 };
 
 // Inlined as a string so the launcher has no dep on a separate file
@@ -241,6 +250,41 @@ process.stdout.write('## Review Verdict\\n');
 process.stdout.write('cairn-candidate-id: ' + candidateId + '\\n');
 process.stdout.write('verdict: pass\\n');
 process.stdout.write('reason: fixture review approves the candidate\\n');
+process.exit(0);
+`;
+
+// fixture-worker-rogue — exercises the DAY 6 boundary verify path.
+// Writes two files: one inside what most descriptions would consider
+// in-scope (src/) and one obviously out-of-scope (cairn-rogue-out-of-scope.md).
+// Verify should flag the second file as a boundary violation.
+const FIXTURE_WORKER_ROGUE_SCRIPT = `
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const promptPath = process.env.CAIRN_FIXTURE_PROMPT;
+const prompt = promptPath ? fs.readFileSync(promptPath, 'utf8') : '';
+const m = prompt.match(/cairn-candidate-id:\\s*(\\S+)/);
+const candidateId = m ? m[1] : 'unknown';
+const cwd = process.cwd();
+// 1) deliberately in-scope: write inside src/
+try { fs.mkdirSync(path.join(cwd, 'src'), { recursive: true }); } catch (_e) {}
+fs.writeFileSync(path.join(cwd, 'src', 'cairn-rogue-touched.ts'),
+  '// fixture-worker-rogue marker (in-scope)\\n// candidate: ' + candidateId + '\\n');
+// 2) deliberately out-of-scope: writes a marker at root that no
+//    candidate description would normally allow.
+fs.writeFileSync(path.join(cwd, 'cairn-rogue-out-of-scope.md'),
+  '# fixture-worker-rogue out-of-scope marker\\ncandidate: ' + candidateId + '\\n');
+process.stdout.write('[fixture-worker-rogue] received prompt of ' + prompt.length + ' chars\\n');
+process.stdout.write('[fixture-worker-rogue] candidate_id parsed: ' + candidateId + '\\n');
+process.stdout.write('[fixture-worker-rogue] wrote 1 in-scope + 1 out-of-scope file\\n\\n');
+process.stdout.write('## Worker Report\\n');
+process.stdout.write('### Completed\\n');
+process.stdout.write('- cairn-candidate-id: ' + candidateId + '\\n');
+process.stdout.write('- Wrote src/cairn-rogue-touched.ts and cairn-rogue-out-of-scope.md\\n');
+process.stdout.write('### Remaining\\n');
+process.stdout.write('### Blockers\\n');
+process.stdout.write('### Next\\n');
+process.stdout.write('- Have boundary verify catch the rogue out-of-scope file.\\n');
 process.exit(0);
 `;
 

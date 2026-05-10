@@ -1904,6 +1904,17 @@ ipcMain.handle('get-candidate', (_e, projectId, candidateId) => {
   return managedLoopHandlers.getCandidate(projectId, candidateId);
 });
 
+// Day 6 — boundary verify. Read-only against the managed repo (uses
+// the existing evidence whitelist — `git status --short` only). Side
+// effects are confined to ~/.cairn/ JSONLs (candidate.boundary_violations
+// + iteration.evidence_summary), matching the same write surface
+// every other Three-Stage handler already touches. Not gated by
+// MUTATIONS_ENABLED — verify is the reviewer's lens, not a state
+// transition.
+ipcMain.handle('verify-worker-boundary', (_e, projectId, input) => {
+  return managedLoopHandlers.verifyWorkerBoundary(projectId, input || {});
+});
+
 // Day 5 — terminal user-action handlers. Gated on
 // CAIRN_DESKTOP_ENABLE_MUTATIONS=1 to honor PRODUCT.md §12 D9: panel
 // stays read-only, the Inspector (already opt-in for mutations via

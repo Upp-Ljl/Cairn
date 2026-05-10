@@ -180,6 +180,18 @@ function tsRenderRow(c) {
   const desc = trunc(c.description || '', 100);
   const stages = tsStagesFor(c);
   const buttons = tsButtonsFor(c);
+  // Day 6 — boundary violations indicator next to W chip and a manual
+  // [Verify] button when the worker has actually run.
+  const violations = Array.isArray(c.boundary_violations) ? c.boundary_violations : [];
+  const workerRan = !!c.worker_iteration_id;
+  let bvIcon = '';
+  if (workerRan && violations.length > 0) {
+    const tip = `Worker changed ${violations.length} file(s) outside the inferred candidate scope: ${trunc(violations.join(', '), 200)}`;
+    bvIcon = ` <span class="ts-bv-icon" data-bv="1" data-cid="${escHtml(c.id)}" title="${escHtml(tip)}">⚠</span>`;
+  }
+  const verifyBtn = workerRan
+    ? ` <button class="ts-verify-btn" data-act="verify-boundary" data-id="${escHtml(c.id)}">Verify</button>`
+    : '';
   let verdictHtml = '';
   if (c.status === 'REVIEWED' || c.status === 'ACCEPTED' || c.status === 'REJECTED' || c.status === 'ROLLED_BACK') {
     const v = tsLastVerdicts.get(c.id);
@@ -188,11 +200,17 @@ function tsRenderRow(c) {
       if (v.reason) verdictHtml += `<div class="ts-reason">${escHtml(trunc(v.reason, 120))}</div>`;
     }
   }
+  // REVIEWED rows with violations get an explicit accept-warning line.
+  let bvWarn = '';
+  if (workerRan && violations.length > 0 && c.status === 'REVIEWED') {
+    bvWarn = `<div class="ts-bv-warn">Boundary violations detected — check before accepting.</div>`;
+  }
   return `<div class="${cls}" data-cid="${escHtml(c.id)}">`
-       + `${stages} <span class="ts-kind">${escHtml(c.candidate_kind || 'other')}</span>`
+       + `${stages}${bvIcon}${verifyBtn} <span class="ts-kind">${escHtml(c.candidate_kind || 'other')}</span>`
        + `${escHtml(desc)}<span class="ts-id">${escHtml(idShort)}</span>`
        + `<span style="float:right">${buttons}</span>`
        + verdictHtml
+       + bvWarn
        + `</div>`;
 }
 
@@ -218,6 +236,62 @@ function tsGroupAndRender(rows) {
 }
 
 function wireTsButtons() {
+  // Verify button — always wired (read-only handler, not gated on
+  // MUTATIONS_ENABLED). Re-renders after running.
+  document.querySelectorAll('#ts-list button.ts-verify-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (tsActionBusy || !tsActiveProjectId) return;
+      const id = btn.getAttribute('data-id');
+      tsActionBusy = true;
+      btn.disabled = true;
+      let res;
+      try { res = await window.cairn.verifyWorkerBoundary(tsActiveProjectId, { candidate_id: id }); }
+      catch (e) { res = { ok: false, error: e && e.message || 'ipc_error' }; }
+      tsActionBusy = false;
+      const row = btn.closest('.ts-row');
+      if (row) {
+        const old = row.querySelector('.ts-bv-popover');
+        if (old) old.remove();
+        const pop = document.createElement('div');
+        pop.className = 'ts-bv-popover';
+        if (res && res.ok) {
+          if (res.heuristic_notes === 'no_scope_inferred') {
+            pop.innerHTML = `<b>verify ok:</b> no scope inferred from description (kind=other or abstract); skipped writing boundary_violations.`;
+          } else {
+            pop.innerHTML = `<b>verify ok:</b> in_scope=${res.in_scope.length}, out_of_scope=${res.out_of_scope.length}<br>`
+              + `<i>heuristic:</i> ${escHtml(res.heuristic_notes || '')}<br>`
+              + (res.out_of_scope.length
+                  ? '<b>violations:</b> ' + res.out_of_scope.map(s => '<code>' + escHtml(s) + '</code>').join(', ')
+                  : '<b>violations:</b> none');
+          }
+        } else {
+          pop.innerHTML = `<b>verify failed:</b> ${escHtml((res && res.error) || 'unknown')}`;
+          pop.style.color = '#f99';
+        }
+        row.appendChild(pop);
+      }
+      // Re-poll so the row picks up the new boundary_violations.
+      pollThreeStage();
+    });
+  });
+  // ⚠ icon click — toggles a popover with the full list.
+  document.querySelectorAll('#ts-list .ts-bv-icon[data-bv="1"]').forEach(icon => {
+    icon.addEventListener('click', async () => {
+      const id = icon.getAttribute('data-cid');
+      if (!id || !tsActiveProjectId) return;
+      const row = icon.closest('.ts-row');
+      if (!row) return;
+      const existing = row.querySelector('.ts-bv-popover');
+      if (existing) { existing.remove(); return; }
+      const c = await window.cairn.getCandidate(tsActiveProjectId, id).catch(() => null);
+      if (!c) return;
+      const pop = document.createElement('div');
+      pop.className = 'ts-bv-popover';
+      pop.innerHTML = `<b>boundary_violations (${c.boundary_violations.length}):</b><br>`
+        + c.boundary_violations.map(s => '<code>' + escHtml(s) + '</code>').join('<br>');
+      row.appendChild(pop);
+    });
+  });
   document.querySelectorAll('#ts-list button.ts-action-btn[data-act]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (tsActionBusy) return;
