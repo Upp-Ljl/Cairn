@@ -86,6 +86,9 @@ const api = {
   getMultiCairnStatus:          () => ipcRenderer.invoke('get-multi-cairn-status'),
   listTeamCandidates:           (projectId) => ipcRenderer.invoke('list-team-candidates', projectId),
   listMyPublishedCandidateIds:  (projectId) => ipcRenderer.invoke('list-my-published-candidate-ids', projectId),
+  // Mode B Continuous Iteration — read accessors always exposed
+  getContinuousRun:             (projectId, runId) => ipcRenderer.invoke('get-continuous-run', projectId, runId),
+  listContinuousRuns:           (projectId, limit) => ipcRenderer.invoke('list-continuous-runs', projectId, limit || 50),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
@@ -144,6 +147,9 @@ if (MUTATIONS_ENABLED) {
   // when the shared dir is missing.
   api.publishCandidateToTeam     = (projectId, candidateId) => ipcRenderer.invoke('publish-candidate-to-team', projectId, candidateId);
   api.unpublishCandidateFromTeam = (projectId, candidateId) => ipcRenderer.invoke('unpublish-candidate-from-team', projectId, candidateId);
+  // Mode B Continuous Iteration mutations
+  api.runContinuousIteration     = (projectId, input) => ipcRenderer.invoke('run-continuous-iteration', projectId, input || {});
+  api.stopContinuousIteration    = (runId) => ipcRenderer.invoke('stop-continuous-iteration', runId);
 }
 
 contextBridge.exposeInMainWorld('cairn', api);

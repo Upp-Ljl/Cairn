@@ -31,6 +31,8 @@ const candidates = require('./project-candidates.cjs');
 const workerPrompt = require('./worker-prompt.cjs');
 const reviewPrompt = require('./review-prompt.cjs');
 const multiCairn   = require('./multi-cairn.cjs');
+const scoutPrompt  = require('./scout-prompt.cjs');
+const continuousRuns = require('./continuous-runs.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. list — every managed project on disk, joined with the registry
@@ -1153,6 +1155,389 @@ async function continueManagedIterationReview(projectId, ctx, opts) {
   return { ok: true, evidence: ev.evidence, summary: ev.summary, verdict: verdict.verdict, iteration_id: verdict.iteration_id };
 }
 
+// ---------------------------------------------------------------------------
+// Mode B — Continuous Iteration
+// ---------------------------------------------------------------------------
+//
+// Auto-chains a Scout run, then up to N (Worker → Review → Verify)
+// rounds. Stops at REVIEWED for each candidate — NEVER auto-accepts,
+// rejects, or rolls back. The user reviews verdicts in the Inspector
+// (Day 5) and clicks terminal action buttons.
+//
+// All provider launches go through the existing Day 2-6 handlers
+// (extractScoutCandidates / pickCandidateAndLaunchWorker /
+// runReviewForCandidate / extractReviewVerdict / verifyWorkerBoundary)
+// so every Day 1-6 invariant — launch-failed-keeps-candidate-at-PICKED,
+// verdict-does-not-auto-promote, boundary-verify-is-advisory — stays
+// intact.
+//
+// State tracker lives in `~/.cairn/continuous-runs/<projectId>.jsonl`.
+// An in-process registry (`continuousRunRegistry`) tracks the
+// stopRequested flag for cooperative stop — the poll loop checks it
+// each tick.
+
+/** @type {Map<string, { stopRequested: boolean, projectId: string }>} */
+const continuousRunRegistry = new Map();
+
+function _isTerminalRunStatus(s) {
+  return s === 'exited' || s === 'failed' || s === 'stopped' || s === 'unknown';
+}
+
+/**
+ * Poll launcher.getWorkerRun(runId) until the underlying child has
+ * reached a terminal status, OR a stop has been requested on the
+ * continuous run, OR the per-stage timeout elapses.
+ *
+ * Returns { run, stopped: bool, timedOut: bool }.
+ */
+async function _pollUntilTerminal(runId, continuousRunId, opts) {
+  const o = opts || {};
+  const pollMs = o.poll_ms || 1000;
+  const stageBudgetMs = o.stage_timeout_ms || (4 * 60 * 1000);
+  const startedAt = Date.now();
+  let run = null;
+  while (true) {
+    run = launcher.getWorkerRun(runId, { home: o.home });
+    if (run && _isTerminalRunStatus(run.status)) return { run, stopped: false, timedOut: false };
+    if (continuousRunRegistry.get(continuousRunId)
+        && continuousRunRegistry.get(continuousRunId).stopRequested) {
+      // best-effort: ask the launcher to stop the child if still running
+      if (run && (run.status === 'running' || run.status === 'queued')) {
+        launcher.stopWorkerRun(runId, { home: o.home });
+        await new Promise(r => setTimeout(r, 200));
+        run = launcher.getWorkerRun(runId, { home: o.home });
+      }
+      return { run, stopped: true, timedOut: false };
+    }
+    if (Date.now() - startedAt > stageBudgetMs) {
+      if (run && (run.status === 'running' || run.status === 'queued')) {
+        launcher.stopWorkerRun(runId, { home: o.home });
+        await new Promise(r => setTimeout(r, 200));
+        run = launcher.getWorkerRun(runId, { home: o.home });
+      }
+      return { run, stopped: false, timedOut: true };
+    }
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+}
+
+/**
+ * Drive one full Scout → up-to-N (Worker → Review → Verify) chain.
+ *
+ * input:
+ *   { goal, rules?, scout_provider, worker_provider, review_provider,
+ *     max_candidates }
+ * opts:
+ *   { home, env, poll_ms (default 1000), stage_timeout_ms (default 4min),
+ *     total_timeout_ms (default 15min) }
+ *
+ * Returns:
+ *   { ok, run_id, scout_run_id, scout_iteration_id,
+ *     candidate_runs: [{ candidate_id, worker_iteration_id,
+ *       worker_run_id, review_iteration_id, review_run_id,
+ *       verdict, reason, boundary_violations, status }],
+ *     stopped_reason, status }
+ *
+ * NEVER calls acceptCandidate / rejectCandidate / rollBackCandidate.
+ */
+async function runContinuousIteration(projectId, input, opts) {
+  const o = opts || {};
+  if (!projectId) return { ok: false, error: 'project_id_required' };
+  const i = input || {};
+  if (!i.goal || !i.goal.title) return { ok: false, error: 'goal_required' };
+  if (!i.scout_provider)  return { ok: false, error: 'scout_provider_required' };
+  if (!i.worker_provider) return { ok: false, error: 'worker_provider_required' };
+  if (!i.review_provider) return { ok: false, error: 'review_provider_required' };
+  const maxCandidates = Number.isFinite(i.max_candidates) ? i.max_candidates : 3;
+  if (maxCandidates < 0 || maxCandidates > 20) return { ok: false, error: 'max_candidates_out_of_range' };
+
+  const record = mp.readManagedProject(projectId, o.home);
+  if (!record) return { ok: false, error: 'managed_project_not_found' };
+
+  // Open the continuous-run tracker row.
+  const startRes = continuousRuns.startContinuousRun(projectId, {
+    max_candidates: maxCandidates,
+    scout_provider:  i.scout_provider,
+    worker_provider: i.worker_provider,
+    review_provider: i.review_provider,
+  }, { home: o.home });
+  if (!startRes.ok) return { ok: false, error: 'continuous_run_start_failed', detail: startRes.error };
+  const crRunId = startRes.run.id;
+  continuousRunRegistry.set(crRunId, { stopRequested: false, projectId });
+
+  const totalBudgetMs = o.total_timeout_ms || (15 * 60 * 1000);
+  const startedAt = Date.now();
+  const candidateRuns = [];
+  const errors = [];
+  let stoppedReason = null;
+  let finalStatus = 'finished';
+  let scoutRunId = null;
+  let scoutIterationId = null;
+
+  function _checkStopOrTimeout() {
+    if (continuousRunRegistry.get(crRunId).stopRequested) return 'user_stopped';
+    if (Date.now() - startedAt > totalBudgetMs) return 'timeout';
+    return null;
+  }
+
+  try {
+    // ---- Stage 1: Scout ------------------------------------------------
+    continuousRuns.patchContinuousRun(projectId, crRunId, { current_stage: 'scout-launch' }, { home: o.home });
+
+    if (maxCandidates === 0) {
+      stoppedReason = 'no_candidates';
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { status: 'finished', current_stage: 'done', stopped_reason: stoppedReason },
+        { home: o.home });
+      continuousRunRegistry.delete(crRunId);
+      return { ok: true, run_id: crRunId, scout_run_id: null, scout_iteration_id: null,
+               candidate_runs: [], errors, stopped_reason: stoppedReason, status: 'finished' };
+    }
+
+    const scoutIter = iters.startIteration(projectId, { goal_id: i.goal.id || null }, { home: o.home });
+    if (!scoutIter.ok) {
+      stoppedReason = 'inner_handler_failed';
+      errors.push('scout_iteration_start: ' + (scoutIter.error || 'unknown'));
+      finalStatus = 'failed';
+      throw new Error('scout_iteration_start_failed');
+    }
+    scoutIterationId = scoutIter.iteration.id;
+
+    const scoutPack = scoutPrompt.generateScoutPrompt({
+      goal: i.goal,
+      project_rules: i.rules || null,
+      project_rules_is_default: !i.rules,
+      pulse: null, activity_summary: null, tasks_summary: null,
+      blockers_summary: null, outcomes_summary: null,
+      recent_reports: [],
+      pre_pr_gate: null,
+    }, {
+      managed_record: record,
+      iteration_id: scoutIterationId,
+      forceDeterministic: true,
+    });
+
+    const scoutLaunch = launchManagedWorker(projectId, {
+      provider: i.scout_provider,
+      prompt: scoutPack.prompt,
+      iteration_id: scoutIterationId,
+    }, { home: o.home });
+    if (!scoutLaunch.ok) {
+      stoppedReason = 'inner_handler_failed';
+      errors.push('scout_launch: ' + (scoutLaunch.error || 'unknown'));
+      finalStatus = 'failed';
+      throw new Error('scout_launch_failed');
+    }
+    scoutRunId = scoutLaunch.run_id;
+    continuousRuns.patchContinuousRun(projectId, crRunId,
+      { current_stage: 'scout-poll', scout_run_id: scoutRunId, scout_iteration_id: scoutIterationId },
+      { home: o.home });
+
+    const scoutPoll = await _pollUntilTerminal(scoutRunId, crRunId, o);
+    if (scoutPoll.stopped) { stoppedReason = 'user_stopped'; finalStatus = 'stopped'; throw new Error('stopped'); }
+    if (scoutPoll.timedOut) { stoppedReason = 'timeout'; finalStatus = 'stopped'; throw new Error('timeout'); }
+    if (!scoutPoll.run || scoutPoll.run.status !== 'exited') {
+      stoppedReason = 'inner_handler_failed';
+      errors.push('scout_nonzero_exit: ' + (scoutPoll.run && scoutPoll.run.status || 'unknown'));
+      finalStatus = 'failed';
+      throw new Error('scout_exit');
+    }
+
+    continuousRuns.patchContinuousRun(projectId, crRunId, { current_stage: 'scout-extract' }, { home: o.home });
+    const scoutExt = extractScoutCandidates(projectId, { run_id: scoutRunId, iteration_id: scoutIterationId }, { home: o.home });
+    if (!scoutExt.ok) {
+      stoppedReason = scoutExt.error === 'no_scout_block' ? 'no_candidates' : 'inner_handler_failed';
+      if (stoppedReason === 'inner_handler_failed') {
+        errors.push('scout_extract: ' + scoutExt.error);
+        finalStatus = 'failed';
+      }
+      throw new Error('scout_extract_done');
+    }
+    const candidateIds = scoutExt.candidate_ids || [];
+    if (candidateIds.length === 0) {
+      stoppedReason = 'no_candidates';
+      throw new Error('no_candidates');
+    }
+
+    // ---- Stage 2..N: Worker → Review → Verify per candidate -----------
+    const toProcess = candidateIds.slice(0, maxCandidates);
+    for (let idx = 0; idx < toProcess.length; idx++) {
+      const candidateId = toProcess[idx];
+      const stageBase = `candidate-${idx + 1}`;
+
+      const stopMid = _checkStopOrTimeout();
+      if (stopMid) { stoppedReason = stopMid; finalStatus = 'stopped'; break; }
+
+      // ---- Worker ----
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { current_stage: stageBase + '-worker-launch' }, { home: o.home });
+      const wbRes = pickCandidateAndLaunchWorker(projectId, {
+        candidate_id: candidateId, provider: i.worker_provider,
+      }, { home: o.home });
+      if (!wbRes.ok) {
+        const code = wbRes.error || 'unknown';
+        errors.push(`worker_launch[${candidateId}]: ${code}`);
+        if (code === 'launch_failed') {
+          // Per Day 3 contract — candidate stays at PICKED, partial result.
+          stoppedReason = 'worker_launch_failed';
+          // Don't push a candidate_runs entry (no worker_run_id, no
+          // review_run_id, status accurately reflected on candidate row).
+          break;
+        }
+        // any other error is treated as a hard failure
+        stoppedReason = 'inner_handler_failed';
+        finalStatus = 'failed';
+        break;
+      }
+      const workerRunId = wbRes.run_id;
+      const workerIterationId = wbRes.worker_iteration_id;
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { current_stage: stageBase + '-worker-poll' }, { home: o.home });
+      const wbPoll = await _pollUntilTerminal(workerRunId, crRunId, o);
+      if (wbPoll.stopped) { stoppedReason = 'user_stopped'; finalStatus = 'stopped'; break; }
+      if (wbPoll.timedOut) { stoppedReason = 'timeout'; finalStatus = 'stopped'; break; }
+
+      // ---- Review ----
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { current_stage: stageBase + '-review-launch' }, { home: o.home });
+      const rbRes = runReviewForCandidate(projectId, {
+        candidate_id: candidateId, provider: i.review_provider,
+      }, { home: o.home });
+      if (!rbRes.ok) {
+        const code = rbRes.error || 'unknown';
+        errors.push(`review_launch[${candidateId}]: ${code}`);
+        // Record the partial candidate run so the panel can see worker
+        // landed but review didn't.
+        candidateRuns.push({
+          candidate_id: candidateId,
+          worker_iteration_id: workerIterationId,
+          worker_run_id: workerRunId,
+          review_iteration_id: null,
+          review_run_id: null,
+          verdict: null, reason: null,
+          boundary_violations: [],
+          status: 'WORKING',
+        });
+        if (code === 'launch_failed') {
+          stoppedReason = 'review_launch_failed';
+          break;
+        }
+        stoppedReason = 'inner_handler_failed';
+        finalStatus = 'failed';
+        break;
+      }
+      const reviewRunId = rbRes.run_id;
+      const reviewIterationId = rbRes.review_iteration_id;
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { current_stage: stageBase + '-review-poll' }, { home: o.home });
+      const rbPoll = await _pollUntilTerminal(reviewRunId, crRunId, o);
+      if (rbPoll.stopped) {
+        // record what we have so far
+        candidateRuns.push({
+          candidate_id: candidateId,
+          worker_iteration_id: workerIterationId, worker_run_id: workerRunId,
+          review_iteration_id: reviewIterationId, review_run_id: reviewRunId,
+          verdict: null, reason: null, boundary_violations: [],
+          status: 'REVIEWED',
+        });
+        stoppedReason = 'user_stopped'; finalStatus = 'stopped'; break;
+      }
+      if (rbPoll.timedOut) { stoppedReason = 'timeout'; finalStatus = 'stopped'; break; }
+
+      // ---- Verdict + Verify ----
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { current_stage: stageBase + '-verdict' }, { home: o.home });
+      const verdictRes = extractReviewVerdictHandler(projectId, { run_id: reviewRunId }, { home: o.home });
+      const verdict = verdictRes.ok ? verdictRes.verdict : null;
+      const reason  = verdictRes.ok ? verdictRes.reason  : null;
+      if (!verdictRes.ok) errors.push(`review_verdict[${candidateId}]: ${verdictRes.error}`);
+
+      continuousRuns.patchContinuousRun(projectId, crRunId,
+        { current_stage: stageBase + '-verify' }, { home: o.home });
+      const verifyRes = verifyWorkerBoundary(projectId, { candidate_id: candidateId }, { home: o.home });
+      const violations = verifyRes.ok ? (verifyRes.out_of_scope || []) : [];
+      if (!verifyRes.ok) errors.push(`verify[${candidateId}]: ${verifyRes.error}`);
+
+      const candRunEntry = {
+        candidate_id: candidateId,
+        worker_iteration_id: workerIterationId,
+        worker_run_id: workerRunId,
+        review_iteration_id: reviewIterationId,
+        review_run_id: reviewRunId,
+        verdict, reason,
+        boundary_violations: violations,
+        status: 'REVIEWED',
+      };
+      candidateRuns.push(candRunEntry);
+      continuousRuns.appendCandidateRun(projectId, crRunId, candRunEntry, { home: o.home });
+
+      // Check stop after each candidate.
+      const stopAfter = _checkStopOrTimeout();
+      if (stopAfter) { stoppedReason = stopAfter; finalStatus = 'stopped'; break; }
+    }
+
+    if (!stoppedReason) {
+      // We exhausted the loop without breaking. Distinguish completed
+      // (processed every candidate the scout proposed, up to budget)
+      // vs max_reached (scout proposed more than we processed).
+      stoppedReason = (candidateIds.length > toProcess.length) ? 'max_reached' : 'completed';
+    }
+  } catch (e) {
+    // Inner handlers set stoppedReason/finalStatus before throwing.
+    // Anything reaching here is the "throw to break out of nested
+    // logic" idiom; if we somehow got here without a reason, treat as
+    // unknown failure.
+    if (!stoppedReason) {
+      stoppedReason = 'inner_handler_failed';
+      finalStatus = 'failed';
+      errors.push('uncaught: ' + String(e && e.message || e).slice(0, 200));
+    }
+  }
+
+  for (const err of errors) continuousRuns.appendError(projectId, crRunId, err, { home: o.home });
+  continuousRuns.patchContinuousRun(projectId, crRunId, {
+    status: finalStatus,
+    current_stage: 'done',
+    stopped_reason: stoppedReason,
+  }, { home: o.home });
+  continuousRunRegistry.delete(crRunId);
+
+  return {
+    ok: true,
+    run_id: crRunId,
+    scout_run_id: scoutRunId,
+    scout_iteration_id: scoutIterationId,
+    candidate_runs: candidateRuns,
+    errors,
+    stopped_reason: stoppedReason,
+    status: finalStatus,
+  };
+}
+
+/**
+ * Set the stopRequested flag for an in-flight continuous run. The
+ * cooperative stop is observed by `_pollUntilTerminal` and the
+ * between-candidate stop check. Returns { ok: true } even when the
+ * run has already finished (idempotent).
+ */
+function stopContinuousIteration(runId) {
+  if (!runId) return { ok: false, error: 'run_id_required' };
+  const entry = continuousRunRegistry.get(runId);
+  if (!entry) return { ok: true, already_finished: true };
+  entry.stopRequested = true;
+  return { ok: true };
+}
+
+function getContinuousRunHandler(projectId, runId, opts) {
+  if (!projectId || !runId) return null;
+  return continuousRuns.getContinuousRun(projectId, runId, { home: (opts && opts.home) || undefined });
+}
+
+function listContinuousRunsHandler(projectId, limit, opts) {
+  if (!projectId) return [];
+  return continuousRuns.listContinuousRuns(projectId, limit || 50, { home: (opts && opts.home) || undefined });
+}
+
 module.exports = {
   listManagedProjects,
   registerManagedProject,
@@ -1211,5 +1596,10 @@ module.exports = {
     if (!projectId) return [];
     return Array.from(multiCairn.listMyPublishedCandidateIds(projectId, opts || {}));
   },
+  // Mode B Continuous Iteration
+  runContinuousIteration,
+  stopContinuousIteration,
+  getContinuousRun: getContinuousRunHandler,
+  listContinuousRuns: listContinuousRunsHandler,
   continueManagedIterationReview,
 };

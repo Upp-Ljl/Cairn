@@ -1937,6 +1937,25 @@ if (MUTATIONS_ENABLED) {
   });
 }
 
+// Mode B Continuous Iteration — auto-chains Scout → up-to-N
+// (Worker → Review → Verify) and stops every candidate at REVIEWED.
+// run / stop are gated on MUTATIONS_ENABLED (they spawn external
+// agents); get / list are unconditional reads.
+ipcMain.handle('get-continuous-run', (_e, projectId, runId) => {
+  return managedLoopHandlers.getContinuousRun(projectId, runId);
+});
+ipcMain.handle('list-continuous-runs', (_e, projectId, limit) => {
+  return managedLoopHandlers.listContinuousRuns(projectId, limit || 50);
+});
+if (MUTATIONS_ENABLED) {
+  ipcMain.handle('run-continuous-iteration', (_e, projectId, input) => {
+    return managedLoopHandlers.runContinuousIteration(projectId, input || {});
+  });
+  ipcMain.handle('stop-continuous-iteration', (_e, runId) => {
+    return managedLoopHandlers.stopContinuousIteration(runId);
+  });
+}
+
 // Day 5 — terminal user-action handlers. Gated on
 // CAIRN_DESKTOP_ENABLE_MUTATIONS=1 to honor PRODUCT.md §12 D9: panel
 // stays read-only, the Inspector (already opt-in for mutations via
