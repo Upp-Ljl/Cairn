@@ -82,6 +82,10 @@ const api = {
   listCandidatesByStatus:       (projectId, status) => ipcRenderer.invoke('list-candidates-by-status', projectId, status),
   getCandidate:                 (projectId, candidateId) => ipcRenderer.invoke('get-candidate', projectId, candidateId),
   verifyWorkerBoundary:         (projectId, input) => ipcRenderer.invoke('verify-worker-boundary', projectId, input || {}),
+  // Multi-Cairn v0 read accessors (always exposed)
+  getMultiCairnStatus:          () => ipcRenderer.invoke('get-multi-cairn-status'),
+  listTeamCandidates:           (projectId) => ipcRenderer.invoke('list-team-candidates', projectId),
+  listMyPublishedCandidateIds:  (projectId) => ipcRenderer.invoke('list-my-published-candidate-ids', projectId),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
@@ -134,6 +138,12 @@ if (MUTATIONS_ENABLED) {
   api.acceptCandidate    = (projectId, candidateId) => ipcRenderer.invoke('accept-candidate', projectId, candidateId);
   api.rejectCandidate    = (projectId, candidateId) => ipcRenderer.invoke('reject-candidate', projectId, candidateId);
   api.rollBackCandidate  = (projectId, candidateId) => ipcRenderer.invoke('roll-back-candidate', projectId, candidateId);
+  // Multi-Cairn v0 mutations — gated identically to the candidate
+  // terminal actions. CAIRN_SHARED_DIR must ALSO be set for these to
+  // do anything useful; the handler returns multi_cairn_not_enabled
+  // when the shared dir is missing.
+  api.publishCandidateToTeam     = (projectId, candidateId) => ipcRenderer.invoke('publish-candidate-to-team', projectId, candidateId);
+  api.unpublishCandidateFromTeam = (projectId, candidateId) => ipcRenderer.invoke('unpublish-candidate-from-team', projectId, candidateId);
 }
 
 contextBridge.exposeInMainWorld('cairn', api);

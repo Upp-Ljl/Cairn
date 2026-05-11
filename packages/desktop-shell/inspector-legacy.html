@@ -48,6 +48,19 @@
   .ts-verify-btn:disabled { opacity: 0.4; cursor: default; }
   .ts-bv-popover { background: #0c0c0c; border: 1px solid #444; padding: 6px; border-radius: 2px; margin: 4px 0 4px 22px; font-size: 0.78rem; color: #ccc; max-width: 480px; }
   .ts-bv-popover code { color: #f99; }
+  /* Multi-Cairn v0 — Team section */
+  .mc-status { color: #779; font-size: 0.78rem; margin: 4px 0; }
+  .mc-status.enabled { color: #7ec; }
+  .mc-status.disabled { color: #555; }
+  .mc-publish-btn { background: none; border: 1px solid #555; color: #aaa; cursor: pointer; padding: 1px 6px; font-family: monospace; font-size: 0.7rem; margin-left: 4px; border-radius: 2px; }
+  .mc-publish-btn:hover:not(:disabled) { border-color: #7ec; color: #7ec; }
+  .mc-publish-btn.published { border-color: #7ec; color: #7ec; }
+  .mc-publish-btn:disabled { opacity: 0.4; cursor: default; }
+  .mc-team-row { padding: 3px 0; border-bottom: 1px solid #2a2a2a; color: #ccc; font-size: 0.85rem; }
+  .mc-team-node { color: #7af; font-family: monospace; margin-right: 6px; }
+  .mc-team-kind { display: inline-block; padding: 1px 5px; border-radius: 2px; background: #232830; color: #aaa; font-size: 0.7rem; margin-right: 4px; }
+  .mc-team-status { display: inline-block; padding: 1px 5px; border-radius: 2px; font-size: 0.7rem; margin-left: 4px; background: #2a2a2a; color: #888; }
+  .mc-team-ts { color: #666; font-size: 0.7rem; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -57,8 +70,13 @@
 </div>
 <div class="section">
   <h2>Three-Stage Loop · v1</h2>
+  <div id="mc-status-bar" class="mc-status disabled">Multi-Cairn: probing…</div>
   <div id="ts-meta" class="ts-header">loading…</div>
   <div id="ts-list"><span class="empty">loading…</span></div>
+</div>
+<div class="section" id="mc-team-section" hidden>
+  <h2>Team Candidates (read-only)</h2>
+  <div id="mc-team-list"><span class="empty">no team candidates published yet</span></div>
 </div>
 <div class="section">
   <h2>Active Agents</h2>

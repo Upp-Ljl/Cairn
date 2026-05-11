@@ -1915,6 +1915,28 @@ ipcMain.handle('verify-worker-boundary', (_e, projectId, input) => {
   return managedLoopHandlers.verifyWorkerBoundary(projectId, input || {});
 });
 
+// Multi-Cairn v0 — read-only sharing of published candidates. Status
+// + list are unconditional reads; publish / unpublish are user
+// mutations on the shared outbox and gated on MUTATIONS_ENABLED to
+// stay consistent with Day 5's Accept / Reject / Roll back pattern.
+ipcMain.handle('get-multi-cairn-status', () => {
+  return managedLoopHandlers.getMultiCairnStatus();
+});
+ipcMain.handle('list-team-candidates', (_e, projectId) => {
+  return managedLoopHandlers.listTeamCandidates(projectId);
+});
+ipcMain.handle('list-my-published-candidate-ids', (_e, projectId) => {
+  return managedLoopHandlers.listMyPublishedCandidateIds(projectId);
+});
+if (MUTATIONS_ENABLED) {
+  ipcMain.handle('publish-candidate-to-team', (_e, projectId, candidateId) => {
+    return managedLoopHandlers.publishCandidateToTeam(projectId, candidateId);
+  });
+  ipcMain.handle('unpublish-candidate-from-team', (_e, projectId, candidateId) => {
+    return managedLoopHandlers.unpublishCandidateFromTeam(projectId, candidateId);
+  });
+}
+
 // Day 5 — terminal user-action handlers. Gated on
 // CAIRN_DESKTOP_ENABLE_MUTATIONS=1 to honor PRODUCT.md §12 D9: panel
 // stays read-only, the Inspector (already opt-in for mutations via

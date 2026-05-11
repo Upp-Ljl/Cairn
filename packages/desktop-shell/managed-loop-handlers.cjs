@@ -30,6 +30,7 @@ const launcher  = require('./worker-launcher.cjs');
 const candidates = require('./project-candidates.cjs');
 const workerPrompt = require('./worker-prompt.cjs');
 const reviewPrompt = require('./review-prompt.cjs');
+const multiCairn   = require('./multi-cairn.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. list — every managed project on disk, joined with the registry
@@ -1186,5 +1187,29 @@ module.exports = {
   verifyWorkerBoundary,
   inferScopeFromCandidate,
   classifyChangedFiles,
+  // Multi-Cairn v0 (read-only sharing via CAIRN_SHARED_DIR outbox)
+  getMultiCairnStatus: (opts) => multiCairn.getMultiCairnStatus(opts || {}),
+  publishCandidateToTeam: (projectId, candidateId, opts) => {
+    if (!projectId) return { ok: false, error: 'project_id_required' };
+    if (!candidateId) return { ok: false, error: 'candidate_id_required' };
+    // project_id_mismatch is enforced inside publishCandidate via
+    // candidates.getCandidate(projectId, ...), which can't find a row
+    // whose stored project_id differs from the JSONL filename — same
+    // pattern as accept/reject/rollback.
+    return multiCairn.publishCandidate(projectId, candidateId, opts || {});
+  },
+  unpublishCandidateFromTeam: (projectId, candidateId, opts) => {
+    if (!projectId) return { ok: false, error: 'project_id_required' };
+    if (!candidateId) return { ok: false, error: 'candidate_id_required' };
+    return multiCairn.unpublishCandidate(projectId, candidateId, opts || {});
+  },
+  listTeamCandidates: (projectId, opts) => {
+    if (!projectId) return [];
+    return multiCairn.listPublishedCandidates(projectId, opts || {});
+  },
+  listMyPublishedCandidateIds: (projectId, opts) => {
+    if (!projectId) return [];
+    return Array.from(multiCairn.listMyPublishedCandidateIds(projectId, opts || {}));
+  },
   continueManagedIterationReview,
 };

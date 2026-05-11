@@ -153,11 +153,28 @@ function tsButtonsFor(c) {
     buttons.push(`<button class="ts-action-btn" data-act="reject" data-id="${id}">Reject</button>`);
     buttons.push(`<button class="ts-action-btn" data-act="rollback" data-id="${id}" title="Marks state only; run git checkout -- <files> manually to revert worker's diff">Roll back</button>`);
   }
+  // Multi-Cairn v0: Publish/Unpublish button for share-eligible
+  // statuses. Shown only when CAIRN_SHARED_DIR is active. PROPOSED
+  // and REVIEWED are the meaningful publish points — you publish a
+  // candidate so teammates can see it before you accept, OR after
+  // review so they see the verdict.
+  const publishEligible = (c.status === 'PROPOSED' || c.status === 'REVIEWED');
+  if (mcStatus.enabled && publishEligible) {
+    const already = mcMyPublishedIds.has(c.id);
+    if (already) {
+      buttons.push(`<button class="mc-publish-btn published" data-act="unpublish" data-id="${id}" title="Withdraw from team outbox (writes a tombstone event)">🗑 Unpublish</button>`);
+    } else {
+      buttons.push(`<button class="mc-publish-btn" data-act="publish" data-id="${id}" title="Append a snapshot to ${escHtml(mcStatus.shared_dir || '')}/published-candidates.jsonl">📤 Publish</button>`);
+    }
+  }
   return buttons.join('');
 }
 
 let tsLastVerdicts = new Map();   // candidate_id -> { verdict, reason } cache
 let tsActiveProjectId = null;
+// Multi-Cairn v0 state — refreshed every poll.
+let mcStatus = { enabled: false, node_id: null, shared_dir: null };
+let mcMyPublishedIds = new Set();   // ids THIS node has published
 
 async function fetchVerdictsFor(projectId, reviewedRows) {
   // Only re-fetch verdict for rows we don't have a cached value for.
@@ -292,6 +309,39 @@ function wireTsButtons() {
       row.appendChild(pop);
     });
   });
+  // Multi-Cairn v0 — publish / unpublish buttons. Mirror the
+  // accept/reject error surface (inline ts-bv-popover-style row).
+  document.querySelectorAll('#ts-list button.mc-publish-btn[data-act]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (tsActionBusy || !tsActiveProjectId) return;
+      if (!MUTATIONS_ENABLED) return; // belt-and-suspenders; preload also hides the fn
+      const act = btn.getAttribute('data-act');
+      const id = btn.getAttribute('data-id');
+      tsActionBusy = true;
+      btn.disabled = true;
+      let res;
+      try {
+        if (act === 'publish')   res = await window.cairn.publishCandidateToTeam(tsActiveProjectId, id);
+        if (act === 'unpublish') res = await window.cairn.unpublishCandidateFromTeam(tsActiveProjectId, id);
+      } catch (e) {
+        res = { ok: false, error: e && e.message || 'ipc_error' };
+      }
+      tsActionBusy = false;
+      if (res && res.ok) {
+        await pollThreeStage();
+      } else {
+        btn.disabled = false;
+        const row = btn.closest('.ts-row');
+        if (row) {
+          const r = document.createElement('div');
+          r.className = 'ts-reason';
+          r.style.color = '#f99';
+          r.textContent = 'publish failed: ' + ((res && res.error) || 'unknown');
+          row.appendChild(r);
+        }
+      }
+    });
+  });
   document.querySelectorAll('#ts-list button.ts-action-btn[data-act]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (tsActionBusy) return;
@@ -336,24 +386,96 @@ function wireTsButtons() {
   });
 }
 
+function renderMultiCairnStatusBar() {
+  const bar = document.getElementById('mc-status-bar');
+  if (!bar) return;
+  if (mcStatus.enabled) {
+    bar.className = 'mc-status enabled';
+    const nodeShort = (mcStatus.node_id || '').slice(0, 8);
+    bar.textContent = `Multi-Cairn: enabled (node = ${nodeShort}, shared = ${mcStatus.shared_dir || '?'})`;
+  } else {
+    bar.className = 'mc-status disabled';
+    bar.textContent = 'Multi-Cairn: disabled (set CAIRN_SHARED_DIR to enable team sharing)';
+  }
+}
+
+function renderTeamCandidates(rows) {
+  const section = document.getElementById('mc-team-section');
+  const list = document.getElementById('mc-team-list');
+  if (!section || !list) return;
+  if (!mcStatus.enabled) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (!rows || rows.length === 0) {
+    list.innerHTML = '<span class="empty">no team candidates published yet</span>';
+    return;
+  }
+  list.innerHTML = rows.map(r => {
+    const snap = r.snapshot || {};
+    const nodeShort = (r.node_id || '').slice(0, 6);
+    const desc = trunc(snap.description || '', 100);
+    const kind = snap.candidate_kind || 'other';
+    const status = snap.status || '?';
+    const when = rel(r.published_at);
+    return `<div class="mc-team-row">`
+         + `<span class="mc-team-node">${escHtml(nodeShort)}</span>`
+         + `<span class="mc-team-kind">${escHtml(kind)}</span>`
+         + `${escHtml(desc)}`
+         + `<span class="mc-team-status">${escHtml(status)}</span>`
+         + `<span class="mc-team-ts">${escHtml(when)}</span>`
+         + `</div>`;
+  }).join('');
+}
+
 async function pollThreeStage() {
   const meta = document.getElementById('ts-meta');
+
+  // Refresh Multi-Cairn status first — affects how candidate rows
+  // render (Publish/Unpublish button visibility).
+  try { mcStatus = await window.cairn.getMultiCairnStatus(); }
+  catch (_e) { mcStatus = { enabled: false, node_id: null, shared_dir: null }; }
+  renderMultiCairnStatusBar();
+
   let proj;
   try { proj = await window.cairn.getSelectedProject(); } catch (_e) { proj = null; }
   if (!proj) {
     tsActiveProjectId = null;
     meta.textContent = 'no project selected';
     document.getElementById('ts-list').innerHTML = '<span class="ts-empty">select a project in the panel first.</span>';
+    renderTeamCandidates([]);
     return;
   }
   tsActiveProjectId = proj.id;
   meta.textContent = `${proj.label} · ${proj.id}`;
+
+  // Refresh THIS node's published-ids set so candidate rows pick the
+  // right [Publish] vs [Unpublish] label.
+  if (mcStatus.enabled) {
+    try {
+      const ids = await window.cairn.listMyPublishedCandidateIds(proj.id);
+      mcMyPublishedIds = new Set(Array.isArray(ids) ? ids : []);
+    } catch (_e) { mcMyPublishedIds = new Set(); }
+  } else {
+    mcMyPublishedIds = new Set();
+  }
+
   let rows = [];
   try { rows = await window.cairn.listCandidates(proj.id, 100); } catch (_e) { rows = []; }
-  // Refresh verdicts for any REVIEWED / terminal-after-REVIEWED rows we haven't cached.
   const verdictRows = rows.filter(c => c.review_iteration_id);
   if (verdictRows.length) await fetchVerdictsFor(proj.id, verdictRows);
   tsGroupAndRender(rows);
+
+  // Team Candidates section (read-only) — what OTHER nodes have
+  // published for this same project.
+  if (mcStatus.enabled) {
+    let teamRows = [];
+    try { teamRows = await window.cairn.listTeamCandidates(proj.id); } catch (_e) { teamRows = []; }
+    renderTeamCandidates(teamRows);
+  } else {
+    renderTeamCandidates([]);
+  }
 }
 
 async function poll() {
