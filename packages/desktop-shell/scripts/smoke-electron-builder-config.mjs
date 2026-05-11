@@ -43,6 +43,8 @@ ok(files.includes('panel.html'),                   'C files includes panel.html'
 ok(files.includes('panel.js'),                     'C files includes panel.js');
 ok(files.some(f => f.includes('better-sqlite3')),  'C files includes better-sqlite3');
 ok(files.some(f => f.startsWith('!')),             'C has negation patterns for exclusion');
+ok(files.includes('*.cjs'),                         'C files glob covers all top-level .cjs modules (regression guard)');
+ok(files.some(f => f.startsWith('agent-adapters')), 'C files glob includes agent-adapters/');
 
 console.log('==> Section D: Windows target');
 ok(Array.isArray(pkg.build.win?.target),           'D win.target is array');
@@ -55,9 +57,12 @@ console.log('==> Section E: NSIS config');
 const nsis = pkg.build.nsis;
 ok(nsis && typeof nsis === 'object',               'E nsis section exists');
 ok(nsis.oneClick === false,                        'E nsis.oneClick = false (user can choose install dir)');
+ok(nsis.perMachine === false,                      'E nsis.perMachine = false (installs to %LOCALAPPDATA% per plan §1)');
 ok(nsis.allowToChangeInstallationDirectory === true, 'E allowToChangeInstallationDirectory = true');
 ok(nsis.createDesktopShortcut === true,            'E createDesktopShortcut = true');
 ok(nsis.createStartMenuShortcut === true,          'E createStartMenuShortcut = true');
+ok(nsis.installerIcon === 'build/icon.ico',        'E nsis.installerIcon set');
+ok(nsis.uninstallerIcon === 'build/icon.ico',      'E nsis.uninstallerIcon set');
 
 console.log('==> Section F: Mac target (config only, no build from this machine)');
 ok(Array.isArray(pkg.build.mac?.target),           'F mac.target is array');
