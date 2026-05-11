@@ -61,6 +61,7 @@ const goalLoopPromptPack = require('./goal-loop-prompt-pack.cjs');
 const recoverySummary    = require('./recovery-summary.cjs');
 const coordinationSignals = require('./coordination-signals.cjs');
 const managedLoopHandlers = require('./managed-loop-handlers.cjs');
+const mentorHandler = require('./mentor-handler.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1953,6 +1954,25 @@ if (MUTATIONS_ENABLED) {
   });
   ipcMain.handle('stop-continuous-iteration', (_e, runId) => {
     return managedLoopHandlers.stopContinuousIteration(runId);
+  });
+}
+
+// Mode A — Mentor Layer (advisor chat).
+//
+// ask-mentor spawns a provider (claude-code / codex / fixture-mentor)
+// to polish the deterministic skeleton; that's an "agent run" by the
+// same launcher pipeline as Scout/Worker/Review, so it's gated on
+// MUTATIONS_ENABLED. list-mentor-history / get-mentor-entry are pure
+// reads on ~/.cairn/mentor-history JSONL and always exposed.
+ipcMain.handle('list-mentor-history', (_e, projectId, limit) => {
+  return mentorHandler.listMentorHistory(projectId, limit || 50);
+});
+ipcMain.handle('get-mentor-entry', (_e, projectId, turnId) => {
+  return mentorHandler.getMentorEntry(projectId, turnId);
+});
+if (MUTATIONS_ENABLED) {
+  ipcMain.handle('ask-mentor', (_e, projectId, input) => {
+    return mentorHandler.askMentor(projectId, input || {});
   });
 }
 

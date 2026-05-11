@@ -89,6 +89,9 @@ const api = {
   // Mode B Continuous Iteration — read accessors always exposed
   getContinuousRun:             (projectId, runId) => ipcRenderer.invoke('get-continuous-run', projectId, runId),
   listContinuousRuns:           (projectId, limit) => ipcRenderer.invoke('list-continuous-runs', projectId, limit || 50),
+  // Mode A Mentor — read accessors always exposed
+  listMentorHistory:            (projectId, limit) => ipcRenderer.invoke('list-mentor-history', projectId, limit || 50),
+  getMentorEntry:               (projectId, turnId) => ipcRenderer.invoke('get-mentor-entry', projectId, turnId),
   continueManagedIterationReview: (projectId, opts) => ipcRenderer.invoke('continue-managed-iteration-review', projectId, opts || null),
   // Recovery surface (read-only; copy-pasteable advisory prompts only)
   getProjectRecovery: (projectId) => ipcRenderer.invoke('get-project-recovery', projectId),
@@ -150,6 +153,8 @@ if (MUTATIONS_ENABLED) {
   // Mode B Continuous Iteration mutations
   api.runContinuousIteration     = (projectId, input) => ipcRenderer.invoke('run-continuous-iteration', projectId, input || {});
   api.stopContinuousIteration    = (runId) => ipcRenderer.invoke('stop-continuous-iteration', runId);
+  // Mode A Mentor mutation (spawns an agent run via launcher) — gated
+  api.askMentor                  = (projectId, input) => ipcRenderer.invoke('ask-mentor', projectId, input || {});
 }
 
 contextBridge.exposeInMainWorld('cairn', api);

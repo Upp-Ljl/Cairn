@@ -147,6 +147,15 @@ const PROVIDERS = {
     acceptsStdin: false,
     fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
   },
+  'fixture-mentor': {
+    id: 'fixture-mentor',
+    displayName: 'Fixture (mentor)',
+    command: process.execPath,
+    description: 'Local fixture that emits a Mentor Work Items block — 5 items spanning all 5 kinds; used by A1 smoke to demonstrate the chat handler pipeline',
+    argvFor: (_promptPath) => ['-e', FIXTURE_MENTOR_SCRIPT],
+    acceptsStdin: false,
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+  },
 };
 
 // Inlined as a string so the launcher has no dep on a separate file
@@ -285,6 +294,82 @@ process.stdout.write('### Remaining\\n');
 process.stdout.write('### Blockers\\n');
 process.stdout.write('### Next\\n');
 process.stdout.write('- Have boundary verify catch the rogue out-of-scope file.\\n');
+process.exit(0);
+`;
+
+// fixture-mentor — A1 Mode A scaffold smoke fixture.
+//
+// Emits the canonical `## Mentor Work Items` header + a JSON fenced
+// block with 5 work items spanning all 5 candidate_kinds (bug_fix /
+// refactor / missing_test / doc / other). At least one item:
+//   - next_action = "pick to start Continuous Iteration"
+//   - evidence_refs[0].kind = "candidate"
+// to validate the Mode B handoff schema (spec §9.5).
+//
+// Also echoes the user_question line from the prompt so the smoke can
+// assert the prompt actually reached the worker.
+const FIXTURE_MENTOR_SCRIPT = `
+'use strict';
+const fs = require('fs');
+const promptPath = process.env.CAIRN_FIXTURE_PROMPT;
+const prompt = promptPath ? fs.readFileSync(promptPath, 'utf8') : '';
+const qm = prompt.match(/<<<USER_QUESTION_START>>>\\s*([\\s\\S]*?)\\s*<<<USER_QUESTION_END>>>/);
+const userQuestion = qm ? qm[1].trim().slice(0, 200) : 'unknown';
+process.stdout.write('[fixture-mentor] received prompt of ' + prompt.length + ' chars\\n');
+process.stdout.write('[fixture-mentor] echoing user_question: ' + userQuestion + '\\n\\n');
+
+const items = [
+  {
+    id: 'm_aaaa1111bbbb',
+    description: 'Bug fix: race in feed-format SAFE_TAG_RE (.test() advances lastIndex across replace callbacks).',
+    why: { impact: 'Sporadic safe-tag stripping affects all rendered feeds.', cost: 'L', risk: 'M', urgency: 'H' },
+    stakeholders: { owner: 'agent', reviewer: 'human', notify: ['worker'] },
+    next_action: 'pick to start Continuous Iteration',
+    evidence_refs: [{ kind: 'candidate', ref: 'c_bug_001' }, { kind: 'commit', ref: 'a1b2c3d' }],
+    confidence: 0.82
+  },
+  {
+    id: 'm_cccc2222dddd',
+    description: 'Refactor: consolidate three duplicate session-token validators across api/ into one helper.',
+    why: { impact: 'Reduces drift risk across api/ endpoints.', cost: 'M', risk: 'L', urgency: 'M' },
+    stakeholders: { owner: 'agent', reviewer: 'human', notify: ['reviewer'] },
+    next_action: 'pick to start Continuous Iteration',
+    evidence_refs: [{ kind: 'candidate', ref: 'c_refactor_002' }],
+    confidence: 0.71
+  },
+  {
+    id: 'm_eeee3333ffff',
+    description: 'Missing test: src/lib/engine/equity.ts has no sibling test file while peer modules do.',
+    why: { impact: 'Coverage gap on a hot-path module.', cost: 'M', risk: 'L', urgency: 'M' },
+    stakeholders: { owner: 'agent', reviewer: 'human', notify: ['worker'] },
+    next_action: 'pick to start Continuous Iteration',
+    evidence_refs: [{ kind: 'candidate', ref: 'c_test_003' }, { kind: 'doc', ref: 'src/lib/engine/equity.ts' }],
+    confidence: 0.78
+  },
+  {
+    id: 'm_aaaa4444bbbb',
+    description: 'Doc: .env.local.example missing UPSTASH_REDIS_REST_URL and CRON_SECRET references.',
+    why: { impact: 'New contributors hit silent misconfig on first boot.', cost: 'L', risk: 'L', urgency: 'M' },
+    stakeholders: { owner: 'human', reviewer: 'either', notify: [] },
+    next_action: 'propose candidate then pick',
+    evidence_refs: [{ kind: 'doc', ref: '.env.local.example' }],
+    confidence: 0.66
+  },
+  {
+    id: 'm_cccc5555dddd',
+    description: 'Other: add a CHANGELOG.md entry template so future releases get one for free.',
+    why: { impact: 'Small process polish.', cost: 'L', risk: 'L', urgency: 'L' },
+    stakeholders: { owner: 'human', reviewer: 'either', notify: [] },
+    next_action: 'defer / mark not-now',
+    evidence_refs: [{ kind: 'doc', ref: 'CHANGELOG.md' }],
+    confidence: 0.42
+  }
+];
+
+process.stdout.write('## Mentor Work Items\\n');
+process.stdout.write('\\u0060\\u0060\\u0060json\\n');
+process.stdout.write(JSON.stringify({ work_items: items }, null, 2) + '\\n');
+process.stdout.write('\\u0060\\u0060\\u0060\\n');
 process.exit(0);
 `;
 
