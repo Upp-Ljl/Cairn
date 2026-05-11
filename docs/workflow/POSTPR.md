@@ -82,6 +82,8 @@ After audit:
 ## Stop Conditions (All Three Must Hold)
 
 1. **CI green**: all configured test suites pass at the latest commit
+   - Check without `gh`: `curl -s -H "Authorization: token $TOKEN" "https://api.github.com/repos/Upp-Ljl/Cairn/commits/<sha>/check-runs" | jq '.check_runs[] | {name, conclusion}'`
+   - PAT from `AUTOSHIP.md §"Push Command"`. Expect every `conclusion` to be `"success"`.
 2. **No merge conflict** with target branch
 3. **Reviewer silent or 👍**: latest reviewer Agent output is `VERDICT: READY_TO_MERGE`
 

@@ -27,8 +27,10 @@ Gate 1 JSON and Gate 2 JSON must be **byte-identical** after canonicalization (s
 claude --model haiku -p "$PROMPT" > /tmp/gate1.json
 jq -S . /tmp/gate1.json > /tmp/gate1.canonical.json
 
-# Gate 2 (Agent subagent recommended for full context isolation)
-# spawn Agent(general-purpose, prompt=$PROMPT) → expect JSON output
+# Gate 2 (Agent subagent — use `general-purpose` for full context isolation
+# AND ability to run verification commands; `Explore` is read-only and
+# cannot execute Bash, so it is not suitable for Gate 2.)
+# spawn Agent(subagent_type: "general-purpose", prompt: $PROMPT) → expect JSON output
 # save to /tmp/gate2.json
 jq -S . /tmp/gate2.json > /tmp/gate2.canonical.json
 
@@ -73,9 +75,9 @@ PROMPT='Read packages/mcp-server/src/cli/install.ts. Output JSON only: {"flags":
 claude --model haiku -p "$PROMPT" > /tmp/install-probe-haiku.json
 ```
 
-**Gate 2 — Agent subagent (fresh context, sonnet)**:
+**Gate 2 — Agent subagent (fresh context, `general-purpose`)**:
 ```
-Agent(subagent_type: "Explore", prompt: "Read packages/mcp-server/src/cli/install.ts and output the same JSON shape: {flags, files_written, idempotent_keys}. JSON only, no prose.")
+Agent(subagent_type: "general-purpose", prompt: "Read packages/mcp-server/src/cli/install.ts and output the same JSON shape: {flags, files_written, idempotent_keys}. JSON only, no prose.")
 ```
 
 **Gate 3 — Real run**:
@@ -84,9 +86,12 @@ Agent(subagent_type: "Explore", prompt: "Read packages/mcp-server/src/cli/instal
 cd $(mktemp -d) && git clone D:/lll/cairn .
 cd packages/mcp-server && npm install && npm run build
 node dist/cli/install.js --help > /tmp/install-real.txt
-# canonicalize
-node -e "console.log(JSON.stringify({flags: [...help.matchAll(/--\w+/g)].map(m => m[0]), ...}, null, 2))" \
-  --input=/tmp/install-real.txt > /tmp/install-real.json
+# canonicalize the real --help output into the same JSON shape
+node -e '
+  const help = require("fs").readFileSync(process.argv[1], "utf8");
+  const flags = [...help.matchAll(/--[\w-]+/g)].map(m => m[0]);
+  console.log(JSON.stringify({ flags, files_written: [], idempotent_keys: [] }, null, 2));
+' /tmp/install-real.txt > /tmp/install-real.json
 ```
 
 Compare all three. If they agree, the install CLI's behavior is what the docs claim.

@@ -37,8 +37,9 @@ The Phase 1 / 2 / 3 I originally enumerated were already done in earlier sprints
 - Remove `"private": true` from `packages/mcp-server/package.json` (npm publish prep) — requires user approval
 - Tag `v0.1.0` — requires user approval
 
-### Phase 5 — v0.2 Live Run Log
-Gated on Phase 4 finishing. See `docs/superpowers/plans/2026-05-29-v0.2-live-run-log.md`.
+### Phase 5 — Live Run Log (Later, not time-bound)
+Per PRODUCT.md v3 §12 D10 the project no longer ships version-numbered roadmaps (no "v0.2" / "v0.3"). The plan file (`docs/superpowers/plans/2026-05-29-v0.2-live-run-log.md`) keeps its original filename for traceability, but the **content** is Later-scope, not a versioned release.
+Gated on Phase 4 finishing.
 
 ### Phase 6 — Agent Poker Arena full demo
 Run one complete real-Claude-driven loop on the live platform: Mentor recommends → user picks candidate → Mode B Scout/Worker/Review chain → fix lands in agent-game-platform → next round.

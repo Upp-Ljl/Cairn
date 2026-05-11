@@ -48,7 +48,7 @@ auto-merge
 | `GRILL.md` | Grill until intent unambiguous | (project-specific) |
 | `HOWTO-PLAN-PR.md` | DUCKPLAN four-section plan format | `docs/HOWTO-PLAN-PR.md` |
 | `TEAMWORK.md` | N+1+2N parallel dispatch, git worktrees, opus reporter | `docs/TEAMWORK.md` |
-| `FEATURE-VALIDATION.md` | 1+2+3 cross-engine validation (Cairn adaptation) | `docs/FASTPROBE.md` + feature-validation gate |
+| `FEATURE-VALIDATION.md` | 1+2+3 cross-engine validation (Cairn adaptation) | TeamBrain Feature validation 1+2+3 (claudefast → codex exec → tmux) |
 | `AUTOSHIP.md` | Commit + push + PR (auto-authorized) | (project-specific) |
 | `POSTPR.md` | Auto-review loop until reviewer silent | `docs/POSTPR.md` |
 | `PR-PLAN.md` | Fix planning after review finds issues | `docs/PR-PLAN.md` |

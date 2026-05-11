@@ -37,11 +37,11 @@ No `Co-Authored-By` trailer (user preference, 2026-04-27).
 
 ## Branch Strategy
 
-For non-trivial changes: feature branch + PR.
+For any change touching code files (`.ts` / `.js` / `.cjs` / `.mjs` / `.json` / `.sql`): feature branch + PR. POSTPR reviewer Agent must pass before merge.
 - Branch name: `<type>/<slug>`. Examples: `packaging/win-nsis-mvp`, `feat/live-run-log-events-table`.
 - Always branch from latest `main`.
 
-For doc-only / trivial changes: direct push to `main` is fine (no PR review value).
+For doc-only / config-only changes with **zero code-file deltas**, direct push to `main` is allowed — but a POSTPR Agent dispatch is still recommended for any doc that defines methodology (`docs/workflow/`, `CLAUDE.md`, `PRODUCT.md`, `ARCHITECTURE.md`).
 
 ---
 
@@ -90,11 +90,31 @@ After PR is open, hand off to `POSTPR.md` reviewer Agent dispatch.
 
 ## Files to Never Stage
 
-- `0`, `{const`, and any single-char-or-pattern accidental files
+- Any untracked file whose name looks like a typo or stray shell redirect: single-char names, leading `{`, leading `&`, trailing garbage.
 - `.cairn-push-token/*.txt` — PAT tokens (gitignored)
 - `.env*` — credentials
 - `.cairn-worktrees/` — agent worktrees (gitignored)
 - `node_modules/`, `dist/` (per existing gitignore)
+
+Before staging, eyeball `git status` for anything not on the plan's expected outputs list.
+
+---
+
+## Forbidden During Push (Red Lines)
+
+These are red lines. Violating them rolls the change back.
+
+- ❌ `git push --force` / `--force-with-lease` to `main` or any shared branch
+- ❌ `git reset --hard` to "make the diff smaller" after staging
+- ❌ `--no-verify` to skip pre-commit hooks
+- ❌ `--no-gpg-sign` to skip signing
+- ❌ Amending an already-pushed commit (rewrites history teammates have fetched)
+- ❌ `git checkout .` / `git restore .` over uncommitted teammate work
+- ❌ Adding `// @ts-ignore` / `eslint-disable` / `.skip` to make a check pass without root-cause
+
+If you find yourself reaching for one of these: stop. Investigate. The push is not ready.
+
+See `POSTPR.md` §"Forbidden Patterns" for the same red lines applied to post-push fixes.
 
 ---
 

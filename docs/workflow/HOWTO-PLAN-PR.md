@@ -83,3 +83,5 @@ DUCKPLAN files are for **executing** plans, not for methodology.
 For trivial changes (typo fix, doc update under 50 lines, single-line config change), skip the four-section plan and just commit. The rule of thumb: if you can describe the change in one sentence AND verify it in one command, no plan needed.
 
 For anything multi-file, multi-package, or involving new dependencies / migrations / IPC / new MCP tools — plan required.
+
+**Cairn is not from scratch**: before writing a DUCKPLAN for a new primitive, check `README.md` §"Where We Differ From TeamBrain From Scratch" and confirm the primitive does not already exist in the 28-tool kernel / 8-state-object surface / panel UI. Re-deriving existing primitives is the most common DUCKPLAN waste in this repo.

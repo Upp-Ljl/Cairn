@@ -124,6 +124,20 @@ If the worker's claim diverges from reality, the worker failed. Fix in this sess
 
 ---
 
+## Inside A Worktree, Never
+
+Workers operating in `.cairn-worktrees/<task>` are the most likely point to reach for destructive recovery. Hard rules:
+
+- ❌ `git reset --hard` to "recover from a bad commit" — make a new commit that reverts instead
+- ❌ `git push --force` from a worktree — never; PR branches are append-only
+- ❌ `--no-verify` to skip hooks faster — investigate why the hook is angry
+- ❌ Deleting the worktree dir manually — always use `git worktree remove <path>`
+- ❌ `git checkout <branch>` inside a worktree — each worktree is pinned to one branch by design
+
+If something looks unrecoverable: stop, ask the lead agent. Subagents do not silently fix worktree damage.
+
+---
+
 ## Cairn As Its Own Coordination Layer
 
 When multiple subagent workers run on the Cairn repo, Cairn's own kernel can manage them:

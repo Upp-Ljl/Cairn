@@ -72,4 +72,4 @@ Self-Report-Stop catches the assistant's individual lapses BEFORE they propagate
 
 ## How To Integrate As An Actual Hook (Future Work)
 
-Per CLAUDE.md, hook configuration goes in `settings.json`. A Stop hook can be added to fire a script that scans the last assistant message for the 12 fields and returns a structured block to the assistant. This is a v0.2 polish task — not blocking v0.1 release.
+Per CLAUDE.md, hook configuration goes in `settings.json`. A Stop hook can be added to fire a script that scans the last assistant message for the 12 fields and returns a structured block to the assistant. This is **Later-scope** (not time-bound) per PRODUCT.md v3 §12 D10 — a polish item, not blocking MVP.
