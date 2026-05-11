@@ -79,7 +79,7 @@ We are NOT a greenfield project:
 - Live testbed (agent-game-platform) has working dogfood
 
 So we apply TeamBrain workflow to:
-- New features we're adding (packaging, v0.2 Live Run Log, Live demo)
+- New features we're adding (packaging, Live Run Log — Later-scope per PRODUCT.md v3 §12 D10, live demo)
 - Bugs found via testbed
 - Polish for v0.1 release
 
