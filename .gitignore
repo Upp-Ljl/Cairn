@@ -44,3 +44,6 @@ artifacts/
 
 # Throwaway experiment scripts / session ephemera
 temp/
+
+# Agent worktrees per docs/workflow/TEAMWORK.md
+.cairn-worktrees/

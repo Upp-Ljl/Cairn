@@ -1,17 +1,24 @@
-# Auto-Ship: Commit → Push → PR
+# AUTOSHIP — Commit → Push → PR
 
-> After docs/code work is done, ship immediately — no human approval needed for commit and push.
+> After DUCKPLAN work is implemented and FEATURE-VALIDATION passes, ship the PR.
+> No human approval needed for commit / push / open-PR. Approval IS needed for: merge, tag, npm publish, force-push, LICENSE changes (per CLAUDE.md).
 
-## What "auto-ship" means
+## Flow
 
-When work is complete and verified:
-1. Stage relevant files (never `0`, `{const`, or other accidental files)
-2. Commit with conventional commit message
-3. Push to `origin main` via PAT (openssl backend first, schannel fallback)
-4. If on a feature branch: open PR via GitHub API
-
-No "should I commit?" question. No "ready to push?" confirmation.
-The user has pre-authorized this for all verified, complete work.
+```
+DUCKPLAN signed off
+   │
+   ▼  implement (TEAMWORK if N tasks; lead agent if 1)
+artifact in worktree
+   │
+   ▼  FEATURE-VALIDATION 1+2+3 passes
+local green
+   │
+   ▼  AUTOSHIP — this doc
+push + open PR
+   │
+   ▼  POSTPR review loop
+```
 
 ---
 
@@ -23,8 +30,18 @@ The user has pre-authorized this for all verified, complete work.
 <body if needed — what changed and why, not how>
 ```
 
-Types: `feat` / `fix` / `chore` / `docs` / `test`
+Types: `feat` / `fix` / `chore` / `docs` / `test`.
 No `Co-Authored-By` trailer (user preference, 2026-04-27).
+
+---
+
+## Branch Strategy
+
+For non-trivial changes: feature branch + PR.
+- Branch name: `<type>/<slug>`. Examples: `packaging/win-nsis-mvp`, `feat/live-run-log-events-table`.
+- Always branch from latest `main`.
+
+For doc-only / trivial changes: direct push to `main` is fine (no PR review value).
 
 ---
 
@@ -33,54 +50,74 @@ No `Co-Authored-By` trailer (user preference, 2026-04-27).
 ```bash
 TOKEN=$(cat .cairn-push-token/ljl-token.txt | tr -d '[:space:]')
 
-# Try openssl first
+# Default: openssl backend
 git -c http.sslBackend=openssl push \
-  "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" main
+  "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" <branch>
 
-# If that fails, try schannel
+# If TLS fails: switch backend
 git -c http.sslBackend=schannel push \
-  "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" main
+  "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" <branch>
 ```
 
-Always redact TOKEN in logs: `sed "s/${TOKEN}/<REDACTED>/g"`
+Always redact TOKEN in user-visible logs: `sed "s/${TOKEN}/<REDACTED>/g"`.
 
 ---
 
-## PR Creation (feature branch only)
+## Open PR (Feature Branch Only)
 
-PRs are only possible when `head != base`. If working on `main` directly, push is the delivery — no PR.
+`gh` is not installed on this machine — use GitHub REST API:
 
-For feature branch work:
 ```bash
+TOKEN=$(cat .cairn-push-token/ljl-token.txt | tr -d '[:space:]')
+
 curl -s -X POST \
   -H "Authorization: token ${TOKEN}" \
   -H "Content-Type: application/json" \
   "https://api.github.com/repos/Upp-Ljl/Cairn/pulls" \
-  --data-binary @- <<EOF
+  --data-binary @- <<EOF | sed "s/${TOKEN}/<REDACTED>/g"
 {
   "title": "<commit title>",
-  "body": "## Summary\n...\n## Test plan\n...",
+  "body": "## Summary\n...\n## Plan reference\ndocs/superpowers/plans/YYYY-MM-DD-<slug>.md\n## Test plan\n...",
   "head": "<feature-branch>",
   "base": "main"
 }
 EOF
 ```
 
+After PR is open, hand off to `POSTPR.md` reviewer Agent dispatch.
+
 ---
 
 ## Files to Never Stage
 
-- `0`, `{const` — accidental empty files from typos
-- `.cairn-push-token/*.txt` — PAT tokens, gitignored
+- `0`, `{const`, and any single-char-or-pattern accidental files
+- `.cairn-push-token/*.txt` — PAT tokens (gitignored)
 - `.env*` — credentials
+- `.cairn-worktrees/` — agent worktrees (gitignored)
+- `node_modules/`, `dist/` (per existing gitignore)
 
 ---
 
 ## TLS Failure Recovery
 
 If push fails with `unexpected eof while reading`:
-1. Switch backend (openssl ↔ schannel) and retry
-2. If both fail, sleep 5s and retry from step 1
-3. Typically resolves within 2 retries
+1. Switch backend (`openssl` ↔ `schannel`) and retry
+2. If both fail, sleep 5s, retry from step 1
+3. Resolves within 2 retries typically
 
-See `CLAUDE.md §push` for full TLS notes.
+See `CLAUDE.md` push section for full TLS notes.
+
+---
+
+## What Requires Explicit User Approval
+
+Per CLAUDE.md, autoship does NOT cover:
+
+- Merging a PR (terminal decision)
+- `git tag` (release)
+- `npm publish`
+- Force push
+- Editing `LICENSE` / `PRODUCT.md` / governance docs
+- Adding new npm deps
+
+For those: state the proposed action, wait for user confirmation, then execute.

@@ -1,7 +1,8 @@
 # Cairn — Road to Production
 
 > Last updated: 2026-05-11
-> Status: MVP Quick Slice delivered. Pushing to production-ready.
+> Status: Kernel + Product MVP + Operations Layer (Mode A/B) all shipped.
+> Active gap: packaging, release prep, live demo.
 
 ## North Star
 
@@ -11,47 +12,50 @@ Live testbed: **Agent Poker Arena** (`arean.renlab.ai`) — Cairn manages its de
 
 ---
 
-## Current State (as of 2026-05-11)
+## Verified Current State (audit as of 2026-05-11)
 
-| Layer | Status |
-|---|---|
-| Kernel (28 MCP tools, 8 state objects, 10 migrations) | ✅ Done |
-| Product MVP — desktop panel + tray + Live Run Log | ✅ Done |
-| Managed project loop (profile / iterate / prompt / evidence / review) | ✅ Done (21/21 dogfood PASS) |
-| Panel UI — Managed Loop card DOM wiring | ❌ Modules exist, not connected |
-| Packaging — Windows .exe / Mac .dmg | ❌ Not done |
-| npm publish prep | ❌ Not done |
-| Team onboarding (cairn install stable) | ❌ Needs hardening |
-| Full demo on Agent Poker Arena | ❌ Backbone done, UI missing |
+| Layer | Tests | Verified |
+|---|---|---|
+| Daemon (storage / repos / migrations) | 411 / 29 files | ✅ all green |
+| MCP-server (28 tools + integration) | 343 / 18 files (1 skip) | ✅ all green |
+| Panel UI Managed Loop card | smoke 60/60 | ✅ wired in panel.html:2005-2074 |
+| Mode B Continuous Iteration | smoke 42/42 + boundary 43/43 + actions 47/47 | ✅ ready |
+| Mode A Mentor | smoke 109/109 + dry-run on agent-game-platform PASS | ✅ ready |
+| Managed loop on agent-game-platform | dogfood 21/21 | ✅ live testbed works |
+
+The Phase 1 / 2 / 3 I originally enumerated were already done in earlier sprints. Real gaps follow.
 
 ---
 
-## Phase Plan
+## Active Phases
 
-### Phase 0 — Workflow docs (current)
-Write `docs/workflow/` methodology: grill protocol, plan format, auto-ship hooks, teamwork dispatch, review loop.
-**Done when:** all 5 workflow docs written and committed.
+### Phase 4 — Packaging + v0.1 release prep (current)
+- Add `electron-builder` config to `packages/desktop-shell/package.json`
+- Produce Windows NSIS `.exe` installer
+- Write Mac `.dmg` config (build needs Mac or CI)
+- Harden `cairn install` CLI for fresh-clone teammate setup
+- Remove `"private": true` from `packages/mcp-server/package.json` (npm publish prep) — requires user approval
+- Tag `v0.1.0` — requires user approval
 
-### Phase 1 — Panel UI wiring
-Wire the Managed Loop card in `panel.html`: Start / Generate Prompt / Attach Report / Collect Evidence / Review.
-No new MCP tools. No new migrations. Pure IPC + DOM.
-**Done when:** user can open panel, register agent-game-platform, start an iteration, and see the full loop without touching a script.
+### Phase 5 — v0.2 Live Run Log
+Gated on Phase 4 finishing. See `docs/superpowers/plans/2026-05-29-v0.2-live-run-log.md`.
 
-### Phase 2 — Team usability + packaging
-- `cairn install` hardened for team members (idempotent, clear error messages)
-- Windows `.exe` via electron-builder (already in desktop-shell)
-- Mac `.dmg` — cross-compile or CI build
-- npm publish checklist for `@cairn/mcp-server`
-**Done when:** a teammate can install and run Cairn in under 5 minutes with zero prior context.
+### Phase 6 — Agent Poker Arena full demo
+Run one complete real-Claude-driven loop on the live platform: Mentor recommends → user picks candidate → Mode B Scout/Worker/Review chain → fix lands in agent-game-platform → next round.
 
-### Phase 3 — Agent Poker Arena full demo
-Run a complete Cairn-managed loop on the live platform:
-register → iterate → CC does real work → report attached → evidence collected → review verdict → next round.
-**Done when:** one full round of real (non-fixture) development on agent-game-platform is managed and visible in the Cairn panel.
+---
 
-### Phase 4 — Polish + release
-Fix everything found in Phase 3. Write user-facing README, install guide, and changelog.
-Tag v0.1 release. Push packages.
+## Workflow
+
+All new work follows `docs/workflow/README.md`:
+- GRILL before plan
+- DUCKPLAN before implement (`HOWTO-PLAN-PR.md`)
+- TEAMWORK for parallel work (worktrees + N+1+2N pattern)
+- FEATURE-VALIDATION before push (1+2+3 cross-engine)
+- AUTOSHIP to land
+- POSTPR loop until reviewer silent
+- PR-PLAN for fix iterations
+- SELF-REPORT-STOP 12-field self-check per turn
 
 ---
 
@@ -59,9 +63,8 @@ Tag v0.1 release. Push packages.
 
 - **Repo:** https://github.com/anzy-renlab-ai/agent-game-platform (private)
 - **Local:** `D:/lll/managed-projects/agent-game-platform`
-- **Stack:** Next.js + Bun + Supabase + Sentry + MCP SDK
+- **Stack:** Next.js 16 + Bun + Supabase + Sentry + MCP SDK
 - **Live:** https://arean.renlab.ai (Vercel)
 - **Tests:** 242 passing (`bun test`)
-- **Last commit:** `de6875c feat(sound): drama-tag fanfares per tone`
 
-Cairn's job on this project: manage the development loop (not write code, not deploy, not push).
+Cairn's job on this project: manage the development loop (read project signals, recommend candidates, dispatch workers, collect evidence, review). Cairn does NOT write code in agent-game-platform.

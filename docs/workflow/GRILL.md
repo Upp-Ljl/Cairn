@@ -1,17 +1,14 @@
-# Grill Protocol
+# GRILL — Force Clarity Before Execution
 
-> Before any implementation starts, Claude must fully understand what is wanted.
-> This document defines the grilling protocol used in all Cairn development sessions.
+> Claude does not execute until grilling is complete.
 
 ## Rule
 
-**Claude does not execute until grilling is complete.**
-
-"Complete" means Claude can restate:
-1. What the output looks like
-2. Who uses it and how
-3. What "done" means (verifiable, not vague)
-4. What is explicitly out of scope
+"Complete" means Claude can restate without ambiguity:
+1. **What the output looks like** — file paths, schema, observable behavior
+2. **Who uses it and how** — runner, environment, invocation
+3. **What "done" means** — verifiable command + expected output (per `FEATURE-VALIDATION.md`)
+4. **What is explicitly out of scope** — prevents mid-execution drift
 
 If any of these four is unclear, keep asking.
 
@@ -19,40 +16,46 @@ If any of these four is unclear, keep asking.
 
 ## Question Format
 
-Questions are grouped by concern. Maximum 3 questions per round.
-Each question offers concrete options (A/B/C) — never open-ended unless necessary.
-
-Example concerns to grill:
-- **Scope**: which part of the system, what files/packages, what not to touch
-- **Output form**: UI, API, doc, config, script, package
-- **Users**: who runs this, with what tools, in what environment
-- **Done criteria**: what command proves it works, what assertion passes
+- Maximum 3 questions per round
+- Each question offers concrete options (A/B/C) — not open-ended unless necessary
+- After ≤ 3 rounds, Claude either has clarity OR states exactly what is still unknown and why it blocks execution
 
 ---
 
-## When to Stop Grilling
+## When To Stop Grilling
 
-Stop when the answer to all four questions above is unambiguous.
-A good signal: Claude can write a checklist of ≤5 acceptance criteria without guessing.
+Stop when Claude can write a DUCKPLAN (per `HOWTO-PLAN-PR.md`) without guessing in any of the four sections.
 
----
-
-## Escalation
-
-If after 3 rounds the idea is still unclear, Claude states exactly what is still unknown and why it blocks execution. Not "I need more info" — specific: "I don't know whether X means Y or Z, and the implementation is different in each case."
+Good signal: Claude can describe the verify command and expected output before writing any code.
 
 ---
 
-## Examples
+## What Grilling Prevents
 
-**Too vague to execute:**
-> "improve the panel"
+Before this protocol, Claude would:
+- Interpret an ambiguous instruction
+- Execute
+- Deliver the wrong thing
+- Cost: a full implementation that has to be redone
 
-**After grilling:**
-> "Wire the Managed Loop card in panel.html (Start / Generate Prompt / Attach Report / Collect Evidence / Review) using the existing .cjs modules. No new MCP tools. Done when: user can start an iteration and see verdict in the panel without running a script."
+Grilling is cheaper than redoing. Always grill before non-trivial implementation.
 
 ---
 
-## Why This Exists
+## What Grilling Does NOT Replace
 
-Before this protocol, Claude would interpret an ambiguous instruction, execute, and deliver the wrong thing. The cost was a full implementation that had to be redone. Grilling is cheaper than redoing.
+It does NOT replace:
+- `HOWTO-PLAN-PR.md` — the structured plan after grilling
+- `FEATURE-VALIDATION.md` — the verification gates
+- `POSTPR.md` — the reviewer loop after push
+
+Grilling is the front door; the rest of the workflow happens after the door is open.
+
+---
+
+## Anti-Grilling Patterns
+
+Avoid asking:
+- "Do you want me to proceed?" — if the user already said yes, don't re-ask (`SELF-REPORT-STOP.md` field 2: `permission_seeking`)
+- "Should I do A or B?" when A and B have the same outcome — pick one, mention it in the final report
+- "Is my plan correct?" — Plan is a document; ask the user to look at it, don't summarize it back
