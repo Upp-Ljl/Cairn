@@ -1653,6 +1653,215 @@
   }
   .modal-cancel a { color: #888; cursor: pointer; }
   .modal-cancel a:hover { color: #7af; }
+
+  /* Mentor card — Mode A advisory chat (§12 D9 controlled deviation:
+     chat input is a write-path IPC, gated on MUTATIONS_ENABLED).
+     Blue tint distinguishes from read-only cards. */
+  .mentor-card {
+    padding: 6px 12px 8px;
+    background: #121820;
+    border-bottom: 1px solid #2a2a2a;
+    color: #ccc;
+    font-size: 0.92em;
+    flex: 0 0 auto;
+  }
+  #mentor-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .mentor-label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.74rem;
+    color: #7af;
+    flex: 0 0 auto;
+  }
+  .mentor-history-select {
+    background: #1a1a1a;
+    color: #aaa;
+    border: 1px solid #2a2a2a;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.78em;
+    padding: 1px 4px;
+    flex: 1 1 auto;
+    max-width: 260px;
+    -webkit-app-region: no-drag;
+  }
+  .mentor-chat {
+    margin-top: 6px;
+    max-height: 340px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 6px;
+  }
+  .mentor-turn { display: flex; flex-direction: column; gap: 3px; }
+  .mentor-q-bubble {
+    align-self: flex-end;
+    max-width: 85%;
+    background: #1e1e22;
+    border: 1px solid #2a2a36;
+    border-radius: 3px;
+    padding: 4px 8px;
+    color: #aaa;
+    font-size: 0.88em;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+  .mentor-a-area { display: flex; flex-direction: column; gap: 4px; }
+  .mentor-item {
+    background: #141c28;
+    border: 1px solid #2a3a4a;
+    border-radius: 3px;
+    padding: 5px 8px;
+  }
+  .mentor-item.refusal { background: #1a1820; border-color: #332244; }
+  .mentor-item-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .mentor-kind-chip {
+    font-size: 0.68rem;
+    padding: 0 5px;
+    border-radius: 2px;
+    background: #1a2a3a;
+    color: #8ac;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: 0 0 auto;
+  }
+  .mentor-kind-chip.refusal { background: #241a34; color: #aa8; }
+  .mentor-confidence { font-size: 0.72em; color: #556; flex: 0 0 auto; }
+  .mentor-desc { color: #ddd; font-size: 0.88em; line-height: 1.4; word-break: break-word; }
+  .mentor-why-row {
+    margin-top: 3px;
+    font-size: 0.78em;
+    color: #888;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .mentor-why-impact { color: #aaa; flex: 1 1 auto; }
+  .mentor-why-tag {
+    display: inline-block;
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 0.88em;
+  }
+  .mentor-why-tag.L { background: #1a3a1a; color: #7e7; }
+  .mentor-why-tag.M { background: #3a2a10; color: #ec8; }
+  .mentor-why-tag.H { background: #3a1010; color: #f88; }
+  .mentor-stakeholders {
+    margin-top: 3px;
+    font-size: 0.78em;
+    color: #889;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .mentor-sh-chip {
+    display: inline-block;
+    padding: 0 4px;
+    border-radius: 2px;
+    background: #1f2a2f;
+    color: #7ac;
+  }
+  .mentor-next-action { margin-top: 3px; font-size: 0.82em; color: #6ac; }
+  .mentor-evidence-toggle {
+    margin-top: 3px;
+    font-size: 0.72em;
+    color: #556;
+    cursor: pointer;
+    user-select: none;
+  }
+  .mentor-evidence-toggle:hover { color: #7af; }
+  .mentor-evidence-refs {
+    margin-top: 3px;
+    font-size: 0.78em;
+    color: #667;
+    line-height: 1.5;
+    word-break: break-all;
+  }
+  .mentor-evidence-refs .eref { display: inline-block; margin-right: 8px; }
+  .mentor-pick-btn {
+    margin-top: 5px;
+    background: #1a3a2a;
+    border: 1px solid #2a5a3a;
+    color: #7ec;
+    font-size: 0.78em;
+    padding: 2px 10px;
+    border-radius: 2px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .mentor-pick-btn:hover { background: #1a4a3a; color: #aef; }
+  .mentor-error-card {
+    background: #2a1010;
+    border: 1px solid #4a1818;
+    border-radius: 3px;
+    padding: 5px 8px;
+    color: #f88;
+    font-size: 0.85em;
+  }
+  .mentor-loading { color: #668; font-size: 0.85em; padding: 4px 0; }
+  .mentor-input-area {
+    margin-top: 6px;
+    border-top: 1px dashed #2a2a2a;
+    padding-top: 6px;
+  }
+  .mentor-provider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78em;
+    color: #889;
+    margin-bottom: 4px;
+  }
+  .mentor-prov-label {
+    color: #556;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.9em;
+  }
+  .mentor-provider-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: #181818;
+    border: 1px solid #2a2a2a;
+    cursor: pointer;
+    color: #aaa;
+  }
+  .mentor-provider-opt input { margin: 0; }
+  .mentor-textarea {
+    width: 100%;
+    background: #0c0c0f;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    border-radius: 2px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    padding: 4px 6px;
+    box-sizing: border-box;
+    resize: vertical;
+    line-height: 1.45;
+  }
+  .mentor-textarea:focus { outline: none; border-color: #3a5a7a; }
+  .mentor-ask-row { display: flex; justify-content: flex-end; margin-top: 4px; }
+  .mentor-ask-btn {
+    background: #1a3a4a;
+    border: 1px solid #3a6a8a;
+    color: #7cf;
+    font-family: inherit;
+    font-size: 0.85em;
+    padding: 3px 16px;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .mentor-ask-btn:hover:not([disabled]) { background: #1a4a5a; color: #aef; }
+  .mentor-ask-btn[disabled] { color: #446; border-color: #223; background: #141414; cursor: default; }
+  .mentor-empty { color: #445; font-size: 0.82em; font-style: italic; padding: 6px 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -1863,6 +2072,42 @@
         <div id="managed-seed-area" class="managed-area" hidden>
           <div class="managed-area-head">Next prompt seed</div>
           <textarea id="managed-seed-text" class="managed-textarea" readonly rows="3"></textarea>
+        </div>
+      </div>
+    </div>
+    <!--
+      Mentor — Mode A advisory chat (§12 D9 controlled deviation).
+      Only shown when CAIRN_DESKTOP_ENABLE_MUTATIONS=1 (preload exposes
+      window.cairn.askMentor). Multi-turn, on-ask only, per B2 §1/§6.3.
+      Read-only history IPC (listMentorHistory) always exposed.
+    -->
+    <div id="mentor-pane" class="mentor-card" hidden>
+      <div id="mentor-line1">
+        <span class="mentor-label">MENTOR</span>
+        <select id="mentor-history-select" class="mentor-history-select">
+          <option value="">history…</option>
+        </select>
+      </div>
+      <div id="mentor-chat" class="mentor-chat">
+        <div class="mentor-empty">Ask Mentor what to prioritize next…</div>
+      </div>
+      <div id="mentor-loading" class="mentor-loading" hidden>asking Mentor… ◌</div>
+      <div class="mentor-input-area">
+        <div class="mentor-provider-row">
+          <span class="mentor-prov-label">provider</span>
+          <label class="mentor-provider-opt">
+            <input type="radio" name="mentor-provider" value="claude-code" checked>
+            claude-code
+          </label>
+          <label class="mentor-provider-opt">
+            <input type="radio" name="mentor-provider" value="fixture-mentor">
+            fixture
+          </label>
+        </div>
+        <textarea id="mentor-question" class="mentor-textarea" rows="3"
+          placeholder="What should I work on next? (Enter = submit, Shift+Enter = newline)"></textarea>
+        <div class="mentor-ask-row">
+          <button id="mentor-ask-btn" type="button" class="mentor-ask-btn">Ask &#8594;</button>
         </div>
       </div>
     </div>

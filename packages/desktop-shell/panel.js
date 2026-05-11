@@ -1298,6 +1298,305 @@ function startManagedRunPoll(runId) {
 }
 
 // ---------------------------------------------------------------------------
+// Mode A Mentor — advisory chat sub-section (B2 spec §1/§3/§7)
+// ---------------------------------------------------------------------------
+//
+// §12 D9 controlled deviation: Mentor renders a chat input (write-path
+// askMentor IPC) inside the panel. Gated on CAIRN_DESKTOP_ENABLE_MUTATIONS=1:
+// preload only exposes window.cairn.askMentor when the flag is set.
+// Read-only IPC (listMentorHistory / getMentorEntry) always available.
+//
+// Multi-turn state is session-scoped; clears on project switch.
+// History from prior sessions loads via listMentorHistory.
+
+const MENTOR_AVAIL = typeof window.cairn.askMentor === 'function';
+
+let mentorConversation = [];       // [{q, items, error, ts}] current session turns
+let mentorBusy = false;
+let mentorCurrentProjectId = null;
+const mentorItemMap = new Map();   // item.id → MentorWorkItem, for pick handler
+
+function renderMentorPane(projectId) {
+  const pane = document.getElementById('mentor-pane');
+  if (!pane) return;
+  if (!MENTOR_AVAIL || !projectId) {
+    pane.hidden = true;
+    return;
+  }
+  pane.hidden = false;
+  if (projectId !== mentorCurrentProjectId) {
+    mentorCurrentProjectId = projectId;
+    mentorConversation = [];
+    mentorItemMap.clear();
+    renderMentorChat();
+    loadMentorHistory(projectId);
+  }
+}
+
+function renderMentorChat() {
+  const chatEl = document.getElementById('mentor-chat');
+  if (!chatEl) return;
+  if (mentorConversation.length === 0) {
+    chatEl.innerHTML =
+      '<div class="mentor-empty">Ask Mentor what to prioritize — it reads your project state and recommends ranked work items.</div>';
+    return;
+  }
+  // column-reverse: newest turn displayed at top; we render reversed so DOM order is newest-first.
+  chatEl.innerHTML = mentorConversation.slice().reverse().map(turn => {
+    const qHtml = `<div class="mentor-q-bubble">${escapeHtml(turn.q)}</div>`;
+    let aHtml = '';
+    if (turn.error) {
+      aHtml = `<div class="mentor-error-card">⚠ ${escapeHtml(turn.error)}</div>`;
+    } else if (Array.isArray(turn.items)) {
+      aHtml = turn.items.length === 0
+        ? '<div class="mentor-empty">No recommendations returned for this query.</div>'
+        : turn.items.map(renderMentorItem).join('');
+    }
+    return `<div class="mentor-turn">${qHtml}<div class="mentor-a-area">${aHtml}</div></div>`;
+  }).join('');
+}
+
+function renderMentorItem(item) {
+  if (!item) return '';
+  const isRefusal = item.is_refusal === true;
+  const itemId = (item.id || `m_${Math.random().toString(16).slice(2, 14)}`);
+  // Sanitise for DOM id use: keep only [a-z0-9_-].
+  const evDomId = `mentor-ev-${itemId.replace(/[^a-z0-9_-]/gi, '_')}`;
+
+  // Store in map so the click-delegation pick handler can retrieve the full item.
+  mentorItemMap.set(itemId, item);
+
+  const kindLabel = isRefusal ? 'REFUSAL' : (item.kind || 'ITEM');
+  const kindCls   = isRefusal ? 'refusal' : '';
+
+  const confHtml = (!isRefusal && item.confidence != null)
+    ? `<span class="mentor-confidence">${Math.round(item.confidence * 100)}%</span>`
+    : '';
+
+  // why — impact prose + cost/risk/urgency L/M/H tags
+  const whyHtml = (!isRefusal && item.why) ? (() => {
+    const cost    = item.why.cost    || '';
+    const risk    = item.why.risk    || '';
+    const urgency = item.why.urgency || '';
+    return (
+      `<div class="mentor-why-row">` +
+        `<span class="mentor-why-impact">${escapeHtml(item.why.impact || '')}</span>` +
+        `<span class="mentor-why-tag ${escapeHtml(cost)}" title="cost">cost:${escapeHtml(cost)}</span>` +
+        `<span class="mentor-why-tag ${escapeHtml(risk)}" title="risk">risk:${escapeHtml(risk)}</span>` +
+        `<span class="mentor-why-tag ${escapeHtml(urgency)}" title="urgency">urg:${escapeHtml(urgency)}</span>` +
+      `</div>`
+    );
+  })() : '';
+
+  // stakeholders — owner/reviewer/notify[] as chips
+  const shHtml = (!isRefusal && item.stakeholders) ? (() => {
+    const s = item.stakeholders;
+    const chips = [];
+    if (s.owner)    chips.push(`<span class="mentor-sh-chip">owner:${escapeHtml(s.owner)}</span>`);
+    if (s.reviewer) chips.push(`<span class="mentor-sh-chip">reviewer:${escapeHtml(s.reviewer)}</span>`);
+    if (Array.isArray(s.notify)) {
+      s.notify.forEach(n => chips.push(`<span class="mentor-sh-chip">${escapeHtml(n)}</span>`));
+    }
+    return chips.length
+      ? `<div class="mentor-stakeholders">${chips.join('')}</div>`
+      : '';
+  })() : '';
+
+  // next_action
+  const nextActionHtml = (!isRefusal && item.next_action)
+    ? `<div class="mentor-next-action">→ ${escapeHtml(item.next_action)}</div>`
+    : '';
+
+  // evidence_refs — collapsed by default; event delegation toggles visibility
+  const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
+  const evidenceHtml = (!isRefusal && refs.length) ? (
+    `<div class="mentor-evidence-toggle" data-ev-target="${escapeHtml(evDomId)}">` +
+      `▸ evidence (${refs.length})` +
+    `</div>` +
+    `<div class="mentor-evidence-refs" id="${escapeHtml(evDomId)}" hidden>` +
+      refs.map(r =>
+        `<span class="eref">[${escapeHtml(r.kind)}]&nbsp;${escapeHtml(r.ref)}</span>`
+      ).join('') +
+    `</div>`
+  ) : '';
+
+  // Pick button — only when next_action = "pick to start Continuous Iteration"
+  // AND evidence_refs has at least one entry with kind='candidate'.
+  const candidateRef = !isRefusal && refs.find(r => r.kind === 'candidate');
+  const pickHtml = (!isRefusal
+    && item.next_action === 'pick to start Continuous Iteration'
+    && candidateRef)
+    ? `<button class="mentor-pick-btn" data-mentor-item="${escapeHtml(itemId)}">Pick this →</button>`
+    : '';
+
+  return (
+    `<div class="mentor-item ${kindCls}">` +
+      `<div class="mentor-item-head">` +
+        `<span class="mentor-kind-chip ${kindCls}">${escapeHtml(kindLabel)}</span>` +
+        confHtml +
+      `</div>` +
+      `<div class="mentor-desc">${escapeHtml(item.description || '')}</div>` +
+      whyHtml +
+      shHtml +
+      nextActionHtml +
+      evidenceHtml +
+      pickHtml +
+    `</div>`
+  );
+}
+
+async function submitMentorQuestion(projectId, question, provider) {
+  if (!MENTOR_AVAIL || !projectId || !question.trim() || mentorBusy) return;
+  mentorBusy = true;
+  const askBtn = document.getElementById('mentor-ask-btn');
+  const loadEl = document.getElementById('mentor-loading');
+  if (askBtn) askBtn.setAttribute('disabled', 'true');
+  if (loadEl) loadEl.hidden = false;
+
+  const turn = { q: question.trim(), items: null, error: null, ts: Date.now() };
+  mentorConversation.push(turn);
+  renderMentorChat();
+
+  try {
+    const res = await window.cairn.askMentor(projectId, {
+      question: question.trim(),
+      provider: provider || 'claude-code',
+    });
+    if (!res || !res.ok) {
+      turn.error = (res && res.error) || 'unknown error from mentor handler';
+    } else {
+      turn.items = Array.isArray(res.items) ? res.items : [];
+      turn.items.forEach(item => { if (item && item.id) mentorItemMap.set(item.id, item); });
+    }
+  } catch (err) {
+    turn.error = `IPC error: ${err && err.message ? err.message : String(err)}`;
+  } finally {
+    mentorBusy = false;
+    if (askBtn) askBtn.removeAttribute('disabled');
+    if (loadEl) loadEl.hidden = true;
+    renderMentorChat();
+  }
+}
+
+async function handleMentorPickAction(itemId) {
+  if (!selectedProject) return;
+  const item = mentorItemMap.get(itemId);
+  if (!item) return;
+  const candidateRef = (Array.isArray(item.evidence_refs) ? item.evidence_refs : [])
+    .find(r => r.kind === 'candidate');
+  if (!candidateRef) return;
+  try {
+    const res = await window.cairn.pickCandidateAndLaunchWorker(selectedProject.id, {
+      candidate_id: candidateRef.ref,
+      source: 'mentor',
+    });
+    if (!res || !res.ok) {
+      const footer = document.getElementById('footer');
+      footer.textContent = `mentor pick failed: ${(res && res.error) || 'unknown'}`;
+      footer.classList.add('bad');
+    }
+  } catch (err) {
+    const footer = document.getElementById('footer');
+    footer.textContent = `mentor pick IPC error: ${err && err.message ? err.message : String(err)}`;
+    footer.classList.add('bad');
+  }
+}
+
+async function loadMentorHistory(projectId) {
+  if (!projectId) return;
+  const select = document.getElementById('mentor-history-select');
+  if (!select) return;
+  try {
+    const history = await window.cairn.listMentorHistory(projectId, 20);
+    select.innerHTML = '<option value="">history…</option>';
+    if (Array.isArray(history) && history.length) {
+      history.forEach(entry => {
+        const opt = document.createElement('option');
+        opt.value = entry.turn_id || '';
+        const ts = entry.ts ? new Date(entry.ts).toLocaleTimeString() : '?';
+        const q  = (entry.user_question || '').slice(0, 42);
+        opt.textContent = `${ts} — ${q}${q.length >= 42 ? '…' : ''}`;
+        select.appendChild(opt);
+      });
+    }
+  } catch (_e) { /* non-critical; fail silently */ }
+}
+
+function setupMentorPane() {
+  if (!MENTOR_AVAIL) return;
+
+  const askBtn = document.getElementById('mentor-ask-btn');
+  const qInput = document.getElementById('mentor-question');
+  if (!askBtn || !qInput) return;
+
+  function submitFromInput() {
+    if (!selectedProject || mentorBusy) return;
+    const q = qInput.value.trim();
+    if (!q) return;
+    const providerEl = document.querySelector('input[name="mentor-provider"]:checked');
+    const provider   = providerEl ? providerEl.value : 'claude-code';
+    qInput.value = '';
+    submitMentorQuestion(selectedProject.id, q, provider);
+  }
+
+  askBtn.addEventListener('click', submitFromInput);
+
+  qInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitFromInput();
+    }
+  });
+
+  // History dropdown — load a past turn into the chat for reference
+  const historySelect = document.getElementById('mentor-history-select');
+  if (historySelect) {
+    historySelect.addEventListener('change', async () => {
+      const turnId = historySelect.value;
+      if (!turnId || !selectedProject) return;
+      try {
+        const entry = await window.cairn.getMentorEntry(selectedProject.id, turnId);
+        if (entry && entry.user_question) {
+          const histTurn = {
+            q: entry.user_question,
+            items: Array.isArray(entry.ranked_items) ? entry.ranked_items : [],
+            error: null,
+            ts: entry.ts || Date.now(),
+            fromHistory: true,
+          };
+          mentorConversation.unshift(histTurn);
+          renderMentorChat();
+        }
+      } catch (_e) { /* non-critical */ }
+      historySelect.value = '';
+    });
+  }
+
+  // Event delegation for chat interactions (evidence toggle + pick button)
+  const chatEl = document.getElementById('mentor-chat');
+  if (chatEl) {
+    chatEl.addEventListener('click', e => {
+      const toggle = e.target.closest('.mentor-evidence-toggle');
+      if (toggle) {
+        const targetId = toggle.dataset.evTarget;
+        if (!targetId) return;
+        const refsEl = document.getElementById(targetId);
+        if (refsEl) {
+          refsEl.hidden = !refsEl.hidden;
+          const arrow = refsEl.hidden ? '▸' : '▾';
+          toggle.textContent = toggle.textContent.replace(/[▸▾]/, arrow);
+        }
+        return;
+      }
+      const pickBtn = e.target.closest('.mentor-pick-btn');
+      if (pickBtn && pickBtn.dataset.mentorItem) {
+        handleMentorPickAction(pickBtn.dataset.mentorItem);
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Project Pulse renderer — read-only signal surface (Phase 3 / Goal pre-work)
 // ---------------------------------------------------------------------------
 //
@@ -3364,6 +3663,7 @@ async function poll() {
       renderPromptPack(pack);
       renderRecoveryCard(recovery);
       renderManagedCard(managedRecord, (managedIters && managedIters[0]) || null);
+      renderMentorPane(selectedProject && selectedProject.id);
       renderCoordinationStrip(coordSig);
       renderPulse(pulse);
       renderSummary(summary);
@@ -3412,6 +3712,7 @@ setupPrePrGateCard();
 setupPromptPack();
 setupRecoveryCard();
 setupManagedCard();
+setupMentorPane();
 setupReportsTab();
 setupCoordinationTab();
 setView('projects', null);
