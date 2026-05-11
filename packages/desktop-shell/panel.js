@@ -1459,13 +1459,13 @@ async function submitMentorQuestion(projectId, question, provider) {
 
   try {
     const res = await window.cairn.askMentor(projectId, {
-      question: question.trim(),
+      user_question: question.trim(),
       provider: provider || 'claude-code',
     });
     if (!res || !res.ok) {
       turn.error = (res && res.error) || 'unknown error from mentor handler';
     } else {
-      turn.items = Array.isArray(res.items) ? res.items : [];
+      turn.items = Array.isArray(res.work_items) ? res.work_items : [];
       turn.items.forEach(item => { if (item && item.id) mentorItemMap.set(item.id, item); });
     }
   } catch (err) {

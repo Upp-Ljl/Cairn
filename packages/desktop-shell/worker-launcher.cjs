@@ -109,7 +109,7 @@ const PROVIDERS = {
     // the path from process.argv on `node -e SCRIPT -- PATH`).
     argvFor: (_promptPath) => ['-e', FIXTURE_ECHO_SCRIPT],
     acceptsStdin: false,
-    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath, ELECTRON_RUN_AS_NODE: '1' }),
   },
   'fixture-scout': {
     id: 'fixture-scout',
@@ -118,7 +118,7 @@ const PROVIDERS = {
     description: 'Local fixture that emits a Scout Candidates block and exits (no LLM)',
     argvFor: (_promptPath) => ['-e', FIXTURE_SCOUT_SCRIPT],
     acceptsStdin: false,
-    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath, ELECTRON_RUN_AS_NODE: '1' }),
   },
   'fixture-worker': {
     id: 'fixture-worker',
@@ -127,7 +127,7 @@ const PROVIDERS = {
     description: 'Local fixture that touches a marker file in cwd, emits a Worker Report (no LLM)',
     argvFor: (_promptPath) => ['-e', FIXTURE_WORKER_SCRIPT],
     acceptsStdin: false,
-    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath, ELECTRON_RUN_AS_NODE: '1' }),
   },
   'fixture-review': {
     id: 'fixture-review',
@@ -136,7 +136,7 @@ const PROVIDERS = {
     description: 'Local fixture that emits a Review Verdict (verdict=pass) and exits (no LLM, no file writes)',
     argvFor: (_promptPath) => ['-e', FIXTURE_REVIEW_SCRIPT],
     acceptsStdin: false,
-    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath, ELECTRON_RUN_AS_NODE: '1' }),
   },
   'fixture-worker-rogue': {
     id: 'fixture-worker-rogue',
@@ -145,7 +145,7 @@ const PROVIDERS = {
     description: 'Local fixture that DELIBERATELY writes one in-scope and one out-of-scope file; used by Day 6 boundary verify to demonstrate ⚠ detection',
     argvFor: (_promptPath) => ['-e', FIXTURE_WORKER_ROGUE_SCRIPT],
     acceptsStdin: false,
-    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath, ELECTRON_RUN_AS_NODE: '1' }),
   },
   'fixture-mentor': {
     id: 'fixture-mentor',
@@ -154,7 +154,7 @@ const PROVIDERS = {
     description: 'Local fixture that emits a Mentor Work Items block — 5 items spanning all 5 kinds; used by A1 smoke to demonstrate the chat handler pipeline',
     argvFor: (_promptPath) => ['-e', FIXTURE_MENTOR_SCRIPT],
     acceptsStdin: false,
-    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath }),
+    fixtureEnv: (promptPath) => ({ CAIRN_FIXTURE_PROMPT: promptPath, ELECTRON_RUN_AS_NODE: '1' }),
   },
 };
 
@@ -339,7 +339,7 @@ const items = [
   },
   {
     id: 'm_eeee3333ffff',
-    description: 'Missing test: src/lib/engine/equity.ts has no sibling test file while peer modules do.',
+    description: 'Missing test: a hot-path engine module has no sibling test file while its peers do.',
     why: { impact: 'Coverage gap on a hot-path module.', cost: 'M', risk: 'L', urgency: 'M' },
     stakeholders: { owner: 'agent', reviewer: 'human', notify: ['worker'] },
     next_action: 'pick to start Continuous Iteration',
@@ -348,7 +348,7 @@ const items = [
   },
   {
     id: 'm_aaaa4444bbbb',
-    description: 'Doc: .env.local.example missing UPSTASH_REDIS_REST_URL and CRON_SECRET references.',
+    description: 'Doc: the env example file is missing several required environment variable references.',
     why: { impact: 'New contributors hit silent misconfig on first boot.', cost: 'L', risk: 'L', urgency: 'M' },
     stakeholders: { owner: 'human', reviewer: 'either', notify: [] },
     next_action: 'propose candidate then pick',
@@ -357,7 +357,7 @@ const items = [
   },
   {
     id: 'm_cccc5555dddd',
-    description: 'Other: add a CHANGELOG.md entry template so future releases get one for free.',
+    description: 'Other: add a changelog template so future releases auto-generate an entry.',
     why: { impact: 'Small process polish.', cost: 'L', risk: 'L', urgency: 'L' },
     stakeholders: { owner: 'human', reviewer: 'either', notify: [] },
     next_action: 'defer / mark not-now',
