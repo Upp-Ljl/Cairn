@@ -12,6 +12,8 @@
 
 > **Cairn is a local project control surface for agentic software work.** A desktop side panel + tray that shows what your AI coding agents are doing on this machine — running tasks, blocked questions, failed outcomes, conflicts between agents, recoverable checkpoints — so you stay in control of long-horizon AI coding without becoming the bottleneck.
 
+> **The pipeline is unattended by design.** A grilled idea flows from `cairn.task.create` to `DONE` (or terminal `FAILED`) without depending on a human in the middle. The states that **look** like HITL gates (`BLOCKED`, `WAITING_REVIEW`, dispatch `PENDING`, conflict `PENDING_REVIEW`) are **escalation paths, not blocking gates** — each closes via a deterministic MCP tool call that any caller can make. The desktop side panel is **read-only observability** over a fire-and-forget pipeline, not a step the pipeline waits on. See [Unattended pipeline](#unattended-pipeline--idea--merged-code-without-hitl-gates) below and [`AUTOMATION.md`](AUTOMATION.md) for the full walkthrough.
+
 You write code in **Cursor / Codex / Claude Code / Kiro**. Cairn does **not** replace those — it's the surface next to them that organizes the agent activity they produce. Each agent assumes it's the only one running: they share no file locks, no state, no message bus, no cross-session memory. Cairn fills that gap with a coordination kernel underneath, and surfaces it to you through a side panel that reads like Activity Monitor or `journalctl --follow`, not like Jira / Linear / Cursor.
 
 - **Cairn does not write code.** It does not decompose tasks. It does not orchestrate a lead-subagent. It is not a Cursor clone, not a Jira/Linear clone, not a "plain MCP service".
@@ -90,6 +92,44 @@ When an agent gets stuck on a question only the user can answer, it calls `cairn
 ### Outcomes DSL + review loop (W5 Phase 3) / verifiable completion
 
 Before declaring a task done, an agent calls `cairn.task.submit_for_review(task_id, criteria)` and the task transitions to WAITING_REVIEW. The criteria is a JSON array of deterministic primitives (`tests_pass` / `command_exits_0` / `file_exists` / `regex_matches` / `scratchpad_key_exists` / `no_open_conflicts` / `checkpoint_created_after`) — AND-aggregated, no LLM-grader in v1. Calling `cairn.outcomes.evaluate(outcome_id)` runs the criteria deterministically and routes PASS → DONE / FAIL → back to RUNNING (the agent fixes the issue and re-submits — criteria is frozen across the retry). For paths the agent gives up on, `cairn.outcomes.terminal_fail(reason)` routes to FAILED.
+
+---
+
+## Unattended pipeline — idea → merged code without HITL gates
+
+Cairn is designed as a **fire-and-forget pipeline**. A grilled, well-specified idea flows from `cairn.task.create` to `DONE` without depending on a human in the middle. The three states that **look** like human-in-the-loop gates (`BLOCKED`, `WAITING_REVIEW`, dispatch `PENDING`) are **escalation paths, not blocking gates** — each has a deterministic auto-resolution path so the pipeline keeps moving even when no human is watching. The desktop side panel is **read-only observability**, not a step the pipeline waits on.
+
+### Where it looks like the pipeline could get stuck — and what closes it
+
+| Apparent HITL state | Why it isn't a human gate | Tool that closes it |
+|---|---|---|
+| `BLOCKED` task | Any caller (another agent, scheduled retry, fallback policy) can call `cairn.task.answer`. The `resume_packet` carries full context so the next agent picks up cold. | `cairn.task.answer` |
+| `WAITING_REVIEW` outcome | `cairn.outcomes.evaluate` runs DSL primitives **deterministically, no LLM judge**. PASS → DONE, FAIL → RUNNING with **frozen criteria** for retry. | `cairn.outcomes.evaluate` |
+| Dispatch `PENDING` | 5 fallback rules R1/R2/R3/R4/R6 pre-compute target + prompt. `confirm` is a tool call — agents can auto-confirm non-irreversible intents. R1 (destructive) routes through `rewind.preview`, a deterministic dry-run, not a human gate. | `cairn.dispatch.confirm` |
+| Conflict `PENDING_REVIEW` | Recorded, **not blocking**. Pipeline keeps moving while a resolver thread reads `cairn.conflict.list` and calls `cairn.conflict.resolve`. | `cairn.conflict.resolve` |
+
+### Self-healing primitives that keep the pipeline running
+
+- **Durable Task Capsules** survive process death — context lives in `tasks` + `blockers` + `scratchpad`, not in any agent's context window
+- **Migration registry with checksum guard** — 10 idempotent migrations apply on every daemon start
+- **Rule-first dispatch with LLM degradation** — 5 fallback rules pre-empt LLM for keyword cases; LLM call has 3× exponential backoff, then graceful degradation to rule-derived prompt
+- **Deterministic outcome evaluator** — 7 bounded primitives, sync AND-aggregation, no network in v1
+- **Frozen criteria across retries** — `outcome_id` stays stable so the agent retries against the same bar (no goalpost shifting)
+- **Idempotent `cairn install`** — re-running has no side effects on already-correct state
+- **Mandatory `rewind.preview` before destructive rewinds** (R1) with `paths` parameter to bound blast radius
+- **Pre-commit hook records, does not block** — conflicts go into the table, commits proceed, resolver acts async
+
+### Things that genuinely don't auto-recover (and aren't HITL either)
+
+- `cairn.outcomes.terminal_fail(reason)` — agent's own give-up signal
+- `cairn.task.cancel` — caller-initiated
+- Misspecified DSL criteria — grilling-stage problem, not a runtime problem
+- Broken underlying tooling (test runner crashed, disk full) — primitive returns deterministic FAIL with reason
+- Migration checksum mismatch — fail-loud refusal to start, not silent corruption
+
+There is no "indefinitely waiting on a human" state. The pipeline reaches `DONE`, or it reaches `FAILED` / `CANCELLED` with a recorded reason.
+
+Full walkthrough + code references: [`docs/unattended-pipeline.md`](docs/unattended-pipeline.md).
 
 ---
 
