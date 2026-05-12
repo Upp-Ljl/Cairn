@@ -257,7 +257,7 @@ The desktop pet (`packages/desktop-shell/`, Electron) shows ambient coordination
 
 ### Prerequisites
 
-- Node.js >= 24
+- Node.js >= 20 (Node 24 recommended; current dev environment runs on 24.x)
 - Git
 - Claude Code with MCP support (`.mcp.json` configuration)
 
@@ -289,6 +289,27 @@ node <absolute-path-to-cairn>/packages/mcp-server/dist/cli/install.js
 This writes `.mcp.json` (cairn-wedge entry), installs a git pre-commit hook (marker `# cairn-pre-commit-v1`; sidecars to `.cairn/` if a non-cairn hook already exists), and generates `start-cairn-pet.bat` / `.sh` launchers. All three steps are idempotent and safe to re-run.
 
 Once npm-published, the install command will be `npx cairn install` from your target repo. Until then, use the absolute path above.
+
+#### CLI flags
+
+```bash
+node <cairn-path>/packages/mcp-server/dist/cli/install.js --help     # usage; no mutation
+node <cairn-path>/packages/mcp-server/dist/cli/install.js --version  # prints "cairn <version>"
+node <cairn-path>/packages/mcp-server/dist/cli/install.js --dry-run  # preview file changes; writes nothing
+```
+
+The CLI is mutation-safe: `--help`, `--version`, and `--dry-run` short-circuit before any file is written. Unknown flags exit 2 with a usage hint instead of silently mutating.
+
+#### Verify the install worked
+
+```bash
+# from inside your target repo
+ls -la .mcp.json .git/hooks/pre-commit start-cairn-pet.*  # all four should exist
+cat .mcp.json | grep cairn-wedge                           # entry should be present
+head -2 .git/hooks/pre-commit                              # should show "# cairn-pre-commit-v1" marker
+```
+
+Then restart Claude Code so it picks up the new `.mcp.json`. The first `cairn-wedge` MCP tool call confirms end-to-end wiring.
 
 ### Wire up Claude Code manually (alternative)
 
