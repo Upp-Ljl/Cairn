@@ -274,6 +274,62 @@ function printReport(result: InstallResult, targetDir: string) {
   process.stdout.write(lines.join('\n'));
 }
 
+// ---------------------------------------------------------------------------
+// Arg parsing — flags must be handled BEFORE any mutation
+// ---------------------------------------------------------------------------
+
+export interface ParsedArgs {
+  showHelp: boolean;
+  showVersion: boolean;
+  dryRun: boolean;
+  unknown: string[];
+}
+
+export function parseArgs(argv: string[]): ParsedArgs {
+  const out: ParsedArgs = { showHelp: false, showVersion: false, dryRun: false, unknown: [] };
+  for (const a of argv) {
+    if (a === '--help' || a === '-h')        out.showHelp = true;
+    else if (a === '--version' || a === '-V') out.showVersion = true;
+    else if (a === '--dry-run')               out.dryRun = true;
+    else                                       out.unknown.push(a);
+  }
+  return out;
+}
+
+const HELP_TEXT = `cairn — host-level multi-agent coordination kernel installer
+
+Usage:
+  cairn install [flags]
+  cairn          [flags]    (alias)
+
+Installs into the current git repo:
+  - .mcp.json with the cairn-wedge MCP server entry (merged if exists)
+  - .git/hooks/pre-commit (or .pre-commit.cairn sidecar if a hook exists)
+  - start-cairn-pet.bat and start-cairn-pet.sh launchers
+
+Flags:
+  -h, --help      Show this message and exit
+  -V, --version   Print version and exit
+      --dry-run   Show what would change without writing any file
+
+The installer is idempotent — running it twice produces the same state.
+Run from inside the git repository you want Cairn to manage.
+
+See https://github.com/Upp-Ljl/Cairn for full docs.
+`;
+
+export function readSelfVersion(): string {
+  try {
+    const selfDir = path.dirname(fileURLToPath(import.meta.url));
+    // dist/cli → dist → mcp-server root
+    const pkgPath = path.resolve(selfDir, '..', '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 // Run CLI only when executed directly
 const isMain = process.argv[1] != null &&
   (fileURLToPath(import.meta.url).endsWith(process.argv[1]) ||
@@ -281,6 +337,24 @@ const isMain = process.argv[1] != null &&
    process.argv[1].endsWith('cairn'));
 
 if (isMain || process.env['CAIRN_INSTALL_RUN'] === '1') {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.showHelp) {
+    process.stdout.write(HELP_TEXT);
+    process.exit(0);
+  }
+
+  if (args.showVersion) {
+    process.stdout.write(`cairn ${readSelfVersion()}\n`);
+    process.exit(0);
+  }
+
+  if (args.unknown.length > 0) {
+    process.stderr.write(`cairn: unknown argument(s): ${args.unknown.join(' ')}\n`);
+    process.stderr.write(`Run "cairn --help" for usage.\n`);
+    process.exit(2);
+  }
+
   const nodeError = checkNodeVersion();
   if (nodeError) {
     process.stderr.write(`cairn: ${nodeError}\n`);
@@ -289,6 +363,22 @@ if (isMain || process.env['CAIRN_INSTALL_RUN'] === '1') {
 
   const targetDir = process.cwd();
   const { mcpEntry, precommitScript, shellDir } = resolveSelf();
+
+  if (args.dryRun) {
+    process.stdout.write('cairn install --dry-run\n');
+    process.stdout.write('-'.repeat(40) + '\n\n');
+    process.stdout.write(`Target dir:       ${targetDir}\n`);
+    process.stdout.write(`mcp-server entry: ${mcpEntry}\n`);
+    process.stdout.write(`pre-commit script: ${precommitScript}\n`);
+    process.stdout.write(`pet launcher target: ${shellDir}\n\n`);
+    process.stdout.write('Would write (or merge):\n');
+    process.stdout.write(`  - ${path.join(targetDir, '.mcp.json')}\n`);
+    process.stdout.write(`  - ${path.join(targetDir, '.git', 'hooks', 'pre-commit')}\n`);
+    process.stdout.write(`  - ${path.join(targetDir, 'start-cairn-pet.bat')}\n`);
+    process.stdout.write(`  - ${path.join(targetDir, 'start-cairn-pet.sh')}\n\n`);
+    process.stdout.write('No files were written. Run without --dry-run to apply.\n');
+    process.exit(0);
+  }
 
   let result: InstallResult;
   try {
