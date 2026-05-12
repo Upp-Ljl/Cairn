@@ -153,17 +153,24 @@ function queryAgents(db, tables, hints, now) {
     WHERE agent_id IN ${placeholders}
     ORDER BY last_heartbeat DESC
   `).all(...hints);
-  return rows.map(r => {
-    const isStale = (r.last_heartbeat + r.heartbeat_ttl) < now;
-    const effective = isStale ? 'DEAD' : r.status;
-    return {
-      agent_id: r.agent_id,
-      agent_type: r.agent_type,
-      status: effective,
-      since: r.registered_at,
-      last_heartbeat: r.last_heartbeat,
-    };
-  });
+  // Cockpit Module 1 ⚡ count = LIVE only. Stale rows (effective DEAD)
+  // are accumulated DB junk from past sessions — surfacing them all in
+  // the panel made the count look "broken" (42 dead rows under one
+  // project from months of dev work). The DB row is preserved; we just
+  // hide it from the cockpit's "who's working right now" view.
+  return rows
+    .map(r => {
+      const isStale = (r.last_heartbeat + r.heartbeat_ttl) < now;
+      const effective = isStale ? 'DEAD' : r.status;
+      return {
+        agent_id: r.agent_id,
+        agent_type: r.agent_type,
+        status: effective,
+        since: r.registered_at,
+        last_heartbeat: r.last_heartbeat,
+      };
+    })
+    .filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
 }
 
 function queryLatestMentorNudge(db, tables, projectId) {
@@ -337,16 +344,19 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
 
   if (tables.has('outcomes') && hints.length > 0 && tables.has('tasks')) {
     const ph = sqlInList(hints);
+    // Real outcomes columns: outcome_id / task_id / status / criteria_json /
+    // evaluated_at / created_at / updated_at / metadata_json. Use created_at
+    // as the "submitted at" proxy (when the outcome row first appeared).
     const rows = db.prepare(`
-      SELECT o.task_id, o.status, o.evaluated_at, o.submitted_at
+      SELECT o.task_id, o.status, o.evaluated_at, o.created_at, o.updated_at
       FROM outcomes o
       JOIN tasks t ON t.task_id = o.task_id
       WHERE t.created_by_agent_id IN ${ph}
-      ORDER BY COALESCE(o.evaluated_at, o.submitted_at, 0) DESC
+      ORDER BY COALESCE(o.evaluated_at, o.updated_at, o.created_at, 0) DESC
       LIMIT ?
     `).all(...hints, perSource);
     for (const r of rows) {
-      const ts = r.evaluated_at || r.submitted_at;
+      const ts = r.evaluated_at || r.updated_at || r.created_at;
       if (!ts) continue;
       events.push({
         ts,

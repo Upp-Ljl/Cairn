@@ -92,8 +92,10 @@ db.exec(`
     status TEXT NOT NULL, raised_at INTEGER NOT NULL, answered_at INTEGER, answer TEXT
   );
   CREATE TABLE outcomes (
-    task_id TEXT PRIMARY KEY, status TEXT NOT NULL, submitted_at INTEGER,
-    evaluated_at INTEGER, criteria_json TEXT
+    outcome_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE,
+    criteria_json TEXT, status TEXT NOT NULL,
+    evaluated_at INTEGER, evaluation_summary TEXT, grader_agent_id TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, metadata_json TEXT
   );
   CREATE TABLE conflicts (
     id TEXT PRIMARY KEY, detected_at INTEGER NOT NULL, conflict_type TEXT,
