@@ -26,6 +26,26 @@ const MUTATIONS_ENABLED = (() => {
 const api = {
   // ---- Project-Aware Live Panel: L1 + project registry ----
   getProjectsList:    () => ipcRenderer.invoke('get-projects-list'),
+  // Cockpit redesign (Phase 1): single-project read-only payload.
+  getCockpitState:    (projectId, opts) =>
+    ipcRenderer.invoke('get-cockpit-state', projectId, opts || {}),
+  // Cockpit redesign (Phase 3): inject steer message into agent inbox +
+  // copy to clipboard. Tier-A first-class mutation (D9.1 PRODUCT.md §12).
+  cockpitSteer:       (input) => ipcRenderer.invoke('cockpit-steer', input || {}),
+  // Cockpit redesign (Phase 4): rewind preview + rewind action. Caller
+  // surfaces an inline confirm dialog before invoking rewindTo
+  // (tier-B mutation per PRODUCT.md §12 D9.1).
+  cockpitRewindPreview: (input) => ipcRenderer.invoke('cockpit-rewind-preview', input || {}),
+  cockpitRewindTo:      (input) => ipcRenderer.invoke('cockpit-rewind-to', input || {}),
+  // Cockpit redesign (Phase 5): acknowledge an escalation (Module 5).
+  cockpitAckEscalation: (input) => ipcRenderer.invoke('cockpit-ack-escalation', input || {}),
+  // Cockpit redesign (Phase 6): per-project cockpit settings + LLM helpers.
+  getCockpitSettings:   (projectId) => ipcRenderer.invoke('get-cockpit-settings', projectId),
+  setCockpitSettings:   (projectId, input) => ipcRenderer.invoke('set-cockpit-settings', projectId, input || {}),
+  cockpitSummarizeTail: (input) => ipcRenderer.invoke('cockpit-summarize-tail', input || {}),
+  cockpitExplainConflict: (input) => ipcRenderer.invoke('cockpit-explain-conflict', input || {}),
+  cockpitSortInbox:     (input) => ipcRenderer.invoke('cockpit-sort-inbox', input || {}),
+  cockpitAssistGoal:    (input) => ipcRenderer.invoke('cockpit-assist-goal', input || {}),
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),

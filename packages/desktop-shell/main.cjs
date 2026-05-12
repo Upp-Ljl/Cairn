@@ -17,7 +17,7 @@
  * compatibility) is gated on CAIRN_DESKTOP_ENABLE_MUTATIONS=1.
  */
 
-const { app, BrowserWindow, ipcMain, screen, dialog, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog, Menu, Tray, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -49,6 +49,11 @@ function canonicalizeToGitToplevel(dir) {
 const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
+const cockpitState = require('./cockpit-state.cjs');
+const cockpitSteer = require('./cockpit-steer.cjs');
+const cockpitRewind = require('./cockpit-rewind.cjs');
+const mentorPolicy = require('./mentor-policy.cjs');
+const llmHelpers = require('./cockpit-llm-helpers.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -810,6 +815,167 @@ function foldCodexIntoSummary(summary, codexRows) {
 }
 
 ipcMain.handle('get-projects-list', () => getProjectsList());
+
+// ---------------------------------------------------------------------------
+// Cockpit redesign (panel-cockpit-redesign Phase 1) — single-project payload.
+// Strict read-only. Used by Module 1-5 renderers.
+// ---------------------------------------------------------------------------
+ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return cockpitState.emptyCockpitState(null, null, 'projectId_required');
+  }
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) {
+    return cockpitState.emptyCockpitState(null, null, 'project_not_found');
+  }
+  // Some legacy registry entries carry db_path = '/dev/null' or '(unknown)'
+  // as a "use the global DB" sentinel from earlier dogfood scripts. Fall back
+  // to the default DB rather than rendering an empty cockpit — the project's
+  // agent_id_hints + capability matching are the real attribution boundary.
+  let dbPathForLookup = proj.db_path;
+  if (!dbPathForLookup || dbPathForLookup === '/dev/null' || dbPathForLookup === '(unknown)') {
+    dbPathForLookup = registry.DEFAULT_DB_PATH;
+  }
+  const entry = ensureDbHandle(dbPathForLookup);
+  if (!entry) {
+    return cockpitState.emptyCockpitState(proj, dbPathForLookup, 'db_unavailable');
+  }
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const goal = registry.getProjectGoal(reg, projectId);
+  const goalText = goal && typeof goal === 'object' && goal.text ? goal.text
+                 : (typeof goal === 'string' ? goal : null);
+  // Inject leader from cockpit settings (Phase 6) so cockpit-state can
+  // surface it in the State Strip + use it for the "talk to leader" path.
+  const settings = registry.getCockpitSettings(reg, projectId);
+  const projForCockpit = Object.assign({}, proj, { leader: settings.leader });
+  return cockpitState.buildCockpitState(
+    entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
+  );
+});
+
+// Cockpit redesign Phase 3 — Module 2 STEER. D9.1 tier-A first-class
+// (panel-cockpit-redesign §2.E #12); no env flag gate.
+ipcMain.handle('cockpit-steer', (_e, input) => {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, error: 'input_required' };
+  }
+  if (!input.project_id || !input.agent_id || !input.message) {
+    return { ok: false, error: 'project_id_agent_id_message_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return cockpitSteer.steerAgent(entry.db, entry.tables, {
+    project_id: input.project_id,
+    agent_id: input.agent_id,
+    message: input.message,
+  }, {
+    copyToClipboard: (text) => {
+      try { clipboard.writeText(text); } catch (_e) {}
+    },
+  });
+});
+
+// Cockpit redesign Phase 4 — Module 4 REWIND.
+// D9.1 tier-B mutation: caller MUST surface inline confirm dialog
+// before invoking rewindTo. Preview is safe to call unprompted.
+ipcMain.handle('cockpit-rewind-preview', (_e, input) => {
+  if (!input || !input.project_id || !input.checkpoint_id) {
+    return { ok: false, error: 'project_id_checkpoint_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return cockpitRewind.previewRewind(entry.db, entry.tables, proj, input.checkpoint_id);
+});
+
+// Cockpit redesign Phase 6 — per-project settings + LLM helpers.
+ipcMain.handle('get-cockpit-settings', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return registry.COCKPIT_SETTINGS_DEFAULT;
+  return registry.getCockpitSettings(reg, projectId);
+});
+
+ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return { ok: false, error: 'project_id_required' };
+  }
+  const result = registry.setCockpitSettings(reg, projectId, input || {});
+  if (result.error) return { ok: false, error: result.error };
+  reg = result.reg;
+  try { registry.writeRegistry(reg); } catch (_e) {}
+  return { ok: true, settings: result.settings };
+});
+
+ipcMain.handle('cockpit-summarize-tail', async (_e, input) => {
+  if (!input || !input.tail || !input.project_id) {
+    return { ok: false, reason: 'no_input' };
+  }
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.summarizeTail({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.tail_summary_enabled),
+    run_id: input.run_id,
+    tail: input.tail,
+  });
+});
+
+ipcMain.handle('cockpit-explain-conflict', async (_e, input) => {
+  if (!input || !input.project_id) return { ok: false, reason: 'no_input' };
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.explainConflict({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.conflict_explainer_enabled),
+    paths: input.paths,
+    diff_a: input.diff_a,
+    diff_b: input.diff_b,
+    summary: input.summary,
+  });
+});
+
+ipcMain.handle('cockpit-sort-inbox', async (_e, input) => {
+  if (!input || !input.project_id) return { ok: false, reason: 'no_input' };
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.sortInbox({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.inbox_smart_sort_enabled),
+    items: input.items,
+    goal: input.goal,
+  });
+});
+
+ipcMain.handle('cockpit-assist-goal', async (_e, input) => {
+  if (!input || !input.project_id) return { ok: false, reason: 'no_input' };
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.assistGoal({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.goal_input_assist_enabled),
+    files: input.files,
+    rough_idea: input.rough_idea,
+  });
+});
+
+// Cockpit redesign Phase 5 — Module 5 ack escalation.
+ipcMain.handle('cockpit-ack-escalation', (_e, input) => {
+  if (!input || !input.project_id || !input.escalation_id) {
+    return { ok: false, error: 'project_id_escalation_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return mentorPolicy.ackEscalation(entry.db, input.project_id, input.escalation_id);
+});
+
+ipcMain.handle('cockpit-rewind-to', (_e, input) => {
+  if (!input || !input.project_id || !input.checkpoint_id) {
+    return { ok: false, error: 'project_id_checkpoint_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return cockpitRewind.performRewind(entry.db, entry.tables, proj, input.checkpoint_id, {
+    skipAutoCheckpoint: !!input.skip_auto_checkpoint,
+  });
+});
 
 ipcMain.handle('select-project', (_e, projectId) => {
   if (projectId === null) {

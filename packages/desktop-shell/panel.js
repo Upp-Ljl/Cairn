@@ -94,7 +94,7 @@ function escapeHtml(s) {
 // View state — Project-Aware (L1 default; L2 when selectedProject is set)
 // ---------------------------------------------------------------------------
 
-let currentView = 'projects'; // 'projects' | 'project' | 'unassigned'
+let currentView = 'projects'; // 'projects' | 'project' | 'cockpit' | 'unassigned'
 /** @type {{id:string,label:string,project_root:string,db_path:string}|null} */
 let selectedProject = null;
 /** @type {string|null} db_path the user is drilling into in the Unassigned view */
@@ -110,9 +110,12 @@ function setView(name, meta) {
   // possibly-different project anyway). Same applies to the agent
   // filter chip and the Unassigned drill-down: each L2 entry starts
   // with a clean slate.
-  const nextProjectId = (name === 'project' && meta) ? meta.id : null;
+  // Both 'project' (legacy multi-card) and 'cockpit' (new redesign) are
+  // single-project views — the DB-attribution clearing rules apply to both.
+  const isProjectView = (name === 'project' || name === 'cockpit');
+  const nextProjectId = (isProjectView && meta) ? meta.id : null;
   const prevProjectId = selectedProject ? selectedProject.id : null;
-  if (name !== 'project' || nextProjectId !== prevProjectId) {
+  if (!isProjectView || nextProjectId !== prevProjectId) {
     clearTaskSelection();
     selectedAgentId = null;
   }
@@ -120,8 +123,30 @@ function setView(name, meta) {
   if (name !== 'unassigned') {
     selectedUnassignedDbPath = null;
   }
+  // Leaving the project view → reset inner state that would otherwise
+  // bleed across projects: inner tab selection, managed-card disclosure,
+  // and any open menu dropdown. Without this, ESC felt like a "half
+  // return" because L2 left visual state behind.
+  if (name !== 'project' && currentView === 'project') {
+    activeTab = 'runlog';
+    managedExpanded = false;
+    // Re-show the default inner tab; hide the rest. Cheap + idempotent.
+    const innerViews = ['view-runlog', 'view-tasks', 'view-sessions', 'view-reports', 'view-coord'];
+    innerViews.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.hidden = (id !== 'view-runlog');
+    });
+    document.querySelectorAll('.tab').forEach(b =>
+      b.classList.toggle('active', b.getAttribute('data-tab') === 'runlog'),
+    );
+  }
+  // Close any open menu dropdown regardless of how we got here (ESC,
+  // back-button, or programmatic). Avoids the dropdown floating over
+  // the L1 grid after ESC.
+  const menuPop = document.getElementById('menu-pop');
+  if (menuPop) menuPop.classList.remove('open');
   currentView = name;
-  if (name === 'project') {
+  if (name === 'project' || name === 'cockpit') {
     selectedProject = meta || null;
   } else if (name === 'unassigned') {
     selectedUnassignedDbPath = (meta && meta.db_path) || null;
@@ -131,12 +156,20 @@ function setView(name, meta) {
   }
   document.getElementById('view-projects-list').hidden = (name !== 'projects');
   document.getElementById('view-project').hidden       = (name !== 'project');
+  document.getElementById('view-cockpit').hidden       = (name !== 'cockpit');
   document.getElementById('view-unassigned').hidden    = (name !== 'unassigned');
   // Back-button menu item visible in any non-L1 view.
   const backBtn = document.getElementById('menu-back-to-projects');
   if (backBtn) backBtn.hidden = (name === 'projects');
   // Re-render header label
   renderHeaderForView();
+  // Render L1 immediately from the most recent cached payload if we
+  // have one (avoids a ≤1s blank flash before the next poll lands).
+  // If no cache yet, the placeholder shown by renderProjectsList is
+  // already the right empty state.
+  if (name === 'projects' && lastProjectsPayload) {
+    try { renderProjectsList(lastProjectsPayload); } catch {}
+  }
   // Force an immediate poll to populate the new view fast.
   poll().catch(() => {});
 }
@@ -147,7 +180,7 @@ function renderHeaderForView() {
   if (currentView === 'projects') {
     wl.textContent = 'Cairn — Projects';
     dp.textContent = '';
-  } else if (currentView === 'project' && selectedProject) {
+  } else if ((currentView === 'project' || currentView === 'cockpit') && selectedProject) {
     wl.textContent = selectedProject.label || '(project)';
     dp.textContent = `DB: ${shortBasename(selectedProject.db_path)}`;
   } else if (currentView === 'unassigned') {
@@ -3255,6 +3288,10 @@ function setupCoordinationTab() {
 
 let activeTab = 'runlog';
 let lastTasks = [];
+/** Most recent projects-list payload — used by setView('projects') to
+ *  paint the L1 grid synchronously instead of waiting up to 1s for the
+ *  next poll, which created a "half-return" blank flash on ESC. */
+let lastProjectsPayload = null;
 
 function setupTabs() {
   const tabs = document.querySelectorAll('.tab');
@@ -3343,7 +3380,10 @@ function renderProjectsList(payload) {
       if (!proj) return;
       const res = await window.cairn.selectProject(id);
       if (res && res.ok) {
-        setView('project', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
+        // panel-cockpit-redesign Phase 2: default to cockpit view; legacy
+        // multi-card project view remains available via the data attribute
+        // toggle (Phase 7 polishing decides whether to delete it entirely).
+        setView('cockpit', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
       }
     });
   });
@@ -3577,6 +3617,7 @@ async function poll() {
       // L1 view — fetch the projects list payload (per-project summaries
       // + Unassigned buckets). Header and summary card are not used.
       const payload = await window.cairn.getProjectsList();
+      lastProjectsPayload = payload;
       renderProjectsList(payload);
       renderHeaderForView();
     } else if (currentView === 'unassigned') {
@@ -3586,6 +3627,15 @@ async function poll() {
         : null;
       renderHeaderForView();
       renderUnassignedDetail(detail);
+    } else if (currentView === 'cockpit') {
+      // L2 redesign — single-project cockpit (Phase 2). Fetch the
+      // unified cockpit payload and render the 5 modules.
+      const state = selectedProject
+        ? await window.cairn.getCockpitState(selectedProject.id, {})
+        : null;
+      renderHeaderForView();
+      renderCockpit(state);
+      renderCockpitTabs(lastProjectsPayload, selectedProject);
     } else {
       // L2 view — Quick-Slice surface scoped to the active project.
       const summaryP = window.cairn.getProjectSummary();
@@ -3728,7 +3778,7 @@ document.addEventListener('keydown', e => {
       return;
     }
     // Otherwise: any non-L1 view returns to L1; L1 closes the panel.
-    if (currentView === 'project') {
+    if (currentView === 'project' || currentView === 'cockpit') {
       window.cairn.selectProject(null).then(() => setView('projects', null));
     } else if (currentView === 'unassigned') {
       setView('projects', null);
@@ -3737,3 +3787,637 @@ document.addEventListener('keydown', e => {
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// COCKPIT RENDERERS (panel-cockpit-redesign Phase 2)
+// ---------------------------------------------------------------------------
+
+/** Active activity-feed filter. 'all' | 'mentor' | 'agent' | 'state' */
+let cockpitActivityFilter = 'all';
+
+const AUTOPILOT_COPY = {
+  NO_GOAL: {
+    dot: 'grey', text: '没目标 — 设置一个 goal 才能让 Mentor 工作',
+    headlineClass: '',
+  },
+  AGENT_IDLE: {
+    dot: 'grey', text: 'agent 空闲 · 没人在跑这个项目',
+    headlineClass: '',
+  },
+  AGENT_WORKING: {
+    dot: 'green', text: 'agent 在执行 · Mentor 在引导 · 你可以走开',
+    headlineClass: '',
+  },
+  MENTOR_BLOCKED_NEED_USER: {
+    dot: 'red', text: 'Mentor 处理不了 — 需要你的决定',
+    headlineClass: 'red',
+  },
+};
+
+function fmtAgo(ts) {
+  if (!ts) return '';
+  const dt = Date.now() - ts;
+  if (dt < 0) return 'now';
+  const s = Math.floor(dt / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function fmtHm(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function activityKindLabel(kind) {
+  if (!kind) return '?';
+  if (kind === 'mentor_nudge') return 'Mentor';
+  if (kind === 'escalation_raised') return 'Escalate';
+  if (kind === 'conflict_detected') return 'Conflict';
+  if (kind === 'conflict_resolved') return 'Resolved';
+  if (kind === 'blocker_raised') return 'Blocked';
+  if (kind === 'blocker_answered') return 'Answered';
+  if (kind === 'checkpoint_created') return 'Checkpoint';
+  if (kind === 'agent_register') return 'Agent';
+  if (kind === 'agent_dead') return 'Agent dead';
+  if (kind.startsWith('task_')) return kind.replace('task_', 'Task ');
+  if (kind.startsWith('dispatch_')) return kind.replace('dispatch_', 'Dispatch ');
+  if (kind.startsWith('outcomes_')) return kind.replace('outcomes_', 'Outcome ');
+  return kind;
+}
+
+function activityKindClass(kind) {
+  if (!kind) return '';
+  if (kind === 'mentor_nudge') return 'mentor';
+  if (kind === 'escalation_raised') return 'escalation';
+  if (kind.startsWith('conflict_')) return 'conflict';
+  if (kind.startsWith('blocker_')) return 'blocker';
+  if (kind.startsWith('task_')) return 'task';
+  return '';
+}
+
+function activityFilterMatches(kind) {
+  if (cockpitActivityFilter === 'all') return true;
+  if (cockpitActivityFilter === 'mentor') {
+    return kind === 'mentor_nudge' || kind === 'escalation_raised';
+  }
+  if (cockpitActivityFilter === 'agent') {
+    return kind.startsWith('task_') || kind.startsWith('agent_') || kind === 'checkpoint_created';
+  }
+  if (cockpitActivityFilter === 'state') {
+    return kind.startsWith('outcomes_') || kind.startsWith('dispatch_') || kind.startsWith('conflict_') || kind.startsWith('blocker_');
+  }
+  return true;
+}
+
+function renderCockpit(state) {
+  if (!state) {
+    const dotEl = document.getElementById('cockpit-status-dot');
+    if (dotEl) dotEl.textContent = '○';
+    const textEl = document.getElementById('cockpit-status-text');
+    if (textEl) textEl.textContent = 'loading…';
+    return;
+  }
+  // Phase 7: onboarding panel shows/hides based on state.
+  // Defined below; check existence to avoid TDZ on first render.
+  if (typeof maybeShowCockpitOnboarding === 'function') {
+    maybeShowCockpitOnboarding(state);
+  }
+  // Module 1: state strip — always include live agent count even when
+  // autopilot isn't AGENT_WORKING (so the user sees ⚡N regardless of
+  // whether goal/autopilot status would otherwise displace the agent line).
+  const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
+  const liveAgentCount = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE').length;
+  const agentSuffix = liveAgentCount > 0 ? `  ·  ⚡ ${liveAgentCount} agent${liveAgentCount === 1 ? '' : 's'}` : '';
+  const dotEl = document.getElementById('cockpit-status-dot');
+  if (dotEl) {
+    dotEl.textContent = '●';
+    dotEl.className = `cockpit-status-dot ${copy.dot}`;
+  }
+  const textEl = document.getElementById('cockpit-status-text');
+  if (textEl) {
+    textEl.textContent = copy.text + agentSuffix;
+    textEl.className = `cockpit-status-text ${copy.headlineClass}`;
+  }
+  const pgEl = document.getElementById('cockpit-progress-bar');
+  if (pgEl) {
+    const pct = Math.round((state.progress.percent || 0) * 100);
+    pgEl.style.setProperty('--cockpit-progress', pct + '%');
+  }
+  const pgTextEl = document.getElementById('cockpit-progress-text');
+  if (pgTextEl) {
+    const p = state.progress;
+    pgTextEl.textContent =
+      `${Math.round((p.percent || 0) * 100)}%  ·  ${p.tasks_done}/${p.tasks_total} done · ${p.tasks_running} running · ${p.tasks_blocked} blocked`;
+  }
+  const ctEl = document.getElementById('cockpit-current-task');
+  if (ctEl) {
+    if (state.current_task) {
+      const t = state.current_task;
+      ctEl.textContent =
+        `当前: ${t.intent}  (${fmtAgo(t.started_at)})`;
+    } else {
+      ctEl.textContent = '(无 RUNNING task)';
+    }
+  }
+  const nudgeEl = document.getElementById('cockpit-mentor-nudge');
+  if (nudgeEl) {
+    if (state.latest_mentor_nudge && state.latest_mentor_nudge.message) {
+      const n = state.latest_mentor_nudge;
+      nudgeEl.textContent = `Mentor 上次说: "${n.message}"  (${fmtAgo(n.timestamp)})`;
+    } else {
+      nudgeEl.textContent = '(Mentor 还没发过引导)';
+    }
+  }
+
+  // Module 2: steer (just set placeholder text; Phase 3 wires Send)
+  const steerInput = document.getElementById('cockpit-steer-input');
+  const steerSend = document.getElementById('cockpit-steer-send');
+  if (steerInput && steerSend) {
+    const haveAgent = state.agents && state.agents.length > 0;
+    steerInput.disabled = !haveAgent;
+    steerSend.disabled = !haveAgent;
+    steerInput.placeholder = haveAgent
+      ? '一句话引导 agent…'
+      : '没有活跃 agent 可发话';
+  }
+
+  // Module 3: activity feed
+  const listEl = document.getElementById('cockpit-activity-list');
+  if (listEl) {
+    const filtered = (state.activity || []).filter(e => activityFilterMatches(e.kind));
+    // Diagnostic for the 0-events-rendered case while data exists.
+    if ((state.activity || []).length > 0 && filtered.length === 0) {
+      try { console.warn('[cockpit] activity rendered 0 because filter=' + cockpitActivityFilter + ' but state.activity.length=' + state.activity.length); } catch (_e) {}
+    }
+    if (filtered.length === 0) {
+      const noteFiltered = (state.activity || []).length > 0
+        ? `<div class="placeholder">no activity matches filter <code>${escapeHtml(cockpitActivityFilter)}</code>; <a href="#" id="cockpit-clear-filter">show all</a></div>`
+        : '<div class="placeholder">no activity yet</div>';
+      listEl.innerHTML = noteFiltered;
+      const clear = document.getElementById('cockpit-clear-filter');
+      if (clear) clear.addEventListener('click', (e) => {
+        e.preventDefault();
+        cockpitActivityFilter = 'all';
+        document.querySelectorAll('.cockpit-filter').forEach(b => b.classList.toggle('active', b.getAttribute('data-filter') === 'all'));
+        poll().catch(() => {});
+      });
+    } else {
+      const rows = filtered.map(e => {
+        const ts = fmtHm(e.ts);
+        const kindLabel = activityKindLabel(e.kind);
+        const kindCls = activityKindClass(e.kind);
+        const body = escapeHtml(e.body || '');
+        return `<div class="cockpit-activity-row">
+          <span class="cockpit-activity-ts">${ts}</span>
+          <span class="cockpit-activity-kind ${kindCls}">${escapeHtml(kindLabel)}</span>
+          <span class="cockpit-activity-body">${body}</span>
+        </div>`;
+      });
+      listEl.innerHTML = rows.join('');
+    }
+  }
+
+  // Module 4: safety / rewind (list only; Phase 4 wires click)
+  const ckListEl = document.getElementById('cockpit-checkpoints-list');
+  if (ckListEl) {
+    if (!state.checkpoints || state.checkpoints.length === 0) {
+      ckListEl.innerHTML = '<div class="placeholder">no checkpoints yet</div>';
+    } else {
+      const rows = state.checkpoints.map(c => {
+        const sha = (c.git_head || c.id || '').slice(0, 8);
+        const lbl = c.label || `before commit ${sha}`;
+        return `<div class="cockpit-checkpoint-row" data-ckpt-id="${escapeHtml(c.id)}">
+          <span class="cockpit-checkpoint-sha">${escapeHtml(sha)}</span>
+          <span class="cockpit-checkpoint-label">${escapeHtml(lbl)}</span>
+          <span class="cockpit-checkpoint-ts">${fmtAgo(c.created_at)}</span>
+          <button class="cockpit-rewind-btn" data-ckpt-id="${escapeHtml(c.id)}" title="Rewind tree to this checkpoint (will stash any local changes first)">Rewind</button>
+        </div>`;
+      });
+      ckListEl.innerHTML = rows.join('');
+    }
+  }
+
+  // Module 5: needs you
+  const needsContainer = document.getElementById('cockpit-needs');
+  const needsListEl = document.getElementById('cockpit-needs-list');
+  const pendingEscs = (state.escalations || []).filter(e => e.status === 'PENDING');
+  if (needsContainer) {
+    needsContainer.classList.toggle('active', pendingEscs.length > 0);
+  }
+  if (needsListEl) {
+    if (pendingEscs.length === 0) {
+      needsListEl.innerHTML = '<div class="cockpit-needs-empty">Mentor handling — agent on track.</div>';
+    } else {
+      const rows = pendingEscs.map(e => {
+        return `<div class="cockpit-needs-row" data-esc-id="${escapeHtml(e.id)}">
+          <div class="cockpit-needs-reason">🔴 ${escapeHtml(e.reason || 'NEEDS YOU')}</div>
+          <div class="cockpit-needs-body">${escapeHtml(e.body || '')}</div>
+          <div class="cockpit-needs-actions">
+            <button class="cockpit-ack-btn" data-esc-id="${escapeHtml(e.id)}" data-action="ack" title="Mark this escalation acknowledged (Mentor stops re-raising)">Acknowledge</button>
+          </div>
+        </div>`;
+      });
+      needsListEl.innerHTML = rows.join('');
+    }
+  }
+}
+
+function renderCockpitTabs(payload, sel) {
+  const el = document.getElementById('cockpit-tabs');
+  if (!el) return;
+  if (!payload || !payload.projects || payload.projects.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  const tabs = payload.projects.map(p => {
+    const isActive = sel && p.id === sel.id;
+    const summary = p.summary || {};
+    const escCount = (summary.conflicts_open || 0) + (summary.blockers_open || 0);
+    const badge = escCount > 0 ? `<span class="cockpit-tab-badge">${escCount}</span>` : '';
+    return `<div class="cockpit-tab ${isActive ? 'active' : ''}" data-project-id="${escapeHtml(p.id)}">
+      ${escapeHtml(p.label || '(no label)')}${badge}
+    </div>`;
+  }).join('');
+  el.innerHTML = tabs;
+  el.querySelectorAll('.cockpit-tab[data-project-id]').forEach(node => {
+    node.addEventListener('click', async () => {
+      const id = node.getAttribute('data-project-id');
+      const proj = payload.projects.find(p => p.id === id);
+      if (!proj) return;
+      const res = await window.cairn.selectProject(id);
+      if (res && res.ok) {
+        setView('cockpit', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
+      }
+    });
+  });
+}
+
+function setupCockpit() {
+  // Activity filter chips
+  document.querySelectorAll('.cockpit-filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.cockpit-filter').forEach(b => b.classList.toggle('active', b === btn));
+      cockpitActivityFilter = btn.getAttribute('data-filter') || 'all';
+      // Trigger a render with current state (no IPC) — Phase 3 caches state.
+      poll().catch(() => {});
+    });
+  });
+  // Steer input wiring placeholder (Phase 3 wires the IPC handler).
+  const steerSend = document.getElementById('cockpit-steer-send');
+  const steerInput = document.getElementById('cockpit-steer-input');
+  const steerStatus = document.getElementById('cockpit-steer-status');
+  if (steerInput) {
+    steerInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !steerSend.disabled) {
+        steerSend.click();
+      }
+    });
+  }
+  if (steerSend) {
+    steerSend.addEventListener('click', async () => {
+      const msg = (steerInput && steerInput.value || '').trim();
+      if (!msg) {
+        if (steerStatus) { steerStatus.textContent = '请输入一句话'; steerStatus.className = 'cockpit-steer-status error'; }
+        return;
+      }
+      if (!selectedProject) {
+        if (steerStatus) { steerStatus.textContent = '没有选中项目'; steerStatus.className = 'cockpit-steer-status error'; }
+        return;
+      }
+      // Target agent: most recent ACTIVE row in current cockpit state.
+      // We re-fetch state here to avoid using a stale snapshot.
+      const state = await window.cairn.getCockpitState(selectedProject.id, {});
+      const active = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
+      if (active.length === 0) {
+        if (steerStatus) { steerStatus.textContent = '没有活跃 agent 可发话'; steerStatus.className = 'cockpit-steer-status error'; }
+        return;
+      }
+      const target = active[0].agent_id;
+      steerSend.disabled = true;
+      if (steerStatus) { steerStatus.textContent = `发给 ${target}…`; steerStatus.className = 'cockpit-steer-status info'; }
+      try {
+        const res = await window.cairn.cockpitSteer({
+          project_id: selectedProject.id,
+          agent_id: target,
+          message: msg,
+        });
+        if (res && res.ok) {
+          const methods = (res.delivered || []).join(' + ');
+          if (steerStatus) {
+            steerStatus.textContent = `已发送 → ${target.slice(0, 18)}…  (${methods})`;
+            steerStatus.className = 'cockpit-steer-status';
+          }
+          if (steerInput) steerInput.value = '';
+          // Refresh activity feed to show the injected message.
+          poll().catch(() => {});
+        } else {
+          if (steerStatus) {
+            steerStatus.textContent = `发送失败: ${(res && res.error) || 'unknown'}`;
+            steerStatus.className = 'cockpit-steer-status error';
+          }
+        }
+      } catch (e) {
+        if (steerStatus) {
+          steerStatus.textContent = `error: ${(e && e.message) || e}`;
+          steerStatus.className = 'cockpit-steer-status error';
+        }
+      } finally {
+        steerSend.disabled = false;
+      }
+    });
+  }
+}
+
+async function handleRewindClick(checkpointId, btn) {
+  if (!selectedProject || !checkpointId) return;
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = '…';
+  let preview;
+  try {
+    preview = await window.cairn.cockpitRewindPreview({
+      project_id: selectedProject.id,
+      checkpoint_id: checkpointId,
+    });
+  } catch (e) {
+    alert('Rewind preview failed: ' + ((e && e.message) || e));
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+  if (!preview || !preview.ok) {
+    alert(`Rewind preview failed: ${(preview && preview.error) || 'unknown'}\n${(preview && preview.hint) || ''}`);
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+  // D9.1 tier-B inline confirm dialog
+  const lines = [
+    `Rewind to checkpoint ${preview.checkpoint.git_head.slice(0, 8)}?`,
+    '',
+    preview.checkpoint.label ? `Label: ${preview.checkpoint.label}` : '',
+    `Current HEAD: ${preview.head_sha.slice(0, 8)}${preview.head_matches ? ' (matches)' : ''}`,
+    `Working tree: ${preview.working_tree.dirty ? `DIRTY (${preview.working_tree.total_changed} files)` : 'clean'}`,
+    '',
+    preview.working_tree.dirty
+      ? `Cairn will stash your changes (safety net) and restore tree to ${preview.checkpoint.git_head.slice(0, 8)}.`
+      : `Cairn will restore tree to ${preview.checkpoint.git_head.slice(0, 8)}.`,
+    '',
+    'Continue?',
+  ].filter(Boolean).join('\n');
+  if (!confirm(lines)) {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+  btn.textContent = 'Rewinding…';
+  try {
+    const res = await window.cairn.cockpitRewindTo({
+      project_id: selectedProject.id,
+      checkpoint_id: checkpointId,
+    });
+    if (res && res.ok) {
+      alert(`Rewind ok (${res.mode}).\n${res.hint || ''}`);
+      poll().catch(() => {});
+    } else {
+      alert(`Rewind FAILED: ${(res && res.error) || 'unknown'}\n${(res && res.hint) || ''}\n${(res && res.stderr) || ''}`);
+    }
+  } catch (e) {
+    alert('Rewind threw: ' + ((e && e.message) || e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+// Delegate-click handler for Rewind buttons in the cockpit. Live for
+// the lifetime of the panel because we re-render the list on every poll.
+document.addEventListener('click', (ev) => {
+  const btn = ev.target.closest && ev.target.closest('.cockpit-rewind-btn');
+  if (!btn || btn.disabled) return;
+  const ck = btn.getAttribute('data-ckpt-id');
+  if (ck) handleRewindClick(ck, btn);
+});
+
+// Delegate-click for Acknowledge buttons in Module 5 (Phase 5).
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest && ev.target.closest('.cockpit-ack-btn');
+  if (!btn || btn.disabled || !selectedProject) return;
+  const escId = btn.getAttribute('data-esc-id');
+  if (!escId) return;
+  btn.disabled = true;
+  btn.textContent = 'acking…';
+  try {
+    const res = await window.cairn.cockpitAckEscalation({
+      project_id: selectedProject.id,
+      escalation_id: escId,
+    });
+    if (res && res.ok) {
+      poll().catch(() => {});
+    } else {
+      alert(`Ack failed: ${(res && res.error) || 'unknown'}`);
+      btn.disabled = false;
+      btn.textContent = 'Acknowledge';
+    }
+  } catch (e) {
+    alert('Ack threw: ' + ((e && e.message) || e));
+    btn.disabled = false;
+    btn.textContent = 'Acknowledge';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// COCKPIT — Phase 7 onboarding + keyboard navigation
+// ---------------------------------------------------------------------------
+
+/** When the cockpit state has no goal (or empty inbox), show onboarding. */
+function maybeShowCockpitOnboarding(state) {
+  const onboarding = document.getElementById('cockpit-onboarding');
+  const titleEl = document.getElementById('cockpit-onboarding-title');
+  const msgEl = document.getElementById('cockpit-onboarding-message');
+  const setGoalBtn = document.getElementById('cockpit-onboarding-set-goal');
+  if (!onboarding || !state) return;
+  if (state.autopilot_status === 'NO_GOAL') {
+    onboarding.hidden = false;
+    if (titleEl) titleEl.textContent = '🎯 Set a goal first';
+    if (msgEl) msgEl.textContent = 'Mentor needs a project-level goal to run. Define one sentence describing the destination.';
+    if (setGoalBtn) setGoalBtn.hidden = false;
+    return;
+  }
+  // Empty inbox (no escalations, no agents, no tasks) without onboarding
+  // friction: keep the modules visible but hide the onboarding panel.
+  onboarding.hidden = true;
+  if (setGoalBtn) setGoalBtn.hidden = true;
+}
+
+function setupCockpitOnboarding() {
+  const addProjectBtn = document.getElementById('cockpit-onboarding-add-project');
+  if (addProjectBtn) {
+    addProjectBtn.addEventListener('click', async () => {
+      // Reuse existing add-project flow.
+      const addProjMenu = document.getElementById('menu-add-project');
+      if (addProjMenu) addProjMenu.click();
+      else {
+        const res = await window.cairn.addProject({});
+        if (res && res.ok) poll().catch(() => {});
+      }
+    });
+  }
+  const setGoalBtn = document.getElementById('cockpit-onboarding-set-goal');
+  if (setGoalBtn) {
+    setGoalBtn.addEventListener('click', () => {
+      // Electron disables window.prompt() in renderer by default. Use an
+      // inline modal that the existing #modal-overlay already supports.
+      if (!selectedProject) {
+        alert('No project selected.');
+        return;
+      }
+      openGoalModal();
+    });
+  }
+  const helpLink = document.getElementById('cockpit-onboarding-help');
+  const helpOverlay = document.getElementById('cockpit-help-overlay');
+  const helpClose = document.getElementById('cockpit-help-close');
+  if (helpLink && helpOverlay) {
+    helpLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      helpOverlay.classList.add('open');
+    });
+  }
+  if (helpClose && helpOverlay) {
+    helpClose.addEventListener('click', () => helpOverlay.classList.remove('open'));
+  }
+}
+
+/** Inline goal-input modal — re-uses the existing #modal-overlay for the
+ *  "Add to project" picker, but with goal-input contents. Phase 7 polish. */
+function openGoalModal() {
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl = document.getElementById('modal-body');
+  if (!overlay || !bodyEl) {
+    alert('Modal not available.');
+    return;
+  }
+  if (titleEl) titleEl.textContent = `Define goal for "${selectedProject.label}"`;
+  bodyEl.innerHTML = `
+    <div style="padding:8px 0;">
+      <div style="color:#aaa;font-size:0.85em;margin-bottom:6px;">
+        One concrete sentence — what's the destination?
+        Mentor uses this to suggest next steps.
+      </div>
+      <textarea id="goal-input-textarea"
+        style="width:100%;min-height:80px;background:#111;color:#eee;border:1px solid #333;border-radius:4px;padding:8px;font-family:inherit;resize:vertical;"
+        placeholder="e.g. ship the cockpit redesign with non-developer onboarding"></textarea>
+      <div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end;">
+        <button id="goal-input-cancel"
+          style="background:#333;color:#ddd;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button id="goal-input-save"
+          style="background:#2a4a7a;color:white;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-family:inherit;">Save</button>
+      </div>
+    </div>
+  `;
+  overlay.classList.add('open');
+  const ta = document.getElementById('goal-input-textarea');
+  if (ta) {
+    ta.focus();
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        document.getElementById('goal-input-save')?.click();
+      }
+    });
+  }
+  const cancel = () => closeModal();
+  document.getElementById('goal-input-cancel')?.addEventListener('click', cancel);
+  document.getElementById('goal-input-save')?.addEventListener('click', async () => {
+    const text = (ta && ta.value || '').trim();
+    if (!text) { ta && ta.focus(); return; }
+    const res = await window.cairn.setProjectGoal(selectedProject.id, { text });
+    if (res && res.ok) {
+      closeModal();
+      poll().catch(() => {});
+    } else {
+      alert('Failed: ' + ((res && res.error) || 'unknown'));
+    }
+  });
+}
+
+// Onboarding visibility is updated by `renderCockpit` directly (see top
+// of that function). When non-cockpit views are active, ensure the
+// onboarding panel is hidden.
+function hideCockpitOnboardingIfNotInView() {
+  if (currentView !== 'cockpit') {
+    const onboarding = document.getElementById('cockpit-onboarding');
+    if (onboarding) onboarding.hidden = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard navigation (j / k / / / Enter / ? / Esc — Esc already handled
+// at the top-level keydown listener above).
+// ---------------------------------------------------------------------------
+
+let activityCursorIdx = 0;
+
+function setupCockpitKeyboard() {
+  document.addEventListener('keydown', (e) => {
+    // Skip when typing in an input.
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    // Skip when modal or help overlay is open.
+    if (document.getElementById('modal-overlay')?.classList.contains('open')) return;
+    const helpOverlay = document.getElementById('cockpit-help-overlay');
+    if (helpOverlay && helpOverlay.classList.contains('open')) {
+      if (e.key === 'Escape') helpOverlay.classList.remove('open');
+      return;
+    }
+    if (currentView !== 'cockpit') return;
+    if (e.key === '?') {
+      e.preventDefault();
+      if (helpOverlay) helpOverlay.classList.add('open');
+      return;
+    }
+    if (e.key === '/') {
+      e.preventDefault();
+      const inp = document.getElementById('cockpit-steer-input');
+      if (inp && !inp.disabled) inp.focus();
+      return;
+    }
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveActivityCursor(+1);
+      return;
+    }
+    if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveActivityCursor(-1);
+      return;
+    }
+  });
+}
+
+function moveActivityCursor(delta) {
+  const list = document.getElementById('cockpit-activity-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.cockpit-activity-row');
+  if (rows.length === 0) return;
+  activityCursorIdx = Math.max(0, Math.min(rows.length - 1, activityCursorIdx + delta));
+  rows.forEach((r, i) => {
+    r.style.background = i === activityCursorIdx ? '#2a2a2a' : '';
+  });
+  const target = rows[activityCursorIdx];
+  if (target && target.scrollIntoView) {
+    target.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Wire everything at boot.
+setupCockpit();
+setupCockpitOnboarding();
+setupCockpitKeyboard();
+

@@ -8,6 +8,11 @@
      monospace dark, high information density,
      references = Activity Monitor / journalctl. */
   * { box-sizing: border-box; }
+  /* HTML `hidden` attribute must beat author display:flex/block rules.
+     Without !important, `#view-project { display:flex }` (and friends)
+     overrides UA `[hidden]{display:none}`, causing the L1 list to
+     render with L2 still visible behind it on ESC. */
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body {
     font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
@@ -1099,6 +1104,398 @@
     overflow-y: auto;
     padding: 0;
   }
+
+  /* --------------------------------------------------------------------
+     COCKPIT MODULES (panel-cockpit-redesign Phase 2)
+     Linear/Notion 风：易读优先，每模块清晰分块，避免 journalctl 密度。
+     ------------------------------------------------------------------ */
+  #view-cockpit {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 0;
+    background: #1a1a1a;
+  }
+  .cockpit-tabs {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    padding: 8px 12px 0;
+    border-bottom: 1px solid #2a2a2a;
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .cockpit-tab {
+    padding: 6px 12px;
+    border-radius: 6px 6px 0 0;
+    background: #222;
+    color: #aaa;
+    cursor: pointer;
+    border: 1px solid #2a2a2a;
+    border-bottom: none;
+    font-size: 0.9em;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .cockpit-tab:hover { background: #2a2a2a; color: #ddd; }
+  .cockpit-tab.active { background: #1a1a1a; color: #eee; }
+  .cockpit-tab .cockpit-tab-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    background: #cc4444;
+    color: white;
+    border-radius: 8px;
+    font-size: 0.75em;
+  }
+
+  /* Module 1: STATE STRIP */
+  .cockpit-state {
+    padding: 8px 12px;
+    border-bottom: 1px solid #2a2a2a;
+    background: #1f1f1f;
+    flex-shrink: 0;
+  }
+  .cockpit-status-line {
+    font-size: 1em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .cockpit-status-dot {
+    font-size: 1.1em;
+    line-height: 1;
+  }
+  .cockpit-status-dot.green { color: #5dd45d; }
+  .cockpit-status-dot.red   { color: #ff5555; }
+  .cockpit-status-dot.grey  { color: #777; }
+  .cockpit-status-text {
+    color: #ddd;
+    font-weight: 500;
+  }
+  .cockpit-status-text.red { color: #ff7070; }
+  .cockpit-status-detail {
+    font-size: 0.85em;
+    color: #888;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .cockpit-progress-bar {
+    display: inline-block;
+    width: 120px;
+    height: 8px;
+    background: #2a2a2a;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cockpit-progress-bar::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    background: #5dd45d;
+    width: var(--cockpit-progress, 0%);
+    transition: width 200ms ease;
+  }
+  .cockpit-current-task {
+    font-size: 0.85em;
+    color: #ccc;
+    margin-bottom: 4px;
+    word-break: break-word;
+  }
+  .cockpit-mentor-nudge {
+    font-size: 0.85em;
+    color: #888;
+    font-style: italic;
+    word-break: break-word;
+  }
+
+  /* Module 2: STEER */
+  .cockpit-steer {
+    padding: 6px 12px 8px;
+    border-bottom: 1px solid #2a2a2a;
+    flex-shrink: 0;
+  }
+  .cockpit-steer-label {
+    display: block;
+    font-size: 0.85em;
+    color: #aaa;
+    margin-bottom: 6px;
+  }
+  .cockpit-steer-row {
+    display: flex;
+    gap: 6px;
+  }
+  .cockpit-steer-row input {
+    flex: 1 1 auto;
+    background: #111;
+    color: #eee;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 0.95em;
+  }
+  .cockpit-steer-row input:focus {
+    outline: none;
+    border-color: #5d8dd4;
+  }
+  .cockpit-steer-row button {
+    background: #2a4a7a;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-steer-row button:hover:not(:disabled) { background: #355a90; }
+  .cockpit-steer-row button:disabled { background: #333; color: #666; cursor: not-allowed; }
+  .cockpit-steer-status {
+    font-size: 0.8em;
+    color: #5dd45d;
+    margin-top: 6px;
+    min-height: 1em;
+  }
+  .cockpit-steer-status.error { color: #ff7070; }
+  .cockpit-steer-status.info  { color: #aaa; }
+
+  /* Module 3: ACTIVITY FEED — main content area, takes all remaining space */
+  .cockpit-activity {
+    padding: 10px 12px;
+    border-bottom: 1px solid #2a2a2a;
+    flex: 1 1 0;
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+  }
+  .cockpit-section-title {
+    font-size: 0.85em;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .cockpit-activity-filters {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .cockpit-filter {
+    background: transparent;
+    color: #888;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 0.78em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-filter:hover { color: #ccc; border-color: #444; }
+  .cockpit-filter.active {
+    background: #2a4a7a;
+    color: white;
+    border-color: #2a4a7a;
+  }
+  .cockpit-activity-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .cockpit-activity-row {
+    padding: 6px 0;
+    border-bottom: 1px solid #232323;
+    font-size: 0.85em;
+    line-height: 1.4;
+  }
+  .cockpit-activity-row:last-child { border-bottom: none; }
+  .cockpit-activity-ts {
+    color: #666;
+    font-variant-numeric: tabular-nums;
+    margin-right: 8px;
+  }
+  .cockpit-activity-kind {
+    display: inline-block;
+    background: #2a2a2a;
+    color: #aaa;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 0.78em;
+    margin-right: 6px;
+  }
+  .cockpit-activity-kind.mentor { background: #2a4a7a; color: #e8e8ff; }
+  .cockpit-activity-kind.conflict { background: #7a2a2a; color: #ffe8e8; }
+  .cockpit-activity-kind.blocker { background: #7a5a2a; color: #fff5e8; }
+  .cockpit-activity-kind.task { background: #2a5a3a; color: #e8ffe8; }
+  .cockpit-activity-kind.escalation { background: #aa3333; color: white; }
+  .cockpit-activity-body { color: #ccc; word-break: break-word; }
+
+  /* Module 4: SAFETY / REWIND — collapsible, small by default */
+  .cockpit-safety {
+    padding: 8px 12px;
+    border-bottom: 1px solid #2a2a2a;
+    flex-shrink: 0;
+  }
+  .cockpit-checkpoints-list {
+    max-height: 100px;
+    overflow-y: auto;
+  }
+  .cockpit-checkpoint-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 0.85em;
+  }
+  .cockpit-checkpoint-sha {
+    color: #aaa;
+    font-variant-numeric: tabular-nums;
+  }
+  .cockpit-checkpoint-label { color: #ccc; flex: 1 1 auto; }
+  .cockpit-checkpoint-ts    { color: #666; font-size: 0.85em; }
+  .cockpit-rewind-btn {
+    background: transparent;
+    color: #5d8dd4;
+    border: 1px solid #2a4a7a;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 0.78em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-rewind-btn:hover:not(:disabled) {
+    background: #2a4a7a;
+    color: white;
+  }
+  .cockpit-rewind-btn:disabled { color: #555; border-color: #333; cursor: not-allowed; }
+
+  /* Onboarding / empty state (Phase 7) — compact banner; the
+     full-screen "What is Cairn?" lives in the overlay */
+  .cockpit-onboarding {
+    padding: 10px 12px;
+    text-align: center;
+    border-bottom: 1px solid #2a2a2a;
+    background: #1f1f1f;
+    flex-shrink: 0;
+  }
+  .cockpit-onboarding-body { max-width: 480px; margin: 0 auto; }
+  .cockpit-onboarding-title {
+    font-size: 0.95em;
+    color: #ddd;
+    margin-bottom: 4px;
+  }
+  .cockpit-onboarding-message {
+    color: #999;
+    font-size: 0.82em;
+    margin-bottom: 8px;
+  }
+  .cockpit-onboarding-actions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .cockpit-onboarding-actions button {
+    background: #2a4a7a;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 16px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9em;
+  }
+  .cockpit-onboarding-actions button:hover { background: #355a90; }
+  .cockpit-onboarding-link {
+    color: #5d8dd4;
+    font-size: 0.85em;
+    text-decoration: none;
+    margin-top: 4px;
+  }
+  .cockpit-onboarding-link:hover { text-decoration: underline; }
+
+  /* "What is Cairn?" inline help overlay */
+  .cockpit-help-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(20,20,20,0.96);
+    z-index: 50;
+    overflow-y: auto;
+    padding: 20px;
+    display: none;
+  }
+  .cockpit-help-overlay.open { display: block; }
+  .cockpit-help-overlay h3 { color: #eee; margin: 12px 0 4px; }
+  .cockpit-help-overlay p { color: #ccc; line-height: 1.5; font-size: 0.88em; }
+  .cockpit-help-overlay code {
+    background: #2a2a2a;
+    color: #ffaa66;
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 0.85em;
+  }
+  .cockpit-help-overlay .cockpit-help-close {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    color: #888;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    font-size: 1.2em;
+  }
+  .cockpit-help-overlay .cockpit-help-close:hover { color: #eee; }
+
+  /* Module 5: NEEDS YOU — small by default, expands when escalations present */
+  .cockpit-needs {
+    padding: 8px 12px;
+    flex-shrink: 0;
+  }
+  .cockpit-needs.active {
+    background: #2a1414;
+    border-top: 2px solid #ff5555;
+  }
+  .cockpit-needs.active .cockpit-section-title { color: #ff7070; }
+  .cockpit-needs-empty { color: #666; font-style: italic; font-size: 0.85em; }
+  .cockpit-needs-list { max-height: 200px; overflow-y: auto; }
+  .cockpit-needs-row {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: #2a1818;
+    border-left: 3px solid #ff5555;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  .cockpit-needs-reason {
+    color: #ff8080;
+    font-size: 0.78em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .cockpit-needs-body { color: #eee; margin-bottom: 6px; word-break: break-word; }
+  .cockpit-needs-actions { display: flex; gap: 6px; }
+  .cockpit-needs-actions button {
+    background: #4a2a2a;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-needs-actions button:hover { background: #6a3a3a; }
+
+
   .pl-section-title {
     padding: 6px 12px 3px;
     color: #666;
@@ -2213,6 +2610,125 @@
             <div class="placeholder">No conflicts.</div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!--
+    L2 — single-project COCKPIT (panel-cockpit-redesign, Phase 2).
+    Replaces the old view-project Quick-Slice multi-card surface for users
+    who have a project selected. 5 modules per plan §3:
+      Module 1: state strip   (.cockpit-state)
+      Module 2: steer         (.cockpit-steer)
+      Module 3: activity feed (.cockpit-activity)
+      Module 4: safety/rewind (.cockpit-safety)
+      Module 5: needs-you     (.cockpit-needs)
+    Project tabs render above the modules; each tab opens its own cockpit
+    body. Wiring lives in panel.js renderCockpit() and setView('cockpit').
+  -->
+  <div id="view-cockpit" hidden>
+    <!-- Project tabs strip -->
+    <div id="cockpit-tabs" class="cockpit-tabs">
+      <!-- populated by renderCockpitTabs() -->
+    </div>
+
+    <!-- Onboarding / empty state (visible when no project / no goal) -->
+    <div class="cockpit-onboarding" id="cockpit-onboarding" hidden>
+      <div class="cockpit-onboarding-body">
+        <div class="cockpit-onboarding-title" id="cockpit-onboarding-title">📋 Inbox is empty.</div>
+        <div class="cockpit-onboarding-message" id="cockpit-onboarding-message">
+          Start by adding a project and defining a goal so Mentor can run.
+        </div>
+        <div class="cockpit-onboarding-actions">
+          <button id="cockpit-onboarding-add-project" type="button">＋ Add a project</button>
+          <button id="cockpit-onboarding-set-goal" type="button" hidden>✎ Define goal</button>
+          <a id="cockpit-onboarding-help" class="cockpit-onboarding-link" href="#">What is Cairn?</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Module 1: STATE STRIP -->
+    <div class="cockpit-state" id="cockpit-state">
+      <div class="cockpit-status-line">
+        <span class="cockpit-status-dot" id="cockpit-status-dot">○</span>
+        <span class="cockpit-status-text" id="cockpit-status-text">loading…</span>
+      </div>
+      <div class="cockpit-status-detail" id="cockpit-status-detail">
+        <span class="cockpit-progress-bar" id="cockpit-progress-bar"></span>
+        <span class="cockpit-progress-text" id="cockpit-progress-text">—</span>
+      </div>
+      <div class="cockpit-current-task" id="cockpit-current-task">—</div>
+      <div class="cockpit-mentor-nudge" id="cockpit-mentor-nudge">—</div>
+    </div>
+
+    <!-- Module 2: STEER (radio to agent) -->
+    <div class="cockpit-steer" id="cockpit-steer">
+      <label class="cockpit-steer-label">给 agent 说一句:</label>
+      <div class="cockpit-steer-row">
+        <input id="cockpit-steer-input" type="text" placeholder="一句话引导 agent…" />
+        <button id="cockpit-steer-send" type="button">Send</button>
+      </div>
+      <div class="cockpit-steer-status" id="cockpit-steer-status"></div>
+    </div>
+
+    <!-- Module 3: ACTIVITY FEED -->
+    <div class="cockpit-activity" id="cockpit-activity">
+      <div class="cockpit-section-title">Activity</div>
+      <div class="cockpit-activity-filters">
+        <button class="cockpit-filter active" data-filter="all">all</button>
+        <button class="cockpit-filter" data-filter="mentor">Mentor</button>
+        <button class="cockpit-filter" data-filter="agent">agent</button>
+        <button class="cockpit-filter" data-filter="state">state</button>
+      </div>
+      <div class="cockpit-activity-list" id="cockpit-activity-list">
+        <div class="placeholder">no activity yet</div>
+      </div>
+    </div>
+
+    <!-- Module 4: SAFETY / REWIND -->
+    <div class="cockpit-safety" id="cockpit-safety">
+      <div class="cockpit-section-title">⌛ Safety / Rewind</div>
+      <div class="cockpit-checkpoints-list" id="cockpit-checkpoints-list">
+        <div class="placeholder">no checkpoints yet</div>
+      </div>
+    </div>
+
+    <!-- "What is Cairn?" inline help overlay (Phase 7 onboarding) -->
+    <div class="cockpit-help-overlay" id="cockpit-help-overlay">
+      <button class="cockpit-help-close" id="cockpit-help-close" type="button">✕</button>
+      <h3>Cairn — 一句话</h3>
+      <p>
+        Cairn 是<strong>你的 AI 编程工人组合管理面</strong>。
+        agent（Claude Code / Cursor / Codex / Aider 等）是<em>真正写代码的引擎</em>；
+        Cairn 是仪表盘 + 方向盘 + 急刹车，让你能放心走开、回来看进度、必要时拉回方向。
+      </p>
+      <h3>5 个模块</h3>
+      <p>
+        <strong>① State Strip</strong>：项目跑得怎样、Mentor 上次说啥<br>
+        <strong>② Steer</strong>：不切 session 直接给 agent 发话<br>
+        <strong>③ Activity</strong>：按时间排的 agent + Mentor 全流水<br>
+        <strong>④ Safety</strong>：一键回退到某个 checkpoint<br>
+        <strong>⑤ Needs You</strong>：Mentor 搞不定才闪红
+      </p>
+      <h3>键盘快捷键</h3>
+      <p>
+        <code>j</code> / <code>k</code> 上下浏览 activity；
+        <code>/</code> 聚焦 steer 输入；
+        <code>Enter</code> 发送；
+        <code>Esc</code> 返回 projects 列表；
+        <code>?</code> 打开这页帮助
+      </p>
+      <h3>Mentor 边界</h3>
+      <p>
+        Cairn 内置 Mentor 是<em>引导员</em>，不是<em>决策者</em>。战略决策（"下一个 feature 是啥"）走外部 coding agent；Mentor 只做监督 + 引导 + 辅助提效。
+      </p>
+    </div>
+
+    <!-- Module 5: NEEDS YOU -->
+    <div class="cockpit-needs" id="cockpit-needs">
+      <div class="cockpit-section-title">Needs you</div>
+      <div class="cockpit-needs-list" id="cockpit-needs-list">
+        <div class="cockpit-needs-empty">Mentor handling — agent on track.</div>
       </div>
     </div>
   </div>
