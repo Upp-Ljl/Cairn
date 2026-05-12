@@ -94,7 +94,7 @@ function escapeHtml(s) {
 // View state — Project-Aware (L1 default; L2 when selectedProject is set)
 // ---------------------------------------------------------------------------
 
-let currentView = 'projects'; // 'projects' | 'project' | 'unassigned'
+let currentView = 'projects'; // 'projects' | 'project' | 'cockpit' | 'unassigned'
 /** @type {{id:string,label:string,project_root:string,db_path:string}|null} */
 let selectedProject = null;
 /** @type {string|null} db_path the user is drilling into in the Unassigned view */
@@ -110,9 +110,12 @@ function setView(name, meta) {
   // possibly-different project anyway). Same applies to the agent
   // filter chip and the Unassigned drill-down: each L2 entry starts
   // with a clean slate.
-  const nextProjectId = (name === 'project' && meta) ? meta.id : null;
+  // Both 'project' (legacy multi-card) and 'cockpit' (new redesign) are
+  // single-project views — the DB-attribution clearing rules apply to both.
+  const isProjectView = (name === 'project' || name === 'cockpit');
+  const nextProjectId = (isProjectView && meta) ? meta.id : null;
   const prevProjectId = selectedProject ? selectedProject.id : null;
-  if (name !== 'project' || nextProjectId !== prevProjectId) {
+  if (!isProjectView || nextProjectId !== prevProjectId) {
     clearTaskSelection();
     selectedAgentId = null;
   }
@@ -143,7 +146,7 @@ function setView(name, meta) {
   const menuPop = document.getElementById('menu-pop');
   if (menuPop) menuPop.classList.remove('open');
   currentView = name;
-  if (name === 'project') {
+  if (name === 'project' || name === 'cockpit') {
     selectedProject = meta || null;
   } else if (name === 'unassigned') {
     selectedUnassignedDbPath = (meta && meta.db_path) || null;
@@ -153,6 +156,7 @@ function setView(name, meta) {
   }
   document.getElementById('view-projects-list').hidden = (name !== 'projects');
   document.getElementById('view-project').hidden       = (name !== 'project');
+  document.getElementById('view-cockpit').hidden       = (name !== 'cockpit');
   document.getElementById('view-unassigned').hidden    = (name !== 'unassigned');
   // Back-button menu item visible in any non-L1 view.
   const backBtn = document.getElementById('menu-back-to-projects');
@@ -176,7 +180,7 @@ function renderHeaderForView() {
   if (currentView === 'projects') {
     wl.textContent = 'Cairn — Projects';
     dp.textContent = '';
-  } else if (currentView === 'project' && selectedProject) {
+  } else if ((currentView === 'project' || currentView === 'cockpit') && selectedProject) {
     wl.textContent = selectedProject.label || '(project)';
     dp.textContent = `DB: ${shortBasename(selectedProject.db_path)}`;
   } else if (currentView === 'unassigned') {
@@ -3376,7 +3380,10 @@ function renderProjectsList(payload) {
       if (!proj) return;
       const res = await window.cairn.selectProject(id);
       if (res && res.ok) {
-        setView('project', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
+        // panel-cockpit-redesign Phase 2: default to cockpit view; legacy
+        // multi-card project view remains available via the data attribute
+        // toggle (Phase 7 polishing decides whether to delete it entirely).
+        setView('cockpit', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
       }
     });
   });
@@ -3620,6 +3627,15 @@ async function poll() {
         : null;
       renderHeaderForView();
       renderUnassignedDetail(detail);
+    } else if (currentView === 'cockpit') {
+      // L2 redesign — single-project cockpit (Phase 2). Fetch the
+      // unified cockpit payload and render the 5 modules.
+      const state = selectedProject
+        ? await window.cairn.getCockpitState(selectedProject.id, {})
+        : null;
+      renderHeaderForView();
+      renderCockpit(state);
+      renderCockpitTabs(lastProjectsPayload, selectedProject);
     } else {
       // L2 view — Quick-Slice surface scoped to the active project.
       const summaryP = window.cairn.getProjectSummary();
@@ -3762,7 +3778,7 @@ document.addEventListener('keydown', e => {
       return;
     }
     // Otherwise: any non-L1 view returns to L1; L1 closes the panel.
-    if (currentView === 'project') {
+    if (currentView === 'project' || currentView === 'cockpit') {
       window.cairn.selectProject(null).then(() => setView('projects', null));
     } else if (currentView === 'unassigned') {
       setView('projects', null);
@@ -3771,3 +3787,284 @@ document.addEventListener('keydown', e => {
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// COCKPIT RENDERERS (panel-cockpit-redesign Phase 2)
+// ---------------------------------------------------------------------------
+
+/** Active activity-feed filter. 'all' | 'mentor' | 'agent' | 'state' */
+let cockpitActivityFilter = 'all';
+
+const AUTOPILOT_COPY = {
+  NO_GOAL: {
+    dot: 'grey', text: '没目标 — 设置一个 goal 才能让 Mentor 工作',
+    headlineClass: '',
+  },
+  AGENT_IDLE: {
+    dot: 'grey', text: 'agent 空闲 · 没人在跑这个项目',
+    headlineClass: '',
+  },
+  AGENT_WORKING: {
+    dot: 'green', text: 'agent 在执行 · Mentor 在引导 · 你可以走开',
+    headlineClass: '',
+  },
+  MENTOR_BLOCKED_NEED_USER: {
+    dot: 'red', text: 'Mentor 处理不了 — 需要你的决定',
+    headlineClass: 'red',
+  },
+};
+
+function fmtAgo(ts) {
+  if (!ts) return '';
+  const dt = Date.now() - ts;
+  if (dt < 0) return 'now';
+  const s = Math.floor(dt / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function fmtHm(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function activityKindLabel(kind) {
+  if (!kind) return '?';
+  if (kind === 'mentor_nudge') return 'Mentor';
+  if (kind === 'escalation_raised') return 'Escalate';
+  if (kind === 'conflict_detected') return 'Conflict';
+  if (kind === 'conflict_resolved') return 'Resolved';
+  if (kind === 'blocker_raised') return 'Blocked';
+  if (kind === 'blocker_answered') return 'Answered';
+  if (kind === 'checkpoint_created') return 'Checkpoint';
+  if (kind === 'agent_register') return 'Agent';
+  if (kind === 'agent_dead') return 'Agent dead';
+  if (kind.startsWith('task_')) return kind.replace('task_', 'Task ');
+  if (kind.startsWith('dispatch_')) return kind.replace('dispatch_', 'Dispatch ');
+  if (kind.startsWith('outcomes_')) return kind.replace('outcomes_', 'Outcome ');
+  return kind;
+}
+
+function activityKindClass(kind) {
+  if (!kind) return '';
+  if (kind === 'mentor_nudge') return 'mentor';
+  if (kind === 'escalation_raised') return 'escalation';
+  if (kind.startsWith('conflict_')) return 'conflict';
+  if (kind.startsWith('blocker_')) return 'blocker';
+  if (kind.startsWith('task_')) return 'task';
+  return '';
+}
+
+function activityFilterMatches(kind) {
+  if (cockpitActivityFilter === 'all') return true;
+  if (cockpitActivityFilter === 'mentor') {
+    return kind === 'mentor_nudge' || kind === 'escalation_raised';
+  }
+  if (cockpitActivityFilter === 'agent') {
+    return kind.startsWith('task_') || kind.startsWith('agent_') || kind === 'checkpoint_created';
+  }
+  if (cockpitActivityFilter === 'state') {
+    return kind.startsWith('outcomes_') || kind.startsWith('dispatch_') || kind.startsWith('conflict_') || kind.startsWith('blocker_');
+  }
+  return true;
+}
+
+function renderCockpit(state) {
+  if (!state) {
+    const dotEl = document.getElementById('cockpit-status-dot');
+    if (dotEl) dotEl.textContent = '○';
+    const textEl = document.getElementById('cockpit-status-text');
+    if (textEl) textEl.textContent = 'loading…';
+    return;
+  }
+  // Module 1: state strip
+  const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
+  const dotEl = document.getElementById('cockpit-status-dot');
+  if (dotEl) {
+    dotEl.textContent = '●';
+    dotEl.className = `cockpit-status-dot ${copy.dot}`;
+  }
+  const textEl = document.getElementById('cockpit-status-text');
+  if (textEl) {
+    textEl.textContent = copy.text;
+    textEl.className = `cockpit-status-text ${copy.headlineClass}`;
+  }
+  const pgEl = document.getElementById('cockpit-progress-bar');
+  if (pgEl) {
+    const pct = Math.round((state.progress.percent || 0) * 100);
+    pgEl.style.setProperty('--cockpit-progress', pct + '%');
+  }
+  const pgTextEl = document.getElementById('cockpit-progress-text');
+  if (pgTextEl) {
+    const p = state.progress;
+    pgTextEl.textContent =
+      `${Math.round((p.percent || 0) * 100)}%  ·  ${p.tasks_done}/${p.tasks_total} done · ${p.tasks_running} running · ${p.tasks_blocked} blocked`;
+  }
+  const ctEl = document.getElementById('cockpit-current-task');
+  if (ctEl) {
+    if (state.current_task) {
+      const t = state.current_task;
+      ctEl.textContent =
+        `当前: ${t.intent}  (${fmtAgo(t.started_at)})`;
+    } else {
+      ctEl.textContent = '(无 RUNNING task)';
+    }
+  }
+  const nudgeEl = document.getElementById('cockpit-mentor-nudge');
+  if (nudgeEl) {
+    if (state.latest_mentor_nudge && state.latest_mentor_nudge.message) {
+      const n = state.latest_mentor_nudge;
+      nudgeEl.textContent = `Mentor 上次说: "${n.message}"  (${fmtAgo(n.timestamp)})`;
+    } else {
+      nudgeEl.textContent = '(Mentor 还没发过引导)';
+    }
+  }
+
+  // Module 2: steer (just set placeholder text; Phase 3 wires Send)
+  const steerInput = document.getElementById('cockpit-steer-input');
+  const steerSend = document.getElementById('cockpit-steer-send');
+  if (steerInput && steerSend) {
+    const haveAgent = state.agents && state.agents.length > 0;
+    steerInput.disabled = !haveAgent;
+    steerSend.disabled = !haveAgent;
+    steerInput.placeholder = haveAgent
+      ? '一句话引导 agent…'
+      : '没有活跃 agent 可发话';
+  }
+
+  // Module 3: activity feed
+  const listEl = document.getElementById('cockpit-activity-list');
+  if (listEl) {
+    const filtered = (state.activity || []).filter(e => activityFilterMatches(e.kind));
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div class="placeholder">no activity yet</div>';
+    } else {
+      const rows = filtered.map(e => {
+        const ts = fmtHm(e.ts);
+        const kindLabel = activityKindLabel(e.kind);
+        const kindCls = activityKindClass(e.kind);
+        const body = escapeHtml(e.body || '');
+        return `<div class="cockpit-activity-row">
+          <span class="cockpit-activity-ts">${ts}</span>
+          <span class="cockpit-activity-kind ${kindCls}">${escapeHtml(kindLabel)}</span>
+          <span class="cockpit-activity-body">${body}</span>
+        </div>`;
+      });
+      listEl.innerHTML = rows.join('');
+    }
+  }
+
+  // Module 4: safety / rewind (list only; Phase 4 wires click)
+  const ckListEl = document.getElementById('cockpit-checkpoints-list');
+  if (ckListEl) {
+    if (!state.checkpoints || state.checkpoints.length === 0) {
+      ckListEl.innerHTML = '<div class="placeholder">no checkpoints yet</div>';
+    } else {
+      const rows = state.checkpoints.map(c => {
+        const sha = (c.git_head || c.id || '').slice(0, 8);
+        const lbl = c.label || `before commit ${sha}`;
+        return `<div class="cockpit-checkpoint-row" data-ckpt-id="${escapeHtml(c.id)}">
+          <span class="cockpit-checkpoint-sha">${escapeHtml(sha)}</span>
+          <span class="cockpit-checkpoint-label">${escapeHtml(lbl)}</span>
+          <span class="cockpit-checkpoint-ts">${fmtAgo(c.created_at)}</span>
+          <button class="cockpit-rewind-btn" data-ckpt-id="${escapeHtml(c.id)}" disabled title="Phase 4 wires the rewind action">Rewind</button>
+        </div>`;
+      });
+      ckListEl.innerHTML = rows.join('');
+    }
+  }
+
+  // Module 5: needs you
+  const needsContainer = document.getElementById('cockpit-needs');
+  const needsListEl = document.getElementById('cockpit-needs-list');
+  const pendingEscs = (state.escalations || []).filter(e => e.status === 'PENDING');
+  if (needsContainer) {
+    needsContainer.classList.toggle('active', pendingEscs.length > 0);
+  }
+  if (needsListEl) {
+    if (pendingEscs.length === 0) {
+      needsListEl.innerHTML = '<div class="cockpit-needs-empty">Mentor handling — agent on track.</div>';
+    } else {
+      const rows = pendingEscs.map(e => {
+        return `<div class="cockpit-needs-row" data-esc-id="${escapeHtml(e.id)}">
+          <div class="cockpit-needs-reason">🔴 ${escapeHtml(e.reason || 'NEEDS YOU')}</div>
+          <div class="cockpit-needs-body">${escapeHtml(e.body || '')}</div>
+          <div class="cockpit-needs-actions">
+            <button data-esc-id="${escapeHtml(e.id)}" data-action="ack" disabled title="Phase 5 wires the ack action">Acknowledge</button>
+          </div>
+        </div>`;
+      });
+      needsListEl.innerHTML = rows.join('');
+    }
+  }
+}
+
+function renderCockpitTabs(payload, sel) {
+  const el = document.getElementById('cockpit-tabs');
+  if (!el) return;
+  if (!payload || !payload.projects || payload.projects.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  const tabs = payload.projects.map(p => {
+    const isActive = sel && p.id === sel.id;
+    const summary = p.summary || {};
+    const escCount = (summary.conflicts_open || 0) + (summary.blockers_open || 0);
+    const badge = escCount > 0 ? `<span class="cockpit-tab-badge">${escCount}</span>` : '';
+    return `<div class="cockpit-tab ${isActive ? 'active' : ''}" data-project-id="${escapeHtml(p.id)}">
+      ${escapeHtml(p.label || '(no label)')}${badge}
+    </div>`;
+  }).join('');
+  el.innerHTML = tabs;
+  el.querySelectorAll('.cockpit-tab[data-project-id]').forEach(node => {
+    node.addEventListener('click', async () => {
+      const id = node.getAttribute('data-project-id');
+      const proj = payload.projects.find(p => p.id === id);
+      if (!proj) return;
+      const res = await window.cairn.selectProject(id);
+      if (res && res.ok) {
+        setView('cockpit', { id: proj.id, label: proj.label, project_root: proj.project_root, db_path: proj.db_path });
+      }
+    });
+  });
+}
+
+function setupCockpit() {
+  // Activity filter chips
+  document.querySelectorAll('.cockpit-filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.cockpit-filter').forEach(b => b.classList.toggle('active', b === btn));
+      cockpitActivityFilter = btn.getAttribute('data-filter') || 'all';
+      // Trigger a render with current state (no IPC) — Phase 3 caches state.
+      poll().catch(() => {});
+    });
+  });
+  // Steer input wiring placeholder (Phase 3 wires the IPC handler).
+  const steerSend = document.getElementById('cockpit-steer-send');
+  const steerInput = document.getElementById('cockpit-steer-input');
+  const steerStatus = document.getElementById('cockpit-steer-status');
+  if (steerInput) {
+    steerInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !steerSend.disabled) {
+        steerSend.click();
+      }
+    });
+  }
+  if (steerSend) {
+    steerSend.addEventListener('click', () => {
+      if (steerStatus) {
+        steerStatus.textContent = 'Phase 3 wires this — coming soon';
+        steerStatus.className = 'cockpit-steer-status info';
+      }
+    });
+  }
+}
+
+// Initialize cockpit setup at boot.
+setupCockpit();
+

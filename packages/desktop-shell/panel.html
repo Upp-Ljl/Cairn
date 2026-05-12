@@ -1104,6 +1104,319 @@
     overflow-y: auto;
     padding: 0;
   }
+
+  /* --------------------------------------------------------------------
+     COCKPIT MODULES (panel-cockpit-redesign Phase 2)
+     Linear/Notion 风：易读优先，每模块清晰分块，避免 journalctl 密度。
+     ------------------------------------------------------------------ */
+  #view-cockpit {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 0;
+    background: #1a1a1a;
+  }
+  .cockpit-tabs {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    padding: 8px 12px 0;
+    border-bottom: 1px solid #2a2a2a;
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .cockpit-tab {
+    padding: 6px 12px;
+    border-radius: 6px 6px 0 0;
+    background: #222;
+    color: #aaa;
+    cursor: pointer;
+    border: 1px solid #2a2a2a;
+    border-bottom: none;
+    font-size: 0.9em;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .cockpit-tab:hover { background: #2a2a2a; color: #ddd; }
+  .cockpit-tab.active { background: #1a1a1a; color: #eee; }
+  .cockpit-tab .cockpit-tab-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    background: #cc4444;
+    color: white;
+    border-radius: 8px;
+    font-size: 0.75em;
+  }
+
+  /* Module 1: STATE STRIP */
+  .cockpit-state {
+    padding: 14px 16px;
+    border-bottom: 1px solid #2a2a2a;
+    background: #1f1f1f;
+    flex-shrink: 0;
+  }
+  .cockpit-status-line {
+    font-size: 1em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .cockpit-status-dot {
+    font-size: 1.1em;
+    line-height: 1;
+  }
+  .cockpit-status-dot.green { color: #5dd45d; }
+  .cockpit-status-dot.red   { color: #ff5555; }
+  .cockpit-status-dot.grey  { color: #777; }
+  .cockpit-status-text {
+    color: #ddd;
+    font-weight: 500;
+  }
+  .cockpit-status-text.red { color: #ff7070; }
+  .cockpit-status-detail {
+    font-size: 0.85em;
+    color: #888;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .cockpit-progress-bar {
+    display: inline-block;
+    width: 120px;
+    height: 8px;
+    background: #2a2a2a;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cockpit-progress-bar::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    background: #5dd45d;
+    width: var(--cockpit-progress, 0%);
+    transition: width 200ms ease;
+  }
+  .cockpit-current-task {
+    font-size: 0.85em;
+    color: #ccc;
+    margin-bottom: 4px;
+    word-break: break-word;
+  }
+  .cockpit-mentor-nudge {
+    font-size: 0.85em;
+    color: #888;
+    font-style: italic;
+    word-break: break-word;
+  }
+
+  /* Module 2: STEER */
+  .cockpit-steer {
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a2a;
+    flex-shrink: 0;
+  }
+  .cockpit-steer-label {
+    display: block;
+    font-size: 0.85em;
+    color: #aaa;
+    margin-bottom: 6px;
+  }
+  .cockpit-steer-row {
+    display: flex;
+    gap: 6px;
+  }
+  .cockpit-steer-row input {
+    flex: 1 1 auto;
+    background: #111;
+    color: #eee;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 0.95em;
+  }
+  .cockpit-steer-row input:focus {
+    outline: none;
+    border-color: #5d8dd4;
+  }
+  .cockpit-steer-row button {
+    background: #2a4a7a;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-steer-row button:hover:not(:disabled) { background: #355a90; }
+  .cockpit-steer-row button:disabled { background: #333; color: #666; cursor: not-allowed; }
+  .cockpit-steer-status {
+    font-size: 0.8em;
+    color: #5dd45d;
+    margin-top: 6px;
+    min-height: 1em;
+  }
+  .cockpit-steer-status.error { color: #ff7070; }
+  .cockpit-steer-status.info  { color: #aaa; }
+
+  /* Module 3: ACTIVITY FEED */
+  .cockpit-activity {
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a2a;
+    flex: 1 1 auto;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+  }
+  .cockpit-section-title {
+    font-size: 0.85em;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .cockpit-activity-filters {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .cockpit-filter {
+    background: transparent;
+    color: #888;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 0.78em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-filter:hover { color: #ccc; border-color: #444; }
+  .cockpit-filter.active {
+    background: #2a4a7a;
+    color: white;
+    border-color: #2a4a7a;
+  }
+  .cockpit-activity-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .cockpit-activity-row {
+    padding: 6px 0;
+    border-bottom: 1px solid #232323;
+    font-size: 0.85em;
+    line-height: 1.4;
+  }
+  .cockpit-activity-row:last-child { border-bottom: none; }
+  .cockpit-activity-ts {
+    color: #666;
+    font-variant-numeric: tabular-nums;
+    margin-right: 8px;
+  }
+  .cockpit-activity-kind {
+    display: inline-block;
+    background: #2a2a2a;
+    color: #aaa;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 0.78em;
+    margin-right: 6px;
+  }
+  .cockpit-activity-kind.mentor { background: #2a4a7a; color: #e8e8ff; }
+  .cockpit-activity-kind.conflict { background: #7a2a2a; color: #ffe8e8; }
+  .cockpit-activity-kind.blocker { background: #7a5a2a; color: #fff5e8; }
+  .cockpit-activity-kind.task { background: #2a5a3a; color: #e8ffe8; }
+  .cockpit-activity-kind.escalation { background: #aa3333; color: white; }
+  .cockpit-activity-body { color: #ccc; word-break: break-word; }
+
+  /* Module 4: SAFETY / REWIND */
+  .cockpit-safety {
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a2a;
+    flex-shrink: 0;
+  }
+  .cockpit-checkpoints-list {
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .cockpit-checkpoint-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 0.85em;
+  }
+  .cockpit-checkpoint-sha {
+    color: #aaa;
+    font-variant-numeric: tabular-nums;
+  }
+  .cockpit-checkpoint-label { color: #ccc; flex: 1 1 auto; }
+  .cockpit-checkpoint-ts    { color: #666; font-size: 0.85em; }
+  .cockpit-rewind-btn {
+    background: transparent;
+    color: #5d8dd4;
+    border: 1px solid #2a4a7a;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 0.78em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-rewind-btn:hover:not(:disabled) {
+    background: #2a4a7a;
+    color: white;
+  }
+  .cockpit-rewind-btn:disabled { color: #555; border-color: #333; cursor: not-allowed; }
+
+  /* Module 5: NEEDS YOU */
+  .cockpit-needs {
+    padding: 12px 16px;
+    flex-shrink: 0;
+  }
+  .cockpit-needs.active {
+    background: #2a1414;
+    border-top: 2px solid #ff5555;
+  }
+  .cockpit-needs.active .cockpit-section-title { color: #ff7070; }
+  .cockpit-needs-empty { color: #666; font-style: italic; font-size: 0.85em; }
+  .cockpit-needs-list { max-height: 200px; overflow-y: auto; }
+  .cockpit-needs-row {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: #2a1818;
+    border-left: 3px solid #ff5555;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  .cockpit-needs-reason {
+    color: #ff8080;
+    font-size: 0.78em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .cockpit-needs-body { color: #eee; margin-bottom: 6px; word-break: break-word; }
+  .cockpit-needs-actions { display: flex; gap: 6px; }
+  .cockpit-needs-actions button {
+    background: #4a2a2a;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-needs-actions button:hover { background: #6a3a3a; }
+
+
   .pl-section-title {
     padding: 6px 12px 3px;
     color: #666;
@@ -2218,6 +2531,79 @@
             <div class="placeholder">No conflicts.</div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!--
+    L2 — single-project COCKPIT (panel-cockpit-redesign, Phase 2).
+    Replaces the old view-project Quick-Slice multi-card surface for users
+    who have a project selected. 5 modules per plan §3:
+      Module 1: state strip   (.cockpit-state)
+      Module 2: steer         (.cockpit-steer)
+      Module 3: activity feed (.cockpit-activity)
+      Module 4: safety/rewind (.cockpit-safety)
+      Module 5: needs-you     (.cockpit-needs)
+    Project tabs render above the modules; each tab opens its own cockpit
+    body. Wiring lives in panel.js renderCockpit() and setView('cockpit').
+  -->
+  <div id="view-cockpit" hidden>
+    <!-- Project tabs strip -->
+    <div id="cockpit-tabs" class="cockpit-tabs">
+      <!-- populated by renderCockpitTabs() -->
+    </div>
+
+    <!-- Module 1: STATE STRIP -->
+    <div class="cockpit-state" id="cockpit-state">
+      <div class="cockpit-status-line">
+        <span class="cockpit-status-dot" id="cockpit-status-dot">○</span>
+        <span class="cockpit-status-text" id="cockpit-status-text">loading…</span>
+      </div>
+      <div class="cockpit-status-detail" id="cockpit-status-detail">
+        <span class="cockpit-progress-bar" id="cockpit-progress-bar"></span>
+        <span class="cockpit-progress-text" id="cockpit-progress-text">—</span>
+      </div>
+      <div class="cockpit-current-task" id="cockpit-current-task">—</div>
+      <div class="cockpit-mentor-nudge" id="cockpit-mentor-nudge">—</div>
+    </div>
+
+    <!-- Module 2: STEER (radio to agent) -->
+    <div class="cockpit-steer" id="cockpit-steer">
+      <label class="cockpit-steer-label">给 agent 说一句:</label>
+      <div class="cockpit-steer-row">
+        <input id="cockpit-steer-input" type="text" placeholder="一句话引导 agent…" />
+        <button id="cockpit-steer-send" type="button">Send</button>
+      </div>
+      <div class="cockpit-steer-status" id="cockpit-steer-status"></div>
+    </div>
+
+    <!-- Module 3: ACTIVITY FEED -->
+    <div class="cockpit-activity" id="cockpit-activity">
+      <div class="cockpit-section-title">Activity</div>
+      <div class="cockpit-activity-filters">
+        <button class="cockpit-filter active" data-filter="all">all</button>
+        <button class="cockpit-filter" data-filter="mentor">Mentor</button>
+        <button class="cockpit-filter" data-filter="agent">agent</button>
+        <button class="cockpit-filter" data-filter="state">state</button>
+      </div>
+      <div class="cockpit-activity-list" id="cockpit-activity-list">
+        <div class="placeholder">no activity yet</div>
+      </div>
+    </div>
+
+    <!-- Module 4: SAFETY / REWIND -->
+    <div class="cockpit-safety" id="cockpit-safety">
+      <div class="cockpit-section-title">⌛ Safety / Rewind</div>
+      <div class="cockpit-checkpoints-list" id="cockpit-checkpoints-list">
+        <div class="placeholder">no checkpoints yet</div>
+      </div>
+    </div>
+
+    <!-- Module 5: NEEDS YOU -->
+    <div class="cockpit-needs" id="cockpit-needs">
+      <div class="cockpit-section-title">Needs you</div>
+      <div class="cockpit-needs-list" id="cockpit-needs-list">
+        <div class="cockpit-needs-empty">Mentor handling — agent on track.</div>
       </div>
     </div>
   </div>
