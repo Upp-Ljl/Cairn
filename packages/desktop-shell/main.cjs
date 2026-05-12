@@ -51,6 +51,7 @@ const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
 const cockpitState = require('./cockpit-state.cjs');
 const cockpitSteer = require('./cockpit-steer.cjs');
+const cockpitRewind = require('./cockpit-rewind.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -861,6 +862,33 @@ ipcMain.handle('cockpit-steer', (_e, input) => {
     copyToClipboard: (text) => {
       try { clipboard.writeText(text); } catch (_e) {}
     },
+  });
+});
+
+// Cockpit redesign Phase 4 — Module 4 REWIND.
+// D9.1 tier-B mutation: caller MUST surface inline confirm dialog
+// before invoking rewindTo. Preview is safe to call unprompted.
+ipcMain.handle('cockpit-rewind-preview', (_e, input) => {
+  if (!input || !input.project_id || !input.checkpoint_id) {
+    return { ok: false, error: 'project_id_checkpoint_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return cockpitRewind.previewRewind(entry.db, entry.tables, proj, input.checkpoint_id);
+});
+
+ipcMain.handle('cockpit-rewind-to', (_e, input) => {
+  if (!input || !input.project_id || !input.checkpoint_id) {
+    return { ok: false, error: 'project_id_checkpoint_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return cockpitRewind.performRewind(entry.db, entry.tables, proj, input.checkpoint_id, {
+    skipAutoCheckpoint: !!input.skip_auto_checkpoint,
   });
 });
 

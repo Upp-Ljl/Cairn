@@ -3972,7 +3972,7 @@ function renderCockpit(state) {
           <span class="cockpit-checkpoint-sha">${escapeHtml(sha)}</span>
           <span class="cockpit-checkpoint-label">${escapeHtml(lbl)}</span>
           <span class="cockpit-checkpoint-ts">${fmtAgo(c.created_at)}</span>
-          <button class="cockpit-rewind-btn" data-ckpt-id="${escapeHtml(c.id)}" disabled title="Phase 4 wires the rewind action">Rewind</button>
+          <button class="cockpit-rewind-btn" data-ckpt-id="${escapeHtml(c.id)}" title="Rewind tree to this checkpoint (will stash any local changes first)">Rewind</button>
         </div>`;
       });
       ckListEl.innerHTML = rows.join('');
@@ -4109,6 +4109,77 @@ function setupCockpit() {
     });
   }
 }
+
+async function handleRewindClick(checkpointId, btn) {
+  if (!selectedProject || !checkpointId) return;
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = '…';
+  let preview;
+  try {
+    preview = await window.cairn.cockpitRewindPreview({
+      project_id: selectedProject.id,
+      checkpoint_id: checkpointId,
+    });
+  } catch (e) {
+    alert('Rewind preview failed: ' + ((e && e.message) || e));
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+  if (!preview || !preview.ok) {
+    alert(`Rewind preview failed: ${(preview && preview.error) || 'unknown'}\n${(preview && preview.hint) || ''}`);
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+  // D9.1 tier-B inline confirm dialog
+  const lines = [
+    `Rewind to checkpoint ${preview.checkpoint.git_head.slice(0, 8)}?`,
+    '',
+    preview.checkpoint.label ? `Label: ${preview.checkpoint.label}` : '',
+    `Current HEAD: ${preview.head_sha.slice(0, 8)}${preview.head_matches ? ' (matches)' : ''}`,
+    `Working tree: ${preview.working_tree.dirty ? `DIRTY (${preview.working_tree.total_changed} files)` : 'clean'}`,
+    '',
+    preview.working_tree.dirty
+      ? `Cairn will stash your changes (safety net) and restore tree to ${preview.checkpoint.git_head.slice(0, 8)}.`
+      : `Cairn will restore tree to ${preview.checkpoint.git_head.slice(0, 8)}.`,
+    '',
+    'Continue?',
+  ].filter(Boolean).join('\n');
+  if (!confirm(lines)) {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+  btn.textContent = 'Rewinding…';
+  try {
+    const res = await window.cairn.cockpitRewindTo({
+      project_id: selectedProject.id,
+      checkpoint_id: checkpointId,
+    });
+    if (res && res.ok) {
+      alert(`Rewind ok (${res.mode}).\n${res.hint || ''}`);
+      poll().catch(() => {});
+    } else {
+      alert(`Rewind FAILED: ${(res && res.error) || 'unknown'}\n${(res && res.hint) || ''}\n${(res && res.stderr) || ''}`);
+    }
+  } catch (e) {
+    alert('Rewind threw: ' + ((e && e.message) || e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+// Delegate-click handler for Rewind buttons in the cockpit. Live for
+// the lifetime of the panel because we re-render the list on every poll.
+document.addEventListener('click', (ev) => {
+  const btn = ev.target.closest && ev.target.closest('.cockpit-rewind-btn');
+  if (!btn || btn.disabled) return;
+  const ck = btn.getAttribute('data-ckpt-id');
+  if (ck) handleRewindClick(ck, btn);
+});
 
 // Initialize cockpit setup at boot.
 setupCockpit();
