@@ -17,13 +17,13 @@ Cairn behaved as the **project control surface**, not a coding agent. The lifecy
 | Step | Handler | Result |
 |---|---|---|
 | 1 | `detectWorkerProviders` | claude-code available |
-| 2 | `registerManagedProject` + `startManagedIteration` + `generateManagedWorkerPrompt` | iteration started; prompt 3935 chars (1251 project rules + 2684 prompt pack) |
+| 2 | `registerManagedProject` + `startManagedIteration` + `generateManagedWorkerPrompt` | iteration started; prompt = hard-rules block + standard prompt-pack composition (exact byte count varies per run since iteration ids/timestamps are interpolated) |
 | 3 | `launchManagedWorker(provider=claude-code, prompt=...)` | spawned real `claude` CLI in `D:/lll/managed-projects/agent-game-platform` |
 | 4 | poll `getWorkerRun` until terminal | finished in <4 min, status `exited` |
 | 5 | `tailWorkerRun` | tail log non-empty; secret-leak guards confirmed (no ANTHROPIC_API_KEY / sk- / Bearer in tail) |
 | 6 | `extractManagedWorkerReport` | structured Worker Report parsed from worker stdout |
 | 7 | `collectManagedEvidence` + `reviewManagedIteration` | deterministic verdict; next-round prompt seed produced |
-| 8 | iteration persisted | `worker_run_id=wr_14a833e1eb94`, `worker_report_id=r_73e304db0f16`, `review_status=continue` |
+| 8 | iteration persisted | `review_status=continue`. Example IDs from this run: `worker_run_id=wr_14a833e1eb94`, `worker_report_id=r_73e304db0f16` (regenerated on each run) |
 
 ## What the real worker found
 
@@ -64,14 +64,16 @@ Deterministic rule: report has `remaining` ≥ 1 → verdict = `continue`. No LL
 
 ## What Cairn explicitly did NOT do
 
-Verified post-flight:
+**Asserted by the dogfood script (post-flight):**
+- `agent-game-platform` HEAD unchanged: `de6875c3a2b0faea20d581a43e5754e406432ab2` before and after (`git rev-parse HEAD` equality)
+- `agent-game-platform` working tree unchanged: `git status --short` empty post-run, 0 changed files
+- Sandboxed `~/.cairn/cairn.db` does NOT exist post-run (Cairn's writes never created the db inside the sandbox HOME)
+- Tail log contains no `ANTHROPIC_API_KEY` / OpenAI `sk-` / GitHub PAT / `Bearer` substrings (worker did not echo secrets into stdout)
 
-- `agent-game-platform` HEAD unchanged: `de6875c3a2b0faea20d581a43e5754e406432ab2` before and after
-- `agent-game-platform` working tree unchanged: 0 dirty files post-run
-- Real `~/.cairn/cairn.db` mtime unchanged (writes were sandboxed to a tmpdir)
-- No `git push` / `git commit` / `git fetch` against the target repo
-- No `npm install` / `bun install` / `pip install` against the target repo
-- No mutation of `~/.claude` or `~/.codex`
+**Held by construction (prompt rules + read-only handler whitelist; not asserted in this dogfood, covered by other smokes):**
+- Real `~/.cairn` is left untouched: the script overrides `os.homedir()` to a tmpdir BEFORE loading any Cairn module, so all repository writes are redirected; the real-DB invariant is verified separately by `smoke-managed-loop-panel.mjs` / `smoke-mentor.mjs`.
+- No `git push` / `git fetch` / `npm install` / `bun install`: forbidden by the worker prompt's hard-rules block AND by `project-evidence.cjs::collectEvidence`'s exact-argv `git` whitelist.
+- No mutation of `~/.claude` or `~/.codex`: enforced by the agent-adapter scan layer (metadata-only / first-line-only adapters); separate smokes assert mtime invariance.
 
 ## Worker contract honored
 
@@ -95,8 +97,8 @@ The four claims `docs/workflow/ROADMAP.md` makes about Phase 6 are now all true:
 ## Reproducing
 
 ```bash
-# clone target once
-mkdir -p D:/lll/managed-projects && cd D:/lll/managed-projects
+# clone target once (any path you like)
+mkdir -p ~/managed-projects && cd ~/managed-projects
 git clone https://github.com/anzy-renlab-ai/agent-game-platform.git
 
 # from any Cairn checkout (worktree or main)
@@ -104,14 +106,21 @@ node packages/desktop-shell/scripts/dogfood-real-claude-managed-loop.mjs
 # expect: 22/22 assertions pass
 ```
 
+If your local clone is not at `D:/lll/managed-projects/agent-game-platform`, override the path:
+
+```bash
+CAIRN_DOGFOOD_REPO_PATH=/your/clone/path \
+  node packages/desktop-shell/scripts/dogfood-real-claude-managed-loop.mjs
+```
+
 Add `--use-real-home` to let the run land in your actual `~/.cairn` so the desktop panel can see the iteration on next open.
 
 ## Cost
 
-One real Claude Code invocation, sonnet model, ~2400 input tokens (prompt) + ~1100 output tokens (worker report). Single round. The verdict logic and review pass run in Node, no LLM.
+One real Claude Code invocation, sonnet model. Token counts not logged by the script — order of magnitude is a few thousand input + ~1k output for a single round. The verdict logic and review pass run in Node, no LLM.
 
 ## Open items (Later-scope)
 
 - Auto-trigger next round when verdict is `continue` (currently user picks)
 - Optional `allow_run_tests: true` path so the worker actually runs `bun test` and Cairn captures it as evidence
-- A Mode B Continuous Iteration version where Scout → Worker → Review chains within explicit authorization (handlers exist; needs end-to-end script parity with this managed-loop dogfood)
+- A Mode B Continuous Iteration version (Mode B = the v4 Operations Layer "executor under explicit authorization" mode that auto-chains Scout → Worker → Review and stops at REVIEWED — handlers exist in `managed-loop-handlers.cjs`; what's missing is end-to-end script parity with this managed-loop dogfood)
