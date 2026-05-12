@@ -179,6 +179,8 @@ If any gate diverges, the demo is not over — the demo runner re-asserts before
 Locked off this DUCKPLAN to prevent scope creep:
 
 - **Forcing a collision when none happens naturally.** If both agents finish without overlap, the demo records "two parallel agents managed cleanly, no conflict surfaced this run" — that is still a valid demo of Cairn's capability surface. The README + recording-narration calls this out.
+- **Reading `~/.claude/daemon/roster.json` or any Agent View internal state.** Undocumented surface; Later when Anthropic ships an API. See §9.
+- **Side-by-side Agent View + Cairn panel screen-capture.** Different demo, separate plan. See §9.
 - **Live Run Log (events table)** — Later-scope per PRODUCT.md v3 §12 D10. The Run Log timeline view is not built; the demo evidence uses screenshots of the existing legacy Inspector + log output instead.
 - **Mode B auto-redispatch after RESOLVED** — the "high gate" in §3. Not in this demo. The handlers exist (per the Mode B smoke 42/42); a Mode B-chained demo is a follow-up.
 - **Code-signing / SmartScreen warning suppression on Cairn.exe.**
@@ -211,6 +213,9 @@ These are the decisions made interactively during plan grilling. If future-me wo
 | 4 | Bail-out if no collision? | **No collision is still a valid demo** — Cairn surfaces 2 sessions; mechanism is on screen even if the row never appears. |
 | 4 | Resolve path? | **CAIRN_DESKTOP_ENABLE_MUTATIONS=1 + legacy Inspector** — demo-only flag. User clicks Resolve manually on camera. |
 | 4 | Recording? | **User-driven** — demo script does not script-record. |
+| 5 | Cairn × Agent View positioning? | **Both audiences served: Cairn panel is self-adaptive.** When Claude Code's Agent View is running, Cairn panel compresses the agent-presence list (it would be duplicate) and emphasizes what Agent View can't see (conflicts / Mentor / rewind / cross-tool). When Agent View not running, Cairn panel shows the full agent list. Implementation hook: Cairn panel detects `~/.claude/daemon/` presence at panel-open. See §9 for fuller framing. |
+| 5 | Use `claude agents` background mode in demo? | **No — keep vanilla `claude` CLI invocation (same as Phase 6).** The user's principle is "don't artificially engineer the conflict story" — applies to launch mode too. Trade-off accepted: Agent View won't render the demo sessions, but the demo's audience (team/partner internal alignment, round 1) doesn't need that side-by-side. The Cairn-vs-Agent-View comparison story is captured in §9, not enacted in this run. |
+| 5 | Read `~/.claude/daemon/roster.json` in demo? | **No — stay cross-tool neutral.** Coupling to undocumented Anthropic state files is a Later decision; this demo does not depend on it. |
 
 ---
 
@@ -240,3 +245,50 @@ Reversible / local-scope decisions delegated to the agent doing the implementati
 
 Open question (NOT blocking this plan, asks back to user before EXECUTING):
 - **Do we want to keep the `demo/...` branch on agent-game-platform indefinitely as proof, or delete after one team-meeting?** Default: delete after one team meeting (≤7 days).
+
+---
+
+## 9. Cairn × Claude Code Agent View — positioning (Round 5 grilled-out)
+
+Anthropic shipped Agent View (Research Preview, May 2026) covering: list of CC background sessions, peek/attach/detach/stop, Haiku-summarized activity. State at `~/.claude/daemon/roster.json` + `~/.claude/jobs/<id>/state.json`. **No documented programmatic API.** Source: https://code.claude.com/docs/en/agent-view
+
+### What Agent View covers vs what Cairn covers
+
+| Capability | Agent View | Cairn |
+|---|---|---|
+| List CC background sessions, peek/attach/reply/stop | ✅ | partial (panel is read-only by default) |
+| Cross-tool visibility (Codex, Cursor, Aider, vanilla `claude`) | ❌ | ✅ |
+| pre-commit hook conflict detection (PENDING_REVIEW) | ❌ | ✅ |
+| Mentor — ranked work items with WHY + confidence | ❌ | ✅ |
+| Rewind / checkpoint / resume packet | ❌ | ✅ |
+| Scratchpad inter-agent context | ❌ | ✅ |
+| Project-scoped, multi-project view | ❌ (CC-only) | ✅ |
+| Documented external coordinator API | N/A | N/A |
+
+Agent View covers approximately 1/4 of Cairn's value surface — the agent-presence display. The other 3/4 (cross-tool, kernel-level state, Mentor brain, rewind) Anthropic does not address.
+
+### Cairn's positioning relative to Agent View
+
+**Cairn is the substrate Anthropic doesn't ship.** When both are running on the same machine, the user's natural mental model is:
+
+- **Agent View** = "live attention layer" — what's running, what needs my input, what state is each
+- **Cairn** = "coordination + memory layer" — what conflicts, what's the recommended next work, what's recoverable, what's seen across tools
+
+These are complementary, not competing. The product strategy is:
+
+1. **Do NOT ship a session-list UI that competes with Agent View on its strongest axis.** Cairn's panel agent-presence list will become a "fallback" view active when Agent View is not detected.
+2. **Self-adaptive panel**: at panel-open, detect `~/.claude/daemon/` presence. If detected → compress agent-presence display, highlight Cairn-unique surfaces (conflicts / Mentor / rewind / cross-tool agents). If not → full agent-presence display.
+3. **Do not depend on undocumented Anthropic state files.** Reading `roster.json` would be useful but the surface can break on every Claude Code release. Hold until Anthropic ships an API.
+4. **Cross-tool visibility stays as Cairn's core moat.** Codex, Cursor, Aider users have no Agent View — Cairn is their only multi-session surface.
+
+### How this affects the demo
+
+The demo executes with vanilla `claude` invocations (same as Phase 6). Agent View will not render these sessions because they are not background (`claude agents`) sessions. That is fine for this demo's internal-alignment audience — the message is **"Cairn sees and acts on what Agent View doesn't have"**, not **"Agent View and Cairn shown side-by-side"**. A future demo can stage the side-by-side; this one focuses on Cairn's own surface.
+
+### Out of scope for this plan, captured here as the next planning item
+
+- The self-adaptive panel implementation (detect Agent View, compress vs full display).
+- A future demo that DOES use `claude agents` background mode + shows Agent View next to Cairn panel side-by-side.
+- An API or formal handshake with Anthropic to integrate Cairn into Agent View as a "conflict / coordination" overlay.
+
+These become a separate plan: working title `2026-05-XX-cairn-x-agent-view-self-adaptive-panel.md`. Not blocking this demo.
