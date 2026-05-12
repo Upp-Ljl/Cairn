@@ -53,6 +53,7 @@ const cockpitState = require('./cockpit-state.cjs');
 const cockpitSteer = require('./cockpit-steer.cjs');
 const cockpitRewind = require('./cockpit-rewind.cjs');
 const mentorPolicy = require('./mentor-policy.cjs');
+const llmHelpers = require('./cockpit-llm-helpers.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -833,12 +834,14 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   }
   const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
   const goal = registry.getProjectGoal(reg, projectId);
-  // registry.getProjectGoal returns { text, set_by, set_at } | null;
-  // cockpit payload only needs the text for the strip + autopilot derivation.
   const goalText = goal && typeof goal === 'object' && goal.text ? goal.text
                  : (typeof goal === 'string' ? goal : null);
+  // Inject leader from cockpit settings (Phase 6) so cockpit-state can
+  // surface it in the State Strip + use it for the "talk to leader" path.
+  const settings = registry.getCockpitSettings(reg, projectId);
+  const projForCockpit = Object.assign({}, proj, { leader: settings.leader });
   return cockpitState.buildCockpitState(
-    entry.db, entry.tables, proj, goalText, agentIds, opts || {},
+    entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
   );
 });
 
@@ -878,6 +881,67 @@ ipcMain.handle('cockpit-rewind-preview', (_e, input) => {
   const entry = ensureDbHandle(proj.db_path);
   if (!entry) return { ok: false, error: 'db_unavailable' };
   return cockpitRewind.previewRewind(entry.db, entry.tables, proj, input.checkpoint_id);
+});
+
+// Cockpit redesign Phase 6 — per-project settings + LLM helpers.
+ipcMain.handle('get-cockpit-settings', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return registry.COCKPIT_SETTINGS_DEFAULT;
+  return registry.getCockpitSettings(reg, projectId);
+});
+
+ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return { ok: false, error: 'project_id_required' };
+  }
+  const result = registry.setCockpitSettings(reg, projectId, input || {});
+  if (result.error) return { ok: false, error: result.error };
+  reg = result.reg;
+  try { registry.writeRegistry(reg); } catch (_e) {}
+  return { ok: true, settings: result.settings };
+});
+
+ipcMain.handle('cockpit-summarize-tail', async (_e, input) => {
+  if (!input || !input.tail || !input.project_id) {
+    return { ok: false, reason: 'no_input' };
+  }
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.summarizeTail({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.tail_summary_enabled),
+    run_id: input.run_id,
+    tail: input.tail,
+  });
+});
+
+ipcMain.handle('cockpit-explain-conflict', async (_e, input) => {
+  if (!input || !input.project_id) return { ok: false, reason: 'no_input' };
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.explainConflict({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.conflict_explainer_enabled),
+    paths: input.paths,
+    diff_a: input.diff_a,
+    diff_b: input.diff_b,
+    summary: input.summary,
+  });
+});
+
+ipcMain.handle('cockpit-sort-inbox', async (_e, input) => {
+  if (!input || !input.project_id) return { ok: false, reason: 'no_input' };
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.sortInbox({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.inbox_smart_sort_enabled),
+    items: input.items,
+    goal: input.goal,
+  });
+});
+
+ipcMain.handle('cockpit-assist-goal', async (_e, input) => {
+  if (!input || !input.project_id) return { ok: false, reason: 'no_input' };
+  const settings = registry.getCockpitSettings(reg, input.project_id);
+  return llmHelpers.assistGoal({
+    enabled: !!(settings && settings.llm_helpers && settings.llm_helpers.goal_input_assist_enabled),
+    files: input.files,
+    rough_idea: input.rough_idea,
+  });
 });
 
 // Cockpit redesign Phase 5 — Module 5 ack escalation.

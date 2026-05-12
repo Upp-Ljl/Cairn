@@ -39,6 +39,13 @@ const api = {
   cockpitRewindTo:      (input) => ipcRenderer.invoke('cockpit-rewind-to', input || {}),
   // Cockpit redesign (Phase 5): acknowledge an escalation (Module 5).
   cockpitAckEscalation: (input) => ipcRenderer.invoke('cockpit-ack-escalation', input || {}),
+  // Cockpit redesign (Phase 6): per-project cockpit settings + LLM helpers.
+  getCockpitSettings:   (projectId) => ipcRenderer.invoke('get-cockpit-settings', projectId),
+  setCockpitSettings:   (projectId, input) => ipcRenderer.invoke('set-cockpit-settings', projectId, input || {}),
+  cockpitSummarizeTail: (input) => ipcRenderer.invoke('cockpit-summarize-tail', input || {}),
+  cockpitExplainConflict: (input) => ipcRenderer.invoke('cockpit-explain-conflict', input || {}),
+  cockpitSortInbox:     (input) => ipcRenderer.invoke('cockpit-sort-inbox', input || {}),
+  cockpitAssistGoal:    (input) => ipcRenderer.invoke('cockpit-assist-goal', input || {}),
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),

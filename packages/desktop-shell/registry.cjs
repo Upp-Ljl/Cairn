@@ -768,3 +768,74 @@ module.exports = {
   uniqueDbPaths,
   hintsByDbPath,
 };
+
+// ---------------------------------------------------------------------------
+// panel-cockpit-redesign Phase 6 — per-project cockpit settings
+// (placed AFTER module.exports because CommonJS module.exports is a live
+// binding for object members; we attach these at the bottom.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Defaults per plan decision #14 (leader-per-project) + decision #10 (LLM
+ * helper cost posture: low-cost default-on, high-cost default-off).
+ */
+const COCKPIT_SETTINGS_DEFAULT = Object.freeze({
+  leader: 'claude-code',
+  llm_helpers: {
+    tail_summary_enabled: true,         // low-cost, default ON
+    conflict_explainer_enabled: true,    // low-cost, default ON
+    inbox_smart_sort_enabled: false,     // high-cost, default OFF
+    goal_input_assist_enabled: false,    // high-cost, default OFF
+  },
+  escalation_thresholds: {
+    error_nudge_cap: 2,
+    outcomes_retry_cap: 1,
+    time_budget_fraction: 0.80,
+  },
+});
+
+function getCockpitSettings(reg, projectId) {
+  if (!reg || !Array.isArray(reg.projects)) return COCKPIT_SETTINGS_DEFAULT;
+  const p = reg.projects.find(x => x.id === projectId);
+  if (!p) return COCKPIT_SETTINGS_DEFAULT;
+  const s = p.cockpit_settings || {};
+  // Merge against defaults so newly added fields don't break.
+  return {
+    leader: typeof s.leader === 'string' ? s.leader : COCKPIT_SETTINGS_DEFAULT.leader,
+    llm_helpers: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.llm_helpers, s.llm_helpers || {}),
+    escalation_thresholds: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.escalation_thresholds, s.escalation_thresholds || {}),
+  };
+}
+
+/**
+ * Set partial cockpit settings (deep-merge for nested fields).
+ * Validates input and writes via writeRegistry (caller-injected at the
+ * IPC layer).
+ *
+ * Returns { reg, settings } on success, { error } on validation fail.
+ */
+function setCockpitSettings(reg, projectId, input) {
+  if (!reg || !Array.isArray(reg.projects)) return { error: 'registry_invalid' };
+  const idx = reg.projects.findIndex(x => x.id === projectId);
+  if (idx < 0) return { error: 'project_not_found' };
+  const cur = getCockpitSettings(reg, projectId);
+  const next = {
+    leader: typeof input.leader === 'string' ? input.leader : cur.leader,
+    llm_helpers: Object.assign({}, cur.llm_helpers, input.llm_helpers || {}),
+    escalation_thresholds: Object.assign({}, cur.escalation_thresholds, input.escalation_thresholds || {}),
+  };
+  // Validate leader against known values (extensible).
+  const KNOWN_LEADERS = ['claude-code', 'cursor', 'codex', 'aider', 'cline'];
+  if (!KNOWN_LEADERS.includes(next.leader)) {
+    return { error: `unknown_leader: ${next.leader}` };
+  }
+  const newProjects = reg.projects.slice();
+  newProjects[idx] = Object.assign({}, newProjects[idx], { cockpit_settings: next });
+  const newReg = Object.assign({}, reg, { projects: newProjects });
+  return { reg: newReg, settings: next };
+}
+
+// Attach Phase 6 exports to module.exports (after const declarations).
+module.exports.getCockpitSettings = getCockpitSettings;
+module.exports.setCockpitSettings = setCockpitSettings;
+module.exports.COCKPIT_SETTINGS_DEFAULT = COCKPIT_SETTINGS_DEFAULT;
