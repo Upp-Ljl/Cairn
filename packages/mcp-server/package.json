@@ -1,10 +1,24 @@
 {
   "name": "@cairn/mcp-server",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "license": "Apache-2.0",
-  "private": true,
+  "description": "Cairn — host-level multi-agent coordination kernel exposing 28 MCP tools over stdio; ships the `cairn` install CLI for wiring Cairn into any git repo",
+  "author": "renlab",
   "type": "module",
   "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Upp-Ljl/Cairn.git",
+    "directory": "packages/mcp-server"
+  },
+  "homepage": "https://github.com/Upp-Ljl/Cairn",
+  "bugs": "https://github.com/Upp-Ljl/Cairn/issues",
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "agent-coordination",
+    "multi-agent"
+  ],
   "bin": {
     "cairn-mcp": "dist/index.js",
     "cairn": "dist/cli/install.js"

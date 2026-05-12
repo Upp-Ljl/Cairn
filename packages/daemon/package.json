@@ -1,9 +1,17 @@
 {
   "name": "@cairn/daemon",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "license": "Apache-2.0",
-  "private": true,
+  "description": "Cairn — persistence + repositories layer (kernel state objects: processes / tasks / scratchpad / checkpoints / conflicts / dispatch / blockers / outcomes)",
+  "author": "renlab",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Upp-Ljl/Cairn.git",
+    "directory": "packages/daemon"
+  },
+  "homepage": "https://github.com/Upp-Ljl/Cairn",
+  "bugs": "https://github.com/Upp-Ljl/Cairn/issues",
   "bin": {
     "cairn": "dist/cli/install.js"
   },
