@@ -8,6 +8,11 @@
      monospace dark, high information density,
      references = Activity Monitor / journalctl. */
   * { box-sizing: border-box; }
+  /* HTML `hidden` attribute must beat author display:flex/block rules.
+     Without !important, `#view-project { display:flex }` (and friends)
+     overrides UA `[hidden]{display:none}`, causing the L1 list to
+     render with L2 still visible behind it on ESC. */
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body {
     font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;

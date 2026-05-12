@@ -120,6 +120,28 @@ function setView(name, meta) {
   if (name !== 'unassigned') {
     selectedUnassignedDbPath = null;
   }
+  // Leaving the project view → reset inner state that would otherwise
+  // bleed across projects: inner tab selection, managed-card disclosure,
+  // and any open menu dropdown. Without this, ESC felt like a "half
+  // return" because L2 left visual state behind.
+  if (name !== 'project' && currentView === 'project') {
+    activeTab = 'runlog';
+    managedExpanded = false;
+    // Re-show the default inner tab; hide the rest. Cheap + idempotent.
+    const innerViews = ['view-runlog', 'view-tasks', 'view-sessions', 'view-reports', 'view-coord'];
+    innerViews.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.hidden = (id !== 'view-runlog');
+    });
+    document.querySelectorAll('.tab').forEach(b =>
+      b.classList.toggle('active', b.getAttribute('data-tab') === 'runlog'),
+    );
+  }
+  // Close any open menu dropdown regardless of how we got here (ESC,
+  // back-button, or programmatic). Avoids the dropdown floating over
+  // the L1 grid after ESC.
+  const menuPop = document.getElementById('menu-pop');
+  if (menuPop) menuPop.classList.remove('open');
   currentView = name;
   if (name === 'project') {
     selectedProject = meta || null;
@@ -137,6 +159,13 @@ function setView(name, meta) {
   if (backBtn) backBtn.hidden = (name === 'projects');
   // Re-render header label
   renderHeaderForView();
+  // Render L1 immediately from the most recent cached payload if we
+  // have one (avoids a ≤1s blank flash before the next poll lands).
+  // If no cache yet, the placeholder shown by renderProjectsList is
+  // already the right empty state.
+  if (name === 'projects' && lastProjectsPayload) {
+    try { renderProjectsList(lastProjectsPayload); } catch {}
+  }
   // Force an immediate poll to populate the new view fast.
   poll().catch(() => {});
 }
@@ -3255,6 +3284,10 @@ function setupCoordinationTab() {
 
 let activeTab = 'runlog';
 let lastTasks = [];
+/** Most recent projects-list payload — used by setView('projects') to
+ *  paint the L1 grid synchronously instead of waiting up to 1s for the
+ *  next poll, which created a "half-return" blank flash on ESC. */
+let lastProjectsPayload = null;
 
 function setupTabs() {
   const tabs = document.querySelectorAll('.tab');
@@ -3577,6 +3610,7 @@ async function poll() {
       // L1 view — fetch the projects list payload (per-project summaries
       // + Unassigned buckets). Header and summary card are not used.
       const payload = await window.cairn.getProjectsList();
+      lastProjectsPayload = payload;
       renderProjectsList(payload);
       renderHeaderForView();
     } else if (currentView === 'unassigned') {
