@@ -3887,8 +3887,12 @@ function renderCockpit(state) {
   if (typeof maybeShowCockpitOnboarding === 'function') {
     maybeShowCockpitOnboarding(state);
   }
-  // Module 1: state strip
+  // Module 1: state strip — always include live agent count even when
+  // autopilot isn't AGENT_WORKING (so the user sees ⚡N regardless of
+  // whether goal/autopilot status would otherwise displace the agent line).
   const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
+  const liveAgentCount = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE').length;
+  const agentSuffix = liveAgentCount > 0 ? `  ·  ⚡ ${liveAgentCount} agent${liveAgentCount === 1 ? '' : 's'}` : '';
   const dotEl = document.getElementById('cockpit-status-dot');
   if (dotEl) {
     dotEl.textContent = '●';
@@ -3896,7 +3900,7 @@ function renderCockpit(state) {
   }
   const textEl = document.getElementById('cockpit-status-text');
   if (textEl) {
-    textEl.textContent = copy.text;
+    textEl.textContent = copy.text + agentSuffix;
     textEl.className = `cockpit-status-text ${copy.headlineClass}`;
   }
   const pgEl = document.getElementById('cockpit-progress-bar');
