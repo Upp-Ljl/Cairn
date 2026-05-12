@@ -3,9 +3,18 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs, readSelfVersion } from '../src/cli/install.js';
 
-const CLI = path.resolve(__dirname, '..', 'dist', 'cli', 'install.js');
+// Use fileURLToPath for ESM portability (P3 fix from PR #3 review).
+const __dirname_ = path.dirname(fileURLToPath(import.meta.url));
+const CLI = path.resolve(__dirname_, '..', 'dist', 'cli', 'install.js');
+
+// E2E tests require the CLI to be built. Fail loudly instead of silently
+// skipping (P3 fix from PR #3 review): a missing dist/ means `npm run build`
+// was forgotten, and silent skip would let stale code merge.
+const HAS_BUILD = existsSync(CLI);
+const buildHint = () => `cli-flags e2e tests require a built CLI at ${CLI}. Run \`npm run build\` first.`;
 
 function run(args: string[], cwd?: string) {
   return spawnSync('node', [CLI, ...args], {
@@ -59,9 +68,10 @@ describe('cairn CLI — version reader', () => {
   });
 });
 
-describe('cairn CLI — end-to-end flag behavior', () => {
+// E2E block uses `describe.skipIf` so the missing-build case is visible
+// in the test report rather than silently passing.
+describe.skipIf(!HAS_BUILD)('cairn CLI — end-to-end flag behavior', () => {
   it('--help exits 0 and prints usage to stdout', () => {
-    if (!existsSync(CLI)) return; // skip if not built
     const r = run(['--help']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('Usage:');
@@ -69,22 +79,26 @@ describe('cairn CLI — end-to-end flag behavior', () => {
   });
 
   it('--version exits 0 and prints "cairn <version>"', () => {
-    if (!existsSync(CLI)) return;
     const r = run(['--version']);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/^cairn \d+\.\d+\.\d+/);
   });
 
   it('unknown flag exits 2 with usage hint on stderr', () => {
-    if (!existsSync(CLI)) return;
     const r = run(['--made-up-flag']);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('unknown argument');
     expect(r.stderr).toContain('cairn --help');
   });
 
+  it('--help wins when combined with unknown flag (help short-circuits)', () => {
+    const r = run(['--help', '--bogus']);
+    // Help short-circuits before unknown-arg check — documented behavior.
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('Usage:');
+  });
+
   it('--dry-run does NOT write any files', () => {
-    if (!existsSync(CLI)) return;
     const dir = freshGitRepo();
     try {
       const r = run(['--dry-run'], dir);
@@ -100,7 +114,6 @@ describe('cairn CLI — end-to-end flag behavior', () => {
   });
 
   it('without flags, install actually writes files in a git repo', () => {
-    if (!existsSync(CLI)) return;
     const dir = freshGitRepo();
     try {
       const r = run([], dir);
@@ -118,7 +131,6 @@ describe('cairn CLI — end-to-end flag behavior', () => {
   });
 
   it('idempotency — running twice produces equivalent state', () => {
-    if (!existsSync(CLI)) return;
     const dir = freshGitRepo();
     try {
       run([], dir);
@@ -129,5 +141,16 @@ describe('cairn CLI — end-to-end flag behavior', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// One always-runs probe that fails loudly if dist/ is missing, so a forgotten
+// `npm run build` cannot let the e2e suite silently no-op.
+describe('cairn CLI — build presence guard', () => {
+  it('dist/cli/install.js exists (run npm run build if this fails)', () => {
+    if (!HAS_BUILD) {
+      throw new Error(buildHint());
+    }
+    expect(HAS_BUILD).toBe(true);
   });
 });
