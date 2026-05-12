@@ -49,6 +49,7 @@ function canonicalizeToGitToplevel(dir) {
 const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
+const cockpitState = require('./cockpit-state.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -810,6 +811,33 @@ function foldCodexIntoSummary(summary, codexRows) {
 }
 
 ipcMain.handle('get-projects-list', () => getProjectsList());
+
+// ---------------------------------------------------------------------------
+// Cockpit redesign (panel-cockpit-redesign Phase 1) — single-project payload.
+// Strict read-only. Used by Module 1-5 renderers.
+// ---------------------------------------------------------------------------
+ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
+  if (!projectId || typeof projectId !== 'string') {
+    return cockpitState.emptyCockpitState(null, null, 'projectId_required');
+  }
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) {
+    return cockpitState.emptyCockpitState(null, null, 'project_not_found');
+  }
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) {
+    return cockpitState.emptyCockpitState(proj, proj.db_path, 'db_unavailable');
+  }
+  const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  const goal = registry.getProjectGoal(reg, projectId);
+  // registry.getProjectGoal returns { text, set_by, set_at } | null;
+  // cockpit payload only needs the text for the strip + autopilot derivation.
+  const goalText = goal && typeof goal === 'object' && goal.text ? goal.text
+                 : (typeof goal === 'string' ? goal : null);
+  return cockpitState.buildCockpitState(
+    entry.db, entry.tables, proj, goalText, agentIds, opts || {},
+  );
+});
 
 ipcMain.handle('select-project', (_e, projectId) => {
   if (projectId === null) {

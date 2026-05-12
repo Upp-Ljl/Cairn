@@ -26,6 +26,9 @@ const MUTATIONS_ENABLED = (() => {
 const api = {
   // ---- Project-Aware Live Panel: L1 + project registry ----
   getProjectsList:    () => ipcRenderer.invoke('get-projects-list'),
+  // Cockpit redesign (Phase 1): single-project read-only payload.
+  getCockpitState:    (projectId, opts) =>
+    ipcRenderer.invoke('get-cockpit-state', projectId, opts || {}),
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),
