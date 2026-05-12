@@ -3995,7 +3995,7 @@ function renderCockpit(state) {
           <div class="cockpit-needs-reason">🔴 ${escapeHtml(e.reason || 'NEEDS YOU')}</div>
           <div class="cockpit-needs-body">${escapeHtml(e.body || '')}</div>
           <div class="cockpit-needs-actions">
-            <button data-esc-id="${escapeHtml(e.id)}" data-action="ack" disabled title="Phase 5 wires the ack action">Acknowledge</button>
+            <button class="cockpit-ack-btn" data-esc-id="${escapeHtml(e.id)}" data-action="ack" title="Mark this escalation acknowledged (Mentor stops re-raising)">Acknowledge</button>
           </div>
         </div>`;
       });
@@ -4179,6 +4179,33 @@ document.addEventListener('click', (ev) => {
   if (!btn || btn.disabled) return;
   const ck = btn.getAttribute('data-ckpt-id');
   if (ck) handleRewindClick(ck, btn);
+});
+
+// Delegate-click for Acknowledge buttons in Module 5 (Phase 5).
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest && ev.target.closest('.cockpit-ack-btn');
+  if (!btn || btn.disabled || !selectedProject) return;
+  const escId = btn.getAttribute('data-esc-id');
+  if (!escId) return;
+  btn.disabled = true;
+  btn.textContent = 'acking…';
+  try {
+    const res = await window.cairn.cockpitAckEscalation({
+      project_id: selectedProject.id,
+      escalation_id: escId,
+    });
+    if (res && res.ok) {
+      poll().catch(() => {});
+    } else {
+      alert(`Ack failed: ${(res && res.error) || 'unknown'}`);
+      btn.disabled = false;
+      btn.textContent = 'Acknowledge';
+    }
+  } catch (e) {
+    alert('Ack threw: ' + ((e && e.message) || e));
+    btn.disabled = false;
+    btn.textContent = 'Acknowledge';
+  }
 });
 
 // Initialize cockpit setup at boot.

@@ -52,6 +52,7 @@ const projectQueries = require('./project-queries.cjs');
 const cockpitState = require('./cockpit-state.cjs');
 const cockpitSteer = require('./cockpit-steer.cjs');
 const cockpitRewind = require('./cockpit-rewind.cjs');
+const mentorPolicy = require('./mentor-policy.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -877,6 +878,18 @@ ipcMain.handle('cockpit-rewind-preview', (_e, input) => {
   const entry = ensureDbHandle(proj.db_path);
   if (!entry) return { ok: false, error: 'db_unavailable' };
   return cockpitRewind.previewRewind(entry.db, entry.tables, proj, input.checkpoint_id);
+});
+
+// Cockpit redesign Phase 5 — Module 5 ack escalation.
+ipcMain.handle('cockpit-ack-escalation', (_e, input) => {
+  if (!input || !input.project_id || !input.escalation_id) {
+    return { ok: false, error: 'project_id_escalation_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return mentorPolicy.ackEscalation(entry.db, input.project_id, input.escalation_id);
 });
 
 ipcMain.handle('cockpit-rewind-to', (_e, input) => {

@@ -37,6 +37,8 @@ const api = {
   // (tier-B mutation per PRODUCT.md §12 D9.1).
   cockpitRewindPreview: (input) => ipcRenderer.invoke('cockpit-rewind-preview', input || {}),
   cockpitRewindTo:      (input) => ipcRenderer.invoke('cockpit-rewind-to', input || {}),
+  // Cockpit redesign (Phase 5): acknowledge an escalation (Module 5).
+  cockpitAckEscalation: (input) => ipcRenderer.invoke('cockpit-ack-escalation', input || {}),
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),
