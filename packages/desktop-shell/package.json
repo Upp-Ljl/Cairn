@@ -5,6 +5,8 @@
   "private": true,
   "type": "module",
   "main": "main.cjs",
+  "description": "Cairn — host-level multi-agent coordination kernel + project control surface",
+  "author": "renlab",
   "dependencies": {
     "better-sqlite3": "^12.9.0"
   },
@@ -15,6 +17,69 @@
   "scripts": {
     "start": "electron .",
     "start:browser": "node state-server.js",
-    "postinstall": "npx prebuild-install --runtime electron --target 32.3.3 --arch x64 --platform win32 --module-dir node_modules/better-sqlite3 || true"
+    "postinstall": "npx prebuild-install --runtime electron --target 32.3.3 --arch x64 --platform win32 --module-dir node_modules/better-sqlite3 || true",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg",
+    "dist:dir": "electron-builder --dir",
+    "gen:icon": "node scripts/gen-placeholder-icon.mjs"
+  },
+  "build": {
+    "appId": "ai.renlab.cairn",
+    "productName": "Cairn",
+    "copyright": "Copyright (c) 2026 renlab",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "panel.html",
+      "panel.js",
+      "preview.html",
+      "preview.js",
+      "inspector-legacy.html",
+      "inspector-legacy.js",
+      "*.cjs",
+      "agent-adapters/**/*",
+      "spritesheet.webp",
+      "package.json",
+      "node_modules/better-sqlite3/**/*",
+      "!node_modules/better-sqlite3/{benchmark,docs}/**/*",
+      "!**/{.DS_Store,Thumbs.db}",
+      "!**/*.{md,markdown,log}",
+      "!**/{test,tests,__tests__}/**/*"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "renlab"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Cairn",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "dmg": {
+      "title": "Cairn ${version}"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ]
   }
 }
