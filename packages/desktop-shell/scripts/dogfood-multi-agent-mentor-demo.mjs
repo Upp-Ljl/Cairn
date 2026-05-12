@@ -101,8 +101,6 @@ function reqDaemon(rel) { return require(path.join(daemonDist, rel)); }
 function reqMcp(rel)    { return require(path.join(mcpServerDist, rel)); }
 
 const { openDatabase } = reqDaemon('storage/db.js');
-const { runMigrations } = reqDaemon('storage/migrations/runner.js');
-const { ALL_MIGRATIONS } = reqDaemon('storage/migrations/index.js');
 const processesRepo = reqDaemon('storage/repositories/processes.js');
 const tasksRepo = reqDaemon('storage/repositories/tasks.js');
 const conflictsRepo = reqDaemon('storage/repositories/conflicts.js');
@@ -196,7 +194,11 @@ process.stdout.write(`Agent IDs:   A=${AGENT_ID.a}  B=${AGENT_ID.b}\n`);
 // ---- 1. Pre-flight ----
 section('1 pre-flight (target repo clean, on main)');
 if (!fs.existsSync(AGP_PATH)) {
-  process.stdout.write(`FAIL: ${AGP_PATH} not found.\n`);
+  process.stderr.write(
+    `FAIL: target repo not found at ${AGP_PATH}.\n` +
+    `      Clone it from https://github.com/anzy-renlab-ai/agent-game-platform.git,\n` +
+    `      or set CAIRN_DEMO_AGP_PATH=<path> to point at an existing clone.\n`
+  );
   process.exit(1);
 }
 const preHead   = git(AGP_PATH, ['rev-parse', 'HEAD']).stdout.trim();
@@ -285,6 +287,16 @@ const hookContent = [
 const hookDir = path.join(AGP_PATH, '.git', 'hooks');
 fs.mkdirSync(hookDir, { recursive: true });
 const hookPath = path.join(hookDir, 'pre-commit');
+// Back up an existing non-cairn hook so we never silently destroy a
+// user-owned lint/formatter/secret-scan hook on agent-game-platform.
+if (fs.existsSync(hookPath)) {
+  const cur = fs.readFileSync(hookPath, 'utf8');
+  if (!cur.includes('CAIRN-HOOK-V1')) {
+    const backupPath = `${hookPath}.bak-${Date.now()}`;
+    fs.copyFileSync(hookPath, backupPath);
+    process.stdout.write(`  backed up existing non-cairn hook → ${backupPath}\n`);
+  }
+}
 fs.writeFileSync(hookPath, hookContent, { encoding: 'utf8' });
 try { fs.chmodSync(hookPath, 0o755); } catch {}
 process.stdout.write(`  wrote hook: ${hookPath}\n`);
@@ -298,11 +310,25 @@ const cairnRoot = path.join(os.homedir(), '.cairn');
 fs.mkdirSync(cairnRoot, { recursive: true });
 const dbPath = path.join(cairnRoot, 'cairn.db');
 const db = openDatabase(dbPath);
-// Don't call runMigrations: the user's live ~/.cairn/cairn.db is kept
-// up to date by every running cairn-wedge MCP server; the checksum
-// guard refuses to re-run identical-version migrations whose body has
-// drifted (we are reading the lead-worktree compile of the daemon, not
-// the one that bootstrapped the DB).
+// We deliberately skip runMigrations here — the checksum guard refuses
+// to replay identical-version migrations whose body has drifted
+// between this worktree's tsc output and the build that bootstrapped
+// the user's live DB. Instead we assert the required tables already
+// exist; that catches a fresh-install host where no cairn-wedge MCP
+// server has ever booted (which would otherwise hit no-such-table on
+// the first registerProcess call below).
+const requiredTables = ['processes', 'tasks', 'conflicts', 'scratchpad'];
+const presentTables = new Set(
+  db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all().map(r => r.name)
+);
+const missing = requiredTables.filter(t => !presentTables.has(t));
+if (missing.length > 0) {
+  process.stderr.write(
+    `FAIL: ~/.cairn/cairn.db is missing required tables: ${missing.join(', ')}.\n` +
+    `      Start a cairn-wedge MCP server once to bootstrap the schema, then re-run.\n`
+  );
+  process.exit(1);
+}
 for (const k of ['a', 'b']) {
   processesRepo.registerProcess(db, {
     agentId: AGENT_ID[k],
@@ -560,11 +586,17 @@ if (runB.ok) {
   }
 }
 
-// Inspect scratchpad — count subagent/* entries.
+// Inspect scratchpad — count entries from THIS RUN only (filter by
+// this run's agent_ids, so we don't pass on stale entries from prior runs).
 const allScratch = scratchpadRepo.listAllScratch(db);
-const ourScratch = allScratch.filter(s => /^subagent\/(.+)\/result$/.test(s.key));
-process.stdout.write(`  scratchpad subagent/* entries: ${ourScratch.length}\n`);
-ok(ourScratch.length >= 2, `≥2 scratchpad subagent/*/result entries (found ${ourScratch.length})`);
+const ourScratch = allScratch.filter(s =>
+  s.key === `subagent/${AGENT_ID.a}/result` ||
+  s.key === `subagent/${AGENT_ID.b}/result`,
+);
+process.stdout.write(`  scratchpad entries for this run's agents: ${ourScratch.length}\n`);
+const expectScratch = runB.ok ? 2 : 1;
+ok(ourScratch.length === expectScratch,
+   `exactly ${expectScratch} scratchpad entries written by this run (found ${ourScratch.length})`);
 
 // ---- 11. Inspect worker commits on the demo branches ----
 section('11 demo branch commit inspection');
@@ -583,10 +615,11 @@ function describeBranch(key) {
 const infoA = describeBranch('a');
 const infoB = describeBranch('b');
 
-// Don't require commits — workers may legitimately fail to commit if
-// they hit a constraint. Just record what happened.
-ok(true, `worker A commits ahead of main: ${infoA.newCommits ? infoA.newCommits.split('\n').length : 0} (informational)`);
-ok(true, `worker B commits ahead of main: ${infoB.newCommits ? infoB.newCommits.split('\n').length : 0} (informational)`);
+// Informational only — workers may legitimately fail to commit if
+// they hit a constraint. These printlns do NOT count toward the
+// assertion total (`ok(true, ...)` filler was removed per review).
+process.stdout.write(`  info  worker A commits ahead of main: ${infoA.newCommits ? infoA.newCommits.split('\n').length : 0}\n`);
+process.stdout.write(`  info  worker B commits ahead of main: ${infoB.newCommits ? infoB.newCommits.split('\n').length : 0}\n`);
 
 // ---- 12. Mechanism smoke (conflict → PENDING_REVIEW) ----
 //
@@ -607,6 +640,13 @@ if (!SKIP_MECH && infoA.newCommits) {
   // Pick the file actually committed by worker A (most recent commit).
   const lastCommit = git(WT.a, ['log', '-1', '--name-only', '--pretty=format:']).stdout.trim();
   const stagedFile = lastCommit.split(/\r?\n/).filter(Boolean)[0] || 'tests/engine/COVERAGE_AUDIT_A.md';
+  // Clear prior OPEN seeds tagged with this same DEMO_DATE so reruns
+  // are deterministic — without this the openOurs assertion below
+  // fails on the second invocation of the day.
+  db.prepare(
+    `UPDATE conflicts SET status='IGNORED', resolved_at=?, resolution='superseded by rerun'
+       WHERE status='OPEN' AND summary LIKE ?`,
+  ).run(Date.now(), `[demo ${DEMO_DATE}]%`);
   process.stdout.write(`  seeding OPEN conflict on path: ${stagedFile}\n`);
   conflictsRepo.recordConflict(db, {
     conflictType: 'FILE_OVERLAP',
@@ -626,7 +666,10 @@ if (!SKIP_MECH && infoA.newCommits) {
       const add = git(WT.a, ['add', stagedFile]);
       ok(add.status === 0, 'stage retrigger edit');
       // Set CAIRN_SESSION_AGENT_ID so the hook tags the PENDING_REVIEW with our id.
-      const commit = spawnSync('git', ['commit', '-m', `demo(A): retrigger pre-commit hook for conflict surface`],
+      // `-c commit.gpgsign=false` prevents a TTY-less gpg prompt from
+      // deadlocking the unattended driver if the user has global signing on.
+      const commit = spawnSync('git',
+        ['-c', 'commit.gpgsign=false', 'commit', '-m', `demo(A): retrigger pre-commit hook for conflict surface`],
         { cwd: WT.a, encoding: 'utf8', env: { ...process.env, CAIRN_SESSION_AGENT_ID: AGENT_ID.a } });
       process.stdout.write(`  retrigger commit exit ${commit.status}\n`);
       if (commit.stderr) process.stdout.write(`  hook stderr:\n${commit.stderr.split('\n').map(l => '    ' + l).join('\n')}\n`);
@@ -655,10 +698,13 @@ process.stdout.write(`  our OPEN seed:  ${openOurs.length}\n`);
 if (mechanismRan) {
   // We seeded one OPEN; hook should have appended one PENDING_REVIEW.
   ok(pendingReview.length >= 1, 'mechanism smoke wrote ≥1 PENDING_REVIEW row');
-  ok(openOurs.length === 1, 'mechanism smoke kept exactly one OPEN seed (informational)');
-} else {
-  ok(true, 'conflict count unchanged (mechanism smoke not run; expected)');
+  // openOurs counts OPEN rows tagged with this DEMO_DATE — should be
+  // exactly 1 (this run's seed) because the script flips prior dated
+  // seeds to IGNORED before inserting. Allow ≥1 to stay robust if the
+  // user kept a hand-seeded OPEN row to test.
+  ok(openOurs.length >= 1, `mechanism smoke OPEN seed present (count=${openOurs.length})`);
 }
+// Skipped branch is silent — no "ok(true)" filler.
 
 // ---- 14. Resume packet probe (middle gate) ----
 section('14 resume_packet for both tasks (middle gate)');

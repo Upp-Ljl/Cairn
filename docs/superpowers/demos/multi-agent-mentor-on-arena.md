@@ -6,7 +6,9 @@
 **Cross-engine validator:** `packages/desktop-shell/scripts/dogfood-multi-agent-mentor-validate.mjs`
 **Target:** `D:/lll/managed-projects/agent-game-platform` ([`anzy-renlab-ai/agent-game-platform`](https://github.com/anzy-renlab-ai/agent-game-platform))
 **Pre-flight HEAD:** `de6875c3a2b0faea20d581a43e5754e406432ab2` (unchanged post-flight)
-**Result:** 36/36 demo assertions PASS, 3/3 FEATURE-VALIDATION gates hard-match.
+**Result:** 34/34 substantive demo assertions PASS (no `ok(true)` filler in the count); 3/3 FEATURE-VALIDATION gates hard-match across two consecutive runs.
+
+> **Live-demo follow-up still required.** The Resolve click in the legacy Inspector is user-driven and was **not** executed by this driver run. See acceptance-gate row 3 in §"Acceptance gates" and the live-demo instructions in §"How to reproduce" step 5. The recording for team alignment captures that step on screen.
 
 ---
 
@@ -133,9 +135,9 @@ Three independent answers:
 
 | Gate | Engine | Result |
 |---|---|---|
-| **Gate 1** | `claude --model haiku -p` (single-shot, Node-spawned via cmd.exe `claude.cmd`) | `{ demo_processes_count: 2, conflicts_count_pending_review: 1, scratchpad_subagent_keys_sorted: ["subagent/cairn-session-4b7d84c5a2d8/result", "subagent/cairn-session-9dd055c6824b/result"] }` |
-| **Gate 2** | `Agent(general-purpose)` subagent, fresh context, instructed to read the DB directly via better-sqlite3 | Identical to Gate 1. |
-| **Gate 3** | Real run: Node + daemon storage handle (`packages/daemon/dist/storage/db.js`), three `prepare(...).get()/all()` calls. | Identical to Gates 1 & 2. |
+| **Gate 1** | `claude --model haiku -p` (single-shot, Node-spawned via cmd.exe `claude.cmd`) | First run: `{ processes:2, pending_review:1, keys:[2 from run 1] }`. After rerun: `{ processes:4, pending_review:3, keys:[4 across both runs] }`. |
+| **Gate 2** | `Agent(general-purpose)` subagent, fresh context, instructed to read the DB directly via better-sqlite3 | Identical to Gate 1 in each pass. |
+| **Gate 3** | Real run: Node + daemon storage handle (`packages/daemon/dist/storage/db.js`), three `prepare(...).get()/all()` calls. | Identical to Gates 1 & 2 in each pass. |
 
 Hard match output:
 
@@ -154,8 +156,8 @@ Hard match output:
 
 | Gate | Required | Observed |
 |---|---|---|
-| **Hard floor** — 2 processes rows | ✅ | 2 rows tagged `role:demo-mentor-worker`, capabilities include `cwd:<worktree>` |
-| **Hard floor** — legacy Inspector renders conflict row IF present | ✅ | 1 `PENDING_REVIEW` row written by hook, queryable via desktop-shell `conflicts` view |
+| **Hard floor** — 2 processes rows | ✅ | 2 rows per run tagged `role:demo-mentor-worker`, capabilities include `cwd:<worktree>` |
+| **Hard floor** — legacy Inspector renders conflict row IF present | ✅ | `PENDING_REVIEW` row written by hook per run, queryable via desktop-shell `conflicts` view |
 | **Hard floor** — user can manually click Resolve (transition to RESOLVED) | NOT EXECUTED in this driver run | Resolve is user-driven; smoke that the IPC works is `smoke-conflict-surface.mjs`. Live recording will exercise this step. |
 | **Middle gate** — both agents recoverable via `cairn.task.resume_packet` | ✅ | Both packets return non-null, `task_id` matches, `scratchpad_keys` references correct agent_id |
 | **High gate** — Mode B auto-redispatches new worker after RESOLVED | SKIPPED (out of scope per plan §3) | — |
@@ -182,6 +184,23 @@ Not exercised:
 
 ---
 
+## Review-driven fixes (between PR open and merge-ready)
+
+A second-engine review on PR #6 surfaced two P1 issues and seven P2s. Fixes landed in the same PR:
+
+- **P1 — scratchpad assertion was reading global state.** Original code asserted `≥2 subagent/*/result entries`, which would pass if any two stale rows existed even when this run's writes failed. Filtered the assertion to this run's two `AGENT_ID`s.
+- **P1 — `openOurs.length === 1` was rerun-fragile.** Every prior same-date OPEN seed accumulated, so a second invocation on the same day would have flipped PASS → FAIL. Driver now flips prior `[demo DEMO_DATE]` OPEN rows to `IGNORED` (with resolution `superseded by rerun`) before seeding, and the assertion is `≥ 1` to remain robust if a user kept a hand-seeded OPEN row to test against.
+- **P2 — silent hook overwrite.** Driver now backs up any existing non-`CAIRN-HOOK-V1` pre-commit hook to `pre-commit.bak-<ts>` before installing.
+- **P2 — fresh-install schema check.** Added a `SELECT name FROM sqlite_master` probe; aborts with a clear error if `processes/tasks/conflicts/scratchpad` tables are missing (host has never run `cairn-wedge`).
+- **P2 — `ok(true, …)` filler.** Three unconditional assertions were inflating the count. They are now `process.stdout.write('  info  …')` lines that do not feed the assertion total. Score is honest: 34/34 fail-able.
+- **P2 — gpg signing deadlock.** Retrigger commit now passes `-c commit.gpgsign=false` so an unattended driver doesn't hang on a global signing config.
+- **P2 — Gate 1 prompt fragility.** Replaced `$HOME` (POSIX shellism) with an absolute Windows path resolved at runtime; sharpened the directive on how to read the DB.
+- **P2 — Doc framing.** Added an explicit callout at the top that the Resolve click is user-driven and not executed by the driver. Cleanup snippet uses `require.resolve` with explicit `paths` instead of a hardcoded `node_modules` location.
+
+The second run after the fixes — at HEAD with all P1+P2 patches applied — produced 34/34 PASS in 54s and Gates 1/2/3 hard-match.
+
+---
+
 ## How to reproduce
 
 ```powershell
@@ -196,10 +215,10 @@ cd D:\lll\cairn\.cairn-worktrees\__lead__\packages\daemon
 cd ..\mcp-server
 .\node_modules\.bin\tsc -p tsconfig.json
 
-# 2. Run the demo (~106s, burns ~$0.50 of sonnet × 2).
+# 2. Run the demo (~50-110s, burns ~$0.50 of sonnet × 2).
 cd D:\lll\cairn\.cairn-worktrees\__lead__
 node packages\desktop-shell\scripts\dogfood-multi-agent-mentor-demo.mjs
-# Expect: 36/36 assertions PASS.
+# Expect: 34/34 substantive assertions PASS (no `ok(true)` filler).
 
 # 3. Cross-engine validation. Gate 2 needs a second engine — easiest is
 #    asking a general-purpose subagent to run the equivalent SQL and
@@ -242,8 +261,13 @@ git branch -D demo/multi-agent-mentor-2026-05-12-a demo/multi-agent-mentor-2026-
 rmdir .cairn-demo-worktrees
 
 # Optional: clear the Cairn rows for this demo (does NOT touch the schema).
+# Resolve better-sqlite3 via require.resolve so this works whether the
+# user is in the main checkout or any worktree.
 node -e "
-  const D = require('D:/lll/cairn/packages/daemon/node_modules/better-sqlite3');
+  const D = require(require.resolve('better-sqlite3', { paths: [
+    'D:/lll/cairn/packages/daemon/node_modules',
+    'D:/lll/cairn/.cairn-worktrees/__lead__/packages/daemon/node_modules',
+  ]}));
   const db = new D(require('os').homedir() + '/.cairn/cairn.db');
   db.prepare(\"DELETE FROM scratchpad WHERE key LIKE 'subagent/cairn-session-%/result'\").run();
   db.prepare(\"DELETE FROM conflicts WHERE summary LIKE '%[demo 2026-05-12]%'\").run();

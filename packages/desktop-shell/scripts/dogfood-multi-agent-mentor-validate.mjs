@@ -49,8 +49,18 @@ const args = Object.fromEntries(process.argv.slice(2).map(a => {
 // The canonical question. SAME wording for all gates.
 // ---------------------------------------------------------------------------
 
-const QUESTION_PROMPT = `Inspect the Cairn SQLite database at $HOME/.cairn/cairn.db (read-only).
-Answer with canonical JSON ONLY (no markdown, no prose):
+// Built at runtime so the absolute DB path is baked in — avoids the
+// haiku model having to guess a Windows-vs-POSIX path expansion of
+// $HOME (review P2). The model still needs tool access (Read / Bash)
+// to open the file; if Gate 1 ever returns a hallucinated answer, the
+// scratchpad_subagent_keys_sorted check catches it (26-char random
+// hex ids can't be predicted from prompt context).
+const DB_ABS = path.join(os.homedir(), '.cairn', 'cairn.db');
+const QUESTION_PROMPT = `Inspect the Cairn SQLite database at this absolute path (read-only):
+
+  ${DB_ABS}
+
+Use better-sqlite3 (already installed in this repo) or any SQLite CLI you can find. Answer with canonical JSON ONLY (no markdown, no prose):
 
 {
   "demo_processes_count": <integer — rows in 'processes' table whose capabilities JSON contains the string "role:demo-mentor-worker">,
