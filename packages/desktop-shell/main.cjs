@@ -17,7 +17,7 @@
  * compatibility) is gated on CAIRN_DESKTOP_ENABLE_MUTATIONS=1.
  */
 
-const { app, BrowserWindow, ipcMain, screen, dialog, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog, Menu, Tray, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -50,6 +50,7 @@ const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
 const projectQueries = require('./project-queries.cjs');
 const cockpitState = require('./cockpit-state.cjs');
+const cockpitSteer = require('./cockpit-steer.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -837,6 +838,30 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   return cockpitState.buildCockpitState(
     entry.db, entry.tables, proj, goalText, agentIds, opts || {},
   );
+});
+
+// Cockpit redesign Phase 3 — Module 2 STEER. D9.1 tier-A first-class
+// (panel-cockpit-redesign §2.E #12); no env flag gate.
+ipcMain.handle('cockpit-steer', (_e, input) => {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, error: 'input_required' };
+  }
+  if (!input.project_id || !input.agent_id || !input.message) {
+    return { ok: false, error: 'project_id_agent_id_message_required' };
+  }
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  return cockpitSteer.steerAgent(entry.db, entry.tables, {
+    project_id: input.project_id,
+    agent_id: input.agent_id,
+    message: input.message,
+  }, {
+    copyToClipboard: (text) => {
+      try { clipboard.writeText(text); } catch (_e) {}
+    },
+  });
 });
 
 ipcMain.handle('select-project', (_e, projectId) => {

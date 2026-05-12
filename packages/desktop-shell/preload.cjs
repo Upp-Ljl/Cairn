@@ -29,6 +29,9 @@ const api = {
   // Cockpit redesign (Phase 1): single-project read-only payload.
   getCockpitState:    (projectId, opts) =>
     ipcRenderer.invoke('get-cockpit-state', projectId, opts || {}),
+  // Cockpit redesign (Phase 3): inject steer message into agent inbox +
+  // copy to clipboard. Tier-A first-class mutation (D9.1 PRODUCT.md §12).
+  cockpitSteer:       (input) => ipcRenderer.invoke('cockpit-steer', input || {}),
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),

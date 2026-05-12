@@ -435,6 +435,32 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
       });
     }
 
+    // User-supervisor steer messages (Phase 3 inbox queue). We surface
+    // them as 'user_steer' events so the user sees what they sent in
+    // Module 3 right after clicking Send. Filter by project_id inside
+    // the value_json (key is keyed by agent, not project, so we need
+    // a JSON LIKE to scope to this project).
+    const steerRows = db.prepare(`
+      SELECT key, value_json, created_at
+      FROM scratchpad
+      WHERE key LIKE 'agent_inbox/%'
+        AND value_json LIKE ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(`%"project_id":"${projectId}"%`, Math.min(20, perSource));
+    for (const r of steerRows) {
+      let body = null;
+      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+      if (!body) continue;
+      events.push({
+        ts: r.created_at,
+        kind: 'user_steer',
+        agent_id: r.key.split('/')[1] || null,
+        task_id: null,
+        body: `You → ${(r.key.split('/')[1] || 'agent').slice(0, 14)}…: ${body.message || ''}`,
+      });
+    }
+
     const escalationRows = db.prepare(`
       SELECT key, value_json, created_at, updated_at
       FROM scratchpad

@@ -4056,10 +4056,55 @@ function setupCockpit() {
     });
   }
   if (steerSend) {
-    steerSend.addEventListener('click', () => {
-      if (steerStatus) {
-        steerStatus.textContent = 'Phase 3 wires this — coming soon';
-        steerStatus.className = 'cockpit-steer-status info';
+    steerSend.addEventListener('click', async () => {
+      const msg = (steerInput && steerInput.value || '').trim();
+      if (!msg) {
+        if (steerStatus) { steerStatus.textContent = '请输入一句话'; steerStatus.className = 'cockpit-steer-status error'; }
+        return;
+      }
+      if (!selectedProject) {
+        if (steerStatus) { steerStatus.textContent = '没有选中项目'; steerStatus.className = 'cockpit-steer-status error'; }
+        return;
+      }
+      // Target agent: most recent ACTIVE row in current cockpit state.
+      // We re-fetch state here to avoid using a stale snapshot.
+      const state = await window.cairn.getCockpitState(selectedProject.id, {});
+      const active = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
+      if (active.length === 0) {
+        if (steerStatus) { steerStatus.textContent = '没有活跃 agent 可发话'; steerStatus.className = 'cockpit-steer-status error'; }
+        return;
+      }
+      const target = active[0].agent_id;
+      steerSend.disabled = true;
+      if (steerStatus) { steerStatus.textContent = `发给 ${target}…`; steerStatus.className = 'cockpit-steer-status info'; }
+      try {
+        const res = await window.cairn.cockpitSteer({
+          project_id: selectedProject.id,
+          agent_id: target,
+          message: msg,
+        });
+        if (res && res.ok) {
+          const methods = (res.delivered || []).join(' + ');
+          if (steerStatus) {
+            steerStatus.textContent = `已发送 → ${target.slice(0, 18)}…  (${methods})`;
+            steerStatus.className = 'cockpit-steer-status';
+          }
+          if (steerInput) steerInput.value = '';
+          // Refresh activity feed to show the injected message.
+          poll().catch(() => {});
+        } else {
+          if (steerStatus) {
+            steerStatus.textContent = `发送失败: ${(res && res.error) || 'unknown'}`;
+            steerStatus.className = 'cockpit-steer-status error';
+          }
+        }
+      } catch (e) {
+        if (steerStatus) {
+          steerStatus.textContent = `error: ${(e && e.message) || e}`;
+          steerStatus.className = 'cockpit-steer-status error';
+        }
+      } finally {
+        steerSend.disabled = false;
       }
     });
   }
