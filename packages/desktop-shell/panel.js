@@ -3882,6 +3882,11 @@ function renderCockpit(state) {
     if (textEl) textEl.textContent = 'loading…';
     return;
   }
+  // Phase 7: onboarding panel shows/hides based on state.
+  // Defined below; check existence to avoid TDZ on first render.
+  if (typeof maybeShowCockpitOnboarding === 'function') {
+    maybeShowCockpitOnboarding(state);
+  }
   // Module 1: state strip
   const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
   const dotEl = document.getElementById('cockpit-status-dot');
@@ -4208,6 +4213,146 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-// Initialize cockpit setup at boot.
+// ---------------------------------------------------------------------------
+// COCKPIT — Phase 7 onboarding + keyboard navigation
+// ---------------------------------------------------------------------------
+
+/** When the cockpit state has no goal (or empty inbox), show onboarding. */
+function maybeShowCockpitOnboarding(state) {
+  const onboarding = document.getElementById('cockpit-onboarding');
+  const titleEl = document.getElementById('cockpit-onboarding-title');
+  const msgEl = document.getElementById('cockpit-onboarding-message');
+  const setGoalBtn = document.getElementById('cockpit-onboarding-set-goal');
+  if (!onboarding || !state) return;
+  if (state.autopilot_status === 'NO_GOAL') {
+    onboarding.hidden = false;
+    if (titleEl) titleEl.textContent = '🎯 Set a goal first';
+    if (msgEl) msgEl.textContent = 'Mentor needs a project-level goal to run. Define one sentence describing the destination.';
+    if (setGoalBtn) setGoalBtn.hidden = false;
+    return;
+  }
+  // Empty inbox (no escalations, no agents, no tasks) without onboarding
+  // friction: keep the modules visible but hide the onboarding panel.
+  onboarding.hidden = true;
+  if (setGoalBtn) setGoalBtn.hidden = true;
+}
+
+function setupCockpitOnboarding() {
+  const addProjectBtn = document.getElementById('cockpit-onboarding-add-project');
+  if (addProjectBtn) {
+    addProjectBtn.addEventListener('click', async () => {
+      // Reuse existing add-project flow.
+      const addProjMenu = document.getElementById('menu-add-project');
+      if (addProjMenu) addProjMenu.click();
+      else {
+        const res = await window.cairn.addProject({});
+        if (res && res.ok) poll().catch(() => {});
+      }
+    });
+  }
+  const setGoalBtn = document.getElementById('cockpit-onboarding-set-goal');
+  if (setGoalBtn) {
+    setGoalBtn.addEventListener('click', () => {
+      // Scroll to the cockpit state strip so the next-step is obvious;
+      // the goal-card lives in the legacy view-project. For Phase 7 we
+      // surface an inline prompt() — Phase 8 polish replaces with modal.
+      const goal = prompt('Define a one-sentence goal for this project:\n(empty cancels)');
+      if (!goal || !goal.trim()) return;
+      if (!selectedProject) {
+        alert('No project selected.');
+        return;
+      }
+      window.cairn.setProjectGoal(selectedProject.id, { text: goal.trim() }).then(res => {
+        if (res && res.ok) poll().catch(() => {});
+        else alert('Failed to set goal: ' + ((res && res.error) || 'unknown'));
+      });
+    });
+  }
+  const helpLink = document.getElementById('cockpit-onboarding-help');
+  const helpOverlay = document.getElementById('cockpit-help-overlay');
+  const helpClose = document.getElementById('cockpit-help-close');
+  if (helpLink && helpOverlay) {
+    helpLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      helpOverlay.classList.add('open');
+    });
+  }
+  if (helpClose && helpOverlay) {
+    helpClose.addEventListener('click', () => helpOverlay.classList.remove('open'));
+  }
+}
+
+// Onboarding visibility is updated by `renderCockpit` directly (see top
+// of that function). When non-cockpit views are active, ensure the
+// onboarding panel is hidden.
+function hideCockpitOnboardingIfNotInView() {
+  if (currentView !== 'cockpit') {
+    const onboarding = document.getElementById('cockpit-onboarding');
+    if (onboarding) onboarding.hidden = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard navigation (j / k / / / Enter / ? / Esc — Esc already handled
+// at the top-level keydown listener above).
+// ---------------------------------------------------------------------------
+
+let activityCursorIdx = 0;
+
+function setupCockpitKeyboard() {
+  document.addEventListener('keydown', (e) => {
+    // Skip when typing in an input.
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    // Skip when modal or help overlay is open.
+    if (document.getElementById('modal-overlay')?.classList.contains('open')) return;
+    const helpOverlay = document.getElementById('cockpit-help-overlay');
+    if (helpOverlay && helpOverlay.classList.contains('open')) {
+      if (e.key === 'Escape') helpOverlay.classList.remove('open');
+      return;
+    }
+    if (currentView !== 'cockpit') return;
+    if (e.key === '?') {
+      e.preventDefault();
+      if (helpOverlay) helpOverlay.classList.add('open');
+      return;
+    }
+    if (e.key === '/') {
+      e.preventDefault();
+      const inp = document.getElementById('cockpit-steer-input');
+      if (inp && !inp.disabled) inp.focus();
+      return;
+    }
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveActivityCursor(+1);
+      return;
+    }
+    if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveActivityCursor(-1);
+      return;
+    }
+  });
+}
+
+function moveActivityCursor(delta) {
+  const list = document.getElementById('cockpit-activity-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.cockpit-activity-row');
+  if (rows.length === 0) return;
+  activityCursorIdx = Math.max(0, Math.min(rows.length - 1, activityCursorIdx + delta));
+  rows.forEach((r, i) => {
+    r.style.background = i === activityCursorIdx ? '#2a2a2a' : '';
+  });
+  const target = rows[activityCursorIdx];
+  if (target && target.scrollIntoView) {
+    target.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Wire everything at boot.
 setupCockpit();
+setupCockpitOnboarding();
+setupCockpitKeyboard();
 

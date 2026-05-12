@@ -1376,6 +1376,81 @@
   }
   .cockpit-rewind-btn:disabled { color: #555; border-color: #333; cursor: not-allowed; }
 
+  /* Onboarding / empty state (Phase 7) */
+  .cockpit-onboarding {
+    padding: 30px 16px;
+    text-align: center;
+    border-bottom: 1px solid #2a2a2a;
+    background: #1f1f1f;
+  }
+  .cockpit-onboarding-body { max-width: 380px; margin: 0 auto; }
+  .cockpit-onboarding-title {
+    font-size: 1.05em;
+    color: #ddd;
+    margin-bottom: 8px;
+  }
+  .cockpit-onboarding-message {
+    color: #999;
+    font-size: 0.88em;
+    margin-bottom: 16px;
+  }
+  .cockpit-onboarding-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .cockpit-onboarding-actions button {
+    background: #2a4a7a;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 16px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9em;
+  }
+  .cockpit-onboarding-actions button:hover { background: #355a90; }
+  .cockpit-onboarding-link {
+    color: #5d8dd4;
+    font-size: 0.85em;
+    text-decoration: none;
+    margin-top: 4px;
+  }
+  .cockpit-onboarding-link:hover { text-decoration: underline; }
+
+  /* "What is Cairn?" inline help overlay */
+  .cockpit-help-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(20,20,20,0.96);
+    z-index: 50;
+    overflow-y: auto;
+    padding: 20px;
+    display: none;
+  }
+  .cockpit-help-overlay.open { display: block; }
+  .cockpit-help-overlay h3 { color: #eee; margin: 12px 0 4px; }
+  .cockpit-help-overlay p { color: #ccc; line-height: 1.5; font-size: 0.88em; }
+  .cockpit-help-overlay code {
+    background: #2a2a2a;
+    color: #ffaa66;
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 0.85em;
+  }
+  .cockpit-help-overlay .cockpit-help-close {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    color: #888;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    font-size: 1.2em;
+  }
+  .cockpit-help-overlay .cockpit-help-close:hover { color: #eee; }
+
   /* Module 5: NEEDS YOU */
   .cockpit-needs {
     padding: 12px 16px;
@@ -2553,6 +2628,21 @@
       <!-- populated by renderCockpitTabs() -->
     </div>
 
+    <!-- Onboarding / empty state (visible when no project / no goal) -->
+    <div class="cockpit-onboarding" id="cockpit-onboarding" hidden>
+      <div class="cockpit-onboarding-body">
+        <div class="cockpit-onboarding-title" id="cockpit-onboarding-title">📋 Inbox is empty.</div>
+        <div class="cockpit-onboarding-message" id="cockpit-onboarding-message">
+          Start by adding a project and defining a goal so Mentor can run.
+        </div>
+        <div class="cockpit-onboarding-actions">
+          <button id="cockpit-onboarding-add-project" type="button">＋ Add a project</button>
+          <button id="cockpit-onboarding-set-goal" type="button" hidden>✎ Define goal</button>
+          <a id="cockpit-onboarding-help" class="cockpit-onboarding-link" href="#">What is Cairn?</a>
+        </div>
+      </div>
+    </div>
+
     <!-- Module 1: STATE STRIP -->
     <div class="cockpit-state" id="cockpit-state">
       <div class="cockpit-status-line">
@@ -2597,6 +2687,37 @@
       <div class="cockpit-checkpoints-list" id="cockpit-checkpoints-list">
         <div class="placeholder">no checkpoints yet</div>
       </div>
+    </div>
+
+    <!-- "What is Cairn?" inline help overlay (Phase 7 onboarding) -->
+    <div class="cockpit-help-overlay" id="cockpit-help-overlay">
+      <button class="cockpit-help-close" id="cockpit-help-close" type="button">✕</button>
+      <h3>Cairn — 一句话</h3>
+      <p>
+        Cairn 是<strong>你的 AI 编程工人组合管理面</strong>。
+        agent（Claude Code / Cursor / Codex / Aider 等）是<em>真正写代码的引擎</em>；
+        Cairn 是仪表盘 + 方向盘 + 急刹车，让你能放心走开、回来看进度、必要时拉回方向。
+      </p>
+      <h3>5 个模块</h3>
+      <p>
+        <strong>① State Strip</strong>：项目跑得怎样、Mentor 上次说啥<br>
+        <strong>② Steer</strong>：不切 session 直接给 agent 发话<br>
+        <strong>③ Activity</strong>：按时间排的 agent + Mentor 全流水<br>
+        <strong>④ Safety</strong>：一键回退到某个 checkpoint<br>
+        <strong>⑤ Needs You</strong>：Mentor 搞不定才闪红
+      </p>
+      <h3>键盘快捷键</h3>
+      <p>
+        <code>j</code> / <code>k</code> 上下浏览 activity；
+        <code>/</code> 聚焦 steer 输入；
+        <code>Enter</code> 发送；
+        <code>Esc</code> 返回 projects 列表；
+        <code>?</code> 打开这页帮助
+      </p>
+      <h3>Mentor 边界</h3>
+      <p>
+        Cairn 内置 Mentor 是<em>引导员</em>，不是<em>决策者</em>。战略决策（"下一个 feature 是啥"）走外部 coding agent；Mentor 只做监督 + 引导 + 辅助提效。
+      </p>
     </div>
 
     <!-- Module 5: NEEDS YOU -->
