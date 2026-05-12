@@ -828,9 +828,17 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   if (!proj) {
     return cockpitState.emptyCockpitState(null, null, 'project_not_found');
   }
-  const entry = ensureDbHandle(proj.db_path);
+  // Some legacy registry entries carry db_path = '/dev/null' or '(unknown)'
+  // as a "use the global DB" sentinel from earlier dogfood scripts. Fall back
+  // to the default DB rather than rendering an empty cockpit — the project's
+  // agent_id_hints + capability matching are the real attribution boundary.
+  let dbPathForLookup = proj.db_path;
+  if (!dbPathForLookup || dbPathForLookup === '/dev/null' || dbPathForLookup === '(unknown)') {
+    dbPathForLookup = registry.DEFAULT_DB_PATH;
+  }
+  const entry = ensureDbHandle(dbPathForLookup);
   if (!entry) {
-    return cockpitState.emptyCockpitState(proj, proj.db_path, 'db_unavailable');
+    return cockpitState.emptyCockpitState(proj, dbPathForLookup, 'db_unavailable');
   }
   const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
   const goal = registry.getProjectGoal(reg, projectId);

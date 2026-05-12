@@ -3950,8 +3950,22 @@ function renderCockpit(state) {
   const listEl = document.getElementById('cockpit-activity-list');
   if (listEl) {
     const filtered = (state.activity || []).filter(e => activityFilterMatches(e.kind));
+    // Diagnostic for the 0-events-rendered case while data exists.
+    if ((state.activity || []).length > 0 && filtered.length === 0) {
+      try { console.warn('[cockpit] activity rendered 0 because filter=' + cockpitActivityFilter + ' but state.activity.length=' + state.activity.length); } catch (_e) {}
+    }
     if (filtered.length === 0) {
-      listEl.innerHTML = '<div class="placeholder">no activity yet</div>';
+      const noteFiltered = (state.activity || []).length > 0
+        ? `<div class="placeholder">no activity matches filter <code>${escapeHtml(cockpitActivityFilter)}</code>; <a href="#" id="cockpit-clear-filter">show all</a></div>`
+        : '<div class="placeholder">no activity yet</div>';
+      listEl.innerHTML = noteFiltered;
+      const clear = document.getElementById('cockpit-clear-filter');
+      if (clear) clear.addEventListener('click', (e) => {
+        e.preventDefault();
+        cockpitActivityFilter = 'all';
+        document.querySelectorAll('.cockpit-filter').forEach(b => b.classList.toggle('active', b.getAttribute('data-filter') === 'all'));
+        poll().catch(() => {});
+      });
     } else {
       const rows = filtered.map(e => {
         const ts = fmtHm(e.ts);
@@ -4257,19 +4271,13 @@ function setupCockpitOnboarding() {
   const setGoalBtn = document.getElementById('cockpit-onboarding-set-goal');
   if (setGoalBtn) {
     setGoalBtn.addEventListener('click', () => {
-      // Scroll to the cockpit state strip so the next-step is obvious;
-      // the goal-card lives in the legacy view-project. For Phase 7 we
-      // surface an inline prompt() — Phase 8 polish replaces with modal.
-      const goal = prompt('Define a one-sentence goal for this project:\n(empty cancels)');
-      if (!goal || !goal.trim()) return;
+      // Electron disables window.prompt() in renderer by default. Use an
+      // inline modal that the existing #modal-overlay already supports.
       if (!selectedProject) {
         alert('No project selected.');
         return;
       }
-      window.cairn.setProjectGoal(selectedProject.id, { text: goal.trim() }).then(res => {
-        if (res && res.ok) poll().catch(() => {});
-        else alert('Failed to set goal: ' + ((res && res.error) || 'unknown'));
-      });
+      openGoalModal();
     });
   }
   const helpLink = document.getElementById('cockpit-onboarding-help');
@@ -4284,6 +4292,59 @@ function setupCockpitOnboarding() {
   if (helpClose && helpOverlay) {
     helpClose.addEventListener('click', () => helpOverlay.classList.remove('open'));
   }
+}
+
+/** Inline goal-input modal — re-uses the existing #modal-overlay for the
+ *  "Add to project" picker, but with goal-input contents. Phase 7 polish. */
+function openGoalModal() {
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl = document.getElementById('modal-body');
+  if (!overlay || !bodyEl) {
+    alert('Modal not available.');
+    return;
+  }
+  if (titleEl) titleEl.textContent = `Define goal for "${selectedProject.label}"`;
+  bodyEl.innerHTML = `
+    <div style="padding:8px 0;">
+      <div style="color:#aaa;font-size:0.85em;margin-bottom:6px;">
+        One concrete sentence — what's the destination?
+        Mentor uses this to suggest next steps.
+      </div>
+      <textarea id="goal-input-textarea"
+        style="width:100%;min-height:80px;background:#111;color:#eee;border:1px solid #333;border-radius:4px;padding:8px;font-family:inherit;resize:vertical;"
+        placeholder="e.g. ship the cockpit redesign with non-developer onboarding"></textarea>
+      <div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end;">
+        <button id="goal-input-cancel"
+          style="background:#333;color:#ddd;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button id="goal-input-save"
+          style="background:#2a4a7a;color:white;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-family:inherit;">Save</button>
+      </div>
+    </div>
+  `;
+  overlay.classList.add('open');
+  const ta = document.getElementById('goal-input-textarea');
+  if (ta) {
+    ta.focus();
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        document.getElementById('goal-input-save')?.click();
+      }
+    });
+  }
+  const cancel = () => closeModal();
+  document.getElementById('goal-input-cancel')?.addEventListener('click', cancel);
+  document.getElementById('goal-input-save')?.addEventListener('click', async () => {
+    const text = (ta && ta.value || '').trim();
+    if (!text) { ta && ta.focus(); return; }
+    const res = await window.cairn.setProjectGoal(selectedProject.id, { text });
+    if (res && res.ok) {
+      closeModal();
+      poll().catch(() => {});
+    } else {
+      alert('Failed: ' + ((res && res.error) || 'unknown'));
+    }
+  });
 }
 
 // Onboarding visibility is updated by `renderCockpit` directly (see top
