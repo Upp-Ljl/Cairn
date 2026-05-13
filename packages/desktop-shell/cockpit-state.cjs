@@ -303,6 +303,93 @@ function querySessions(db, tables, hints, now, opts) {
   return out.slice(0, o.limit || 20);
 }
 
+/**
+ * A1.2 Session Timeline (panel-cockpit-redesign 2026-05-14).
+ *
+ * Read agent execution timeline events for a single session, from
+ * scratchpad key namespace `session_timeline/<agent_id>/<ulid>`
+ * (protocol owned by A1.1). Each row's value_json is:
+ *   { ts, kind, label, agent_id, task_id?, parent_event_id?, source }
+ *
+ * Also joins kernel-side `checkpoints` tagged to this agent_id as
+ * synthetic `kind: 'checkpoint'` events so the user sees safe-to-rewind
+ * anchors inline (CEO grill约定 16).
+ *
+ * Events returned in chronological order (oldest first). Renderer may
+ * reverse for newest-at-top display. parent_event_id forms the subagent
+ * tree — renderer is responsible for visual indentation.
+ *
+ * @returns Array<{ event_id, ts, kind, label, agent_id, task_id?,
+ *   parent_event_id?, source, checkpoint_id?, raw }>
+ */
+function querySessionTimeline(db, tables, agentId, opts) {
+  const o = opts || {};
+  const limit = o.limit || 200;
+  if (!agentId || !tables.has('scratchpad')) return [];
+
+  const prefix = `session_timeline/${agentId}/`;
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT key, value_json, updated_at
+      FROM scratchpad
+      WHERE key LIKE ? || '%'
+      ORDER BY key ASC
+    `).all(prefix);
+  } catch (_e) { return []; }
+
+  const events = [];
+  for (const r of rows) {
+    const ulid = r.key.slice(prefix.length);
+    let body = null;
+    try { body = JSON.parse(r.value_json || '{}'); } catch (_e) { continue; }
+    if (!body || typeof body !== 'object') continue;
+    events.push({
+      event_id: ulid,
+      ts: Number(body.ts) || Number(r.updated_at) || 0,
+      kind: typeof body.kind === 'string' ? body.kind : 'progress',
+      label: typeof body.label === 'string' ? body.label : '',
+      agent_id: body.agent_id || agentId,
+      task_id: body.task_id || null,
+      parent_event_id: body.parent_event_id || null,
+      source: body.source || 'agent',
+      raw: body,
+    });
+  }
+
+  // Append checkpoint rows as synthetic events (rewind anchors).
+  if (tables.has('checkpoints') && tables.has('tasks')) {
+    try {
+      const ckpts = db.prepare(`
+        SELECT id, task_id, git_head, snapshot_status, created_at, label
+        FROM checkpoints
+        WHERE task_id IN (
+          SELECT DISTINCT task_id FROM tasks WHERE created_by_agent_id = ?
+        )
+        ORDER BY created_at DESC
+        LIMIT 50
+      `).all(agentId);
+      for (const c of ckpts) {
+        events.push({
+          event_id: `ckpt:${c.id}`,
+          ts: c.created_at,
+          kind: 'checkpoint',
+          label: c.label || `before commit ${(c.git_head || '').slice(0, 8)}`,
+          agent_id: agentId,
+          task_id: c.task_id || null,
+          parent_event_id: null,
+          source: 'kernel',
+          checkpoint_id: c.id,
+          raw: c,
+        });
+      }
+    } catch (_e) { /* leave checkpoints out of timeline */ }
+  }
+
+  events.sort((a, b) => a.ts - b.ts);
+  return events.slice(-limit);
+}
+
 function deriveSessionDisplayName(agentId) {
   if (!agentId || typeof agentId !== 'string') return '(unknown)';
   // `cairn-session-746e4cea197e` → `746e4cea` (8-char short prefix)
@@ -935,6 +1022,7 @@ module.exports = {
   queryCurrentTask,
   queryAgents,
   querySessions,
+  querySessionTimeline,
   deriveSessionDisplayName,
   queryLatestMentorNudge,
   queryEscalations,

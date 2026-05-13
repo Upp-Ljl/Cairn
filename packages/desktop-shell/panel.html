@@ -2076,6 +2076,95 @@
   .filter-chip a { color: #7af; cursor: pointer; }
   .filter-chip a:hover { color: #aef; }
 
+  /* L2 Session Timeline (A1.2) — drill-down from M4 Sessions row click */
+  #view-timeline {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    background: #1a1a1a;
+  }
+  .tl-header {
+    padding: 8px 12px;
+    background: #141414;
+    border-bottom: 1px solid #333;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .tl-back {
+    background: transparent;
+    color: #8ac;
+    border: 1px solid #2a3a4a;
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85em;
+  }
+  .tl-back:hover { color: #eef; border-color: #4a6a8a; }
+  .tl-titlebar { margin-top: 6px; }
+  .tl-title { color: #e8e8e8; font-weight: 500; font-size: 0.95em; }
+  .tl-meta { color: #666; font-size: 0.8em; margin-left: 10px; }
+  .tl-list {
+    padding: 8px 12px;
+  }
+  .tl-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid #232323;
+    font-size: 0.85em;
+    line-height: 1.4;
+  }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-row.indented { padding-left: 20px; border-left: 2px solid #2a3a4a; margin-left: 8px; }
+  .tl-row.indented-2 { padding-left: 40px; }
+  .tl-ts {
+    color: #666;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85em;
+    flex-shrink: 0;
+    width: 50px;
+  }
+  .tl-kind {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 9px;
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .tl-kind.start          { background: #2a5a3a; color: #c6ffd6; }
+  .tl-kind.progress       { background: #2a3a5a; color: #c6d6ff; }
+  .tl-kind.done           { background: #1a4a2a; color: #a8e6c0; }
+  .tl-kind.blocked        { background: #7a5a2a; color: #fff5e8; }
+  .tl-kind.unblocked      { background: #2a5a5a; color: #c6f5f5; }
+  .tl-kind.spawn          { background: #4a3a6a; color: #d6c6ff; }
+  .tl-kind.subagent_return{ background: #4a3a6a; color: #d6c6ff; }
+  .tl-kind.checkpoint     { background: #5a3a2a; color: #ffd6a8; }
+  .tl-kind.mentor         { background: #2a4a7a; color: #e8e8ff; }
+  .tl-label {
+    color: #e0e0e0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tl-rewind {
+    background: transparent;
+    color: #8ac;
+    border: 1px solid #2a3a4a;
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 0.78em;
+    cursor: pointer;
+    font-family: inherit;
+    flex-shrink: 0;
+  }
+  .tl-rewind:hover { color: #eef; border-color: #4a6a8a; }
+  .tl-source-mentor { background: #1f2a3a; }
+
   /* Unassigned detail view (L1 → drill-down) */
   #view-unassigned {
     flex: 1 1 auto;
@@ -2905,6 +2994,23 @@
       <div class="cockpit-needs-list" id="cockpit-needs-list">
         <div class="cockpit-needs-empty">Mentor handling — agent on track.</div>
       </div>
+    </div>
+  </div>
+
+  <!-- L2 Session Timeline drill-down (panel-cockpit-redesign A1.2, 2026-05-14).
+       Opened by clicking a session row in M4 Sessions. Shows chronological
+       agent execution events + checkpoints as rewind anchors. Subagent
+       events are visually indented via parent_event_id. -->
+  <div id="view-timeline" hidden>
+    <div class="tl-header">
+      <button id="tl-back" type="button" class="tl-back">← back to cockpit</button>
+      <div class="tl-titlebar">
+        <span class="tl-title" id="tl-title">session timeline</span>
+        <span class="tl-meta" id="tl-meta"></span>
+      </div>
+    </div>
+    <div class="tl-list" id="tl-list">
+      <div class="placeholder">no events yet — agent hasn't written timeline records</div>
     </div>
   </div>
 

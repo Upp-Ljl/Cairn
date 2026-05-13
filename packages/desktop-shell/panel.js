@@ -158,6 +158,8 @@ function setView(name, meta) {
   document.getElementById('view-project').hidden       = (name !== 'project');
   document.getElementById('view-cockpit').hidden       = (name !== 'cockpit');
   document.getElementById('view-unassigned').hidden    = (name !== 'unassigned');
+  const tlEl = document.getElementById('view-timeline');
+  if (tlEl) tlEl.hidden = (name !== 'timeline');
   // Back-button menu item visible in any non-L1 view.
   const backBtn = document.getElementById('menu-back-to-projects');
   if (backBtn) backBtn.hidden = (name === 'projects');
@@ -188,6 +190,9 @@ function renderHeaderForView() {
     dp.textContent = selectedUnassignedDbPath
       ? `DB: ${shortBasename(selectedUnassignedDbPath)}`
       : '';
+  } else if (currentView === 'timeline' && selectedProject) {
+    wl.textContent = `${selectedProject.label || '(project)'} · session`;
+    dp.textContent = `DB: ${shortBasename(selectedProject.db_path)}`;
   } else {
     wl.textContent = 'Cairn';
     dp.textContent = '';
@@ -3636,6 +3641,10 @@ async function poll() {
       renderHeaderForView();
       renderCockpit(state);
       renderCockpitTabs(lastProjectsPayload, selectedProject);
+    } else if (currentView === 'timeline') {
+      // L3 (A1.2) — session timeline drilldown.
+      await refreshSessionTimeline();
+      renderHeaderForView();
     } else {
       // L2 view — Quick-Slice surface scoped to the active project.
       const summaryP = window.cairn.getProjectSummary();
@@ -4049,6 +4058,15 @@ function renderCockpit(state) {
         </div>`;
       });
       sessionsListEl.innerHTML = rows.join('');
+      // A1.2: click any session row → open L2 timeline drilldown.
+      sessionsListEl.querySelectorAll('.cockpit-session-row').forEach(node => {
+        node.addEventListener('click', () => {
+          const agentId = node.getAttribute('data-agent-id');
+          if (!agentId || !selectedProject) return;
+          openSessionTimeline(selectedProject.id, agentId);
+        });
+        node.style.cursor = 'pointer';
+      });
     }
   }
 
@@ -4486,8 +4504,116 @@ function moveActivityCursor(delta) {
   }
 }
 
+// ===========================================================================
+// A1.2 L2 Session Timeline — drill-down from M4 Sessions row click.
+// Renders chronological agent execution events + checkpoints as rewind
+// anchors. subagent events indent via parent_event_id linkage.
+// ===========================================================================
+
+let timelineCurrentAgentId = null;
+let timelineCurrentProjectId = null;
+
+async function openSessionTimeline(projectId, agentId) {
+  timelineCurrentProjectId = projectId;
+  timelineCurrentAgentId = agentId;
+  setView('timeline');
+  await refreshSessionTimeline();
+}
+
+async function refreshSessionTimeline() {
+  if (!timelineCurrentProjectId || !timelineCurrentAgentId) return;
+  let res = null;
+  try {
+    res = await window.cairn.getSessionTimeline(timelineCurrentProjectId, timelineCurrentAgentId, { limit: 200 });
+  } catch (_e) {
+    res = { ok: false, error: 'ipc_failed' };
+  }
+  renderTimelineView(res);
+}
+
+function renderTimelineView(payload) {
+  const titleEl = document.getElementById('tl-title');
+  const metaEl  = document.getElementById('tl-meta');
+  const listEl  = document.getElementById('tl-list');
+  if (!titleEl || !listEl) return;
+  if (!payload || !payload.ok) {
+    titleEl.textContent = '(session unavailable)';
+    metaEl.textContent = '';
+    listEl.innerHTML = `<div class="placeholder">${escapeHtml((payload && payload.error) || 'no data')}</div>`;
+    return;
+  }
+  titleEl.textContent = payload.display_name || payload.agent_id || '(session)';
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  metaEl.textContent = events.length > 0 ? `${events.length} events` : '';
+  if (events.length === 0) {
+    listEl.innerHTML = '<div class="placeholder">no events yet — agent hasn\'t written timeline records (see docs/cairn-session-timeline-protocol.md)</div>';
+    return;
+  }
+  // Compute indentation depth via parent_event_id chain. Cap at 2 levels
+  // for readability (deeper nests still render but flat at level 2).
+  const byId = new Map();
+  for (const e of events) byId.set(e.event_id, e);
+  function depth(e) {
+    let d = 0; let cur = e;
+    while (cur && cur.parent_event_id && d < 2) {
+      const parent = byId.get(cur.parent_event_id);
+      if (!parent) break;
+      d++; cur = parent;
+    }
+    return d;
+  }
+  // Render newest at top (reverse chronological).
+  const ordered = events.slice().reverse();
+  const rows = ordered.map(e => {
+    const d = depth(e);
+    const indentCls = d === 0 ? '' : (d === 1 ? 'indented' : 'indented-2');
+    const sourceCls = e.source === 'mentor' ? 'tl-source-mentor' : '';
+    const ts = fmtHm(e.ts);
+    const kindCls = String(e.kind || 'progress');
+    const label = escapeHtml(e.label || '');
+    const rewindBtn = e.kind === 'checkpoint'
+      ? `<button class="tl-rewind" data-ckpt-id="${escapeHtml(e.checkpoint_id || '')}">Rewind</button>`
+      : '';
+    return `<div class="tl-row ${indentCls} ${sourceCls}" data-event-id="${escapeHtml(e.event_id)}">
+      <span class="tl-ts">${ts}</span>
+      <span class="tl-kind ${kindCls}">${escapeHtml(kindCls)}</span>
+      <span class="tl-label">${label}</span>
+      ${rewindBtn}
+    </div>`;
+  });
+  listEl.innerHTML = rows.join('');
+  // Wire rewind buttons to existing cockpitRewindPreview / cockpitRewindTo path.
+  listEl.querySelectorAll('.tl-rewind').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const ckptId = btn.getAttribute('data-ckpt-id');
+      if (!ckptId || !selectedProject) return;
+      // Delegate to the existing rewind handler so behavior matches Module 4.
+      if (typeof handleRewindClick === 'function') {
+        handleRewindClick(ckptId);
+      }
+    });
+  });
+}
+
+function setupTimelineView() {
+  const back = document.getElementById('tl-back');
+  if (back) {
+    back.addEventListener('click', () => {
+      timelineCurrentAgentId = null;
+      timelineCurrentProjectId = null;
+      if (selectedProject) {
+        setView('cockpit', { id: selectedProject.id, label: selectedProject.label, project_root: selectedProject.project_root, db_path: selectedProject.db_path });
+      } else {
+        setView('projects');
+      }
+    });
+  }
+}
+
 // Wire everything at boot.
 setupCockpit();
 setupCockpitOnboarding();
 setupCockpitKeyboard();
+setupTimelineView();
 
