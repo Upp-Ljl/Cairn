@@ -4021,39 +4021,34 @@ function renderCockpit(state) {
       : '没有活跃 agent 可发话';
   }
 
-  // Module 3: activity feed
-  const listEl = document.getElementById('cockpit-activity-list');
-  if (listEl) {
-    const filtered = (state.activity || []).filter(e => activityFilterMatches(e.kind));
-    // Diagnostic for the 0-events-rendered case while data exists.
-    if ((state.activity || []).length > 0 && filtered.length === 0) {
-      try { console.warn('[cockpit] activity rendered 0 because filter=' + cockpitActivityFilter + ' but state.activity.length=' + state.activity.length); } catch (_e) {}
-    }
-    if (filtered.length === 0) {
-      const noteFiltered = (state.activity || []).length > 0
-        ? `<div class="placeholder">no activity matches filter <code>${escapeHtml(cockpitActivityFilter)}</code>; <a href="#" id="cockpit-clear-filter">show all</a></div>`
-        : '<div class="placeholder">no activity yet</div>';
-      listEl.innerHTML = noteFiltered;
-      const clear = document.getElementById('cockpit-clear-filter');
-      if (clear) clear.addEventListener('click', (e) => {
-        e.preventDefault();
-        cockpitActivityFilter = 'all';
-        document.querySelectorAll('.cockpit-filter').forEach(b => b.classList.toggle('active', b.getAttribute('data-filter') === 'all'));
-        poll().catch(() => {});
-      });
+  // Module 3 → now Sessions (panel-cockpit-redesign 2026-05-14 A3-part2).
+  // Renders per-session cards from state.sessions (querySessions output).
+  // State pills: working / blocked / idle / stale. idle is first-class.
+  // Click → L2 timeline drilldown (A1 phase, not yet built — placeholder
+  // for now logs only).
+  const sessionsListEl = document.getElementById('cockpit-sessions-list');
+  if (sessionsListEl) {
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    if (sessions.length === 0) {
+      sessionsListEl.innerHTML =
+        '<div class="placeholder">no sessions yet — start an agent (Claude Code / Cursor / Codex) in this project</div>';
     } else {
-      const rows = filtered.map(e => {
-        const ts = fmtHm(e.ts);
-        const kindLabel = activityKindLabel(e.kind);
-        const kindCls = activityKindClass(e.kind);
-        const body = escapeHtml(e.body || '');
-        return `<div class="cockpit-activity-row">
-          <span class="cockpit-activity-ts">${ts}</span>
-          <span class="cockpit-activity-kind ${kindCls}">${escapeHtml(kindLabel)}</span>
-          <span class="cockpit-activity-body">${body}</span>
+      const rows = sessions.map(s => {
+        const stateCls = s.state || 'idle';
+        const stateLabel = stateCls;
+        const taskLine = s.current_task && s.current_task.intent
+          ? `<div class="cockpit-session-task"><span class="label">${escapeHtml(s.current_task.state || '')}</span>${escapeHtml(s.current_task.intent)}</div>`
+          : '';
+        return `<div class="cockpit-session-row" data-agent-id="${escapeHtml(s.agent_id || '')}">
+          <div class="cockpit-session-head">
+            <span class="cockpit-session-state ${stateCls}">${escapeHtml(stateLabel)}</span>
+            <span class="cockpit-session-name" title="${escapeHtml(s.agent_id || '')}">${escapeHtml(s.display_name || s.agent_id || '(unknown)')}</span>
+            <span class="cockpit-session-age">${fmtAgo(s.last_heartbeat_ts || 0)}</span>
+          </div>
+          ${taskLine}
         </div>`;
       });
-      listEl.innerHTML = rows.join('');
+      sessionsListEl.innerHTML = rows.join('');
     }
   }
 
