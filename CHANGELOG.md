@@ -4,6 +4,54 @@ All notable changes to Cairn are documented here. Format roughly follows [Keep a
 
 ---
 
+## [0.3.0-mentor-3layer] — 2026-05-13 (Unreleased)
+
+**Mentor becomes team lead — 3-layer decision via CAIRN.md + agent_brief.**
+
+Default flips from *escalate-when-uncertain* to *decide-by-policy*; the user's confidence comes from cockpit Module 4's cheap rewind (see memory `trust-with-rewind-safety`). Mentor coordinates, doesn't think on its own — its judgment basis is layered:
+
+| Layer | Source | Cost |
+|---|---|---|
+| **L1** | per-project `CAIRN.md` (the project owner's voice) | $0 |
+| **L2** | `scratchpad:agent_brief/<agent_id>` (agent self-summary written before raising a blocker) | $0 |
+| **L3** | optional haiku-class LLM polish via `cockpit-llm-helpers.runHelper` | ~$0.0005 |
+
+### What's new
+
+- **`docs/CAIRN-md-spec.md`** — canonical schema for the new per-project policy file (Goal · IS/IS NOT · ✅/⚠️/🛑 Mentor authority · constraints · known answers · current phase). Routing logic + fallback table documented.
+- **`packages/desktop-shell/mentor-project-profile.cjs`** — scanner + scratchpad cache (`project_profile/<pid>`). `loadProfile()` is mtime-gated so unchanged CAIRN.md doesn't re-parse. Helpers `matchBucket` (with token-overlap fallback for descriptive bullets) + `matchKnownAnswer`.
+- **`packages/desktop-shell/mentor-agent-brief.cjs`** — read-only helpers for `scratchpad:agent_brief/<agent_id>`; staleness flag (>30 min default) + `briefSnippet()` one-liner for nudges.
+- **`packages/desktop-shell/mentor-policy.cjs`** rules D/E/G refactored to consult the 3-layer:
+  - L1.0 `known_answers` substring → cheapest nudge path (no LLM)
+  - L1.1 `🛑 escalate` match → escalate
+  - L1.2 `✅ auto_decide` → nudge silently, using L2 brief lean when available
+  - L1.3 `⚠️ decide_and_announce` → same as ✅ but with `announce: true` flag for Activity feed
+  - unmatched / no profile → conservative escalate (preserves Phase 5 behaviour)
+- **`packages/desktop-shell/mentor-tick.cjs`** loads profile + briefs once per project per tick and threads them through `evaluatePolicy`.
+- **`packages/mcp-server/src/cli/install.ts`** scaffolds `CAIRN.md` at the project root on first install — full template (all six sections plus "For Cairn-aware coding agents" subsection that documents the agent_brief protocol). Idempotent: existing CAIRN.md is preserved.
+- **Repo dogfood**: this repo gets its own `CAIRN.md` with the v0.3 policy filled in. Cairn dogfoods Cairn.
+
+### Tests / Dogfood
+
+- `packages/desktop-shell/scripts/smoke-mentor-3layer.mjs` — **64/64 assertions PASS** covering scanner, missing-file fallback, profile cache mtime-gated reuse, agent_brief read+staleness, Rule D × 6 routes (known_answer / 🛑 / ✅ / ⚠️ / unmatched / legacy), Rule E × 2, Rule G × 3, routeBySignal helper.
+- `packages/desktop-shell/scripts/dogfood-llm-3layer.mjs` — real haiku call exercising the L3 polish prompt with profile + brief + question; INFRA-OK grace for 429 / transient (same pattern as `dogfood-llm-tail-summary`). Skips when no provider key configured.
+- Prior smokes green: `smoke-mentor-policy` 23/23, `smoke-mentor-tick` 16/16.
+- mcp-server: 360 / 1 pre-existing skip — includes new install-CAIRN.md scaffold tests.
+
+### Docs
+
+- **PRODUCT.md §1.3.cockpit** patch: "Mentor is team lead via CAIRN.md authority delegation" subsection. Reaffirms §1.3 #1/#2/#4/#6 anti-definitions (no code-writing / not IDE / etc) still hold — CAIRN.md only widens Mentor's run-time event authority, not the canonical positioning.
+
+### Out of scope (Later, not bound to a version)
+
+- Onboarding wizard that walks non-dev users through filling out CAIRN.md
+- Per-project Mentor "conservative-vs-aggressive" slider
+- Multi-agent consensus (3 agents vote on a decision)
+- Goal-change cascade (invalidate prior nudges when goal changes)
+- Hard-wiring L3 polish into the synchronous policy path (plan §3 deliberately keeps L3 stubbed)
+
+---
+
 ## [0.2.0-cockpit] — 2026-05-13 (Unreleased)
 
 **Panel cockpit redesign — single-project mission-control surface.**

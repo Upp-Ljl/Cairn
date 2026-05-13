@@ -46,6 +46,8 @@ let _lastTickError = null;
  *   projectQueries: object,
  *   mentorPolicy: object,
  *   registry: object,
+ *   mentorProfile?: object,    // optional injection for tests; defaults to ./mentor-project-profile.cjs
+ *   mentorAgentBrief?: object, // optional injection for tests; defaults to ./mentor-agent-brief.cjs
  *   nowFn?: () => number,
  *   onDecision?: (project_id, decision) => void,
  * }} deps
@@ -54,6 +56,8 @@ let _lastTickError = null;
  */
 function runOnce(deps) {
   const now = (deps.nowFn || Date.now)();
+  const mentorProfile = deps.mentorProfile || require('./mentor-project-profile.cjs');
+  const mentorAgentBrief = deps.mentorAgentBrief || require('./mentor-agent-brief.cjs');
   const out = { ticks_run: 1, decisions: 0, projects_scanned: 0, errors: [] };
   if (!deps.reg || !Array.isArray(deps.reg.projects)) return out;
   for (const project of deps.reg.projects) {
@@ -70,6 +74,14 @@ function runOnce(deps) {
       const agentIds = deps.projectQueries.resolveProjectAgentIds(entry.db, entry.tables, project);
       const hints = Array.from(agentIds || []);
       if (hints.length === 0) continue;
+
+      // L1: load / refresh the per-project profile (CAIRN.md cache).
+      let profile = null;
+      try { profile = mentorProfile.loadProfile(entry.db, project); } catch (_e) { profile = null; }
+
+      // L2: read agent_brief scratchpad for any agent associated with this project.
+      let briefs = [];
+      try { briefs = mentorAgentBrief.readAgentBriefs(entry.db, hints) || []; } catch (_e) { briefs = []; }
 
       // RUNNING tasks for this project (sorted most-recent updated_at first).
       const placeholders = '(' + hints.map(() => '?').join(',') + ')';
@@ -112,6 +124,8 @@ function runOnce(deps) {
           task,
           openBlockers,
           outcome,
+          profile,
+          briefs,
           // recentErrors, recentAgentText omitted in tick v1
         });
 

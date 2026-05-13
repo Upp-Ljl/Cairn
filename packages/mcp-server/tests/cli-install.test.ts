@@ -53,7 +53,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('fresh repo', () => {
-  it('creates .mcp.json, hook, and launchers', () => {
+  it('creates .mcp.json, hook, launchers, and CAIRN.md', () => {
     makeFakeRepo();
 
     const result = runInstall(baseOpts());
@@ -62,7 +62,14 @@ describe('fresh repo', () => {
     expect(result.mcpJsonAction).toBe('created');
     expect(result.hookAction).toBe('created');
     expect(result.petLauncherAction).toBe('created');
+    expect(result.cairnMdAction).toBe('created');
     expect(result.warnings).toHaveLength(0);
+
+    // CAIRN.md scaffold
+    const cairnMd = fs.readFileSync(path.join(tmpDir, 'CAIRN.md'), 'utf8');
+    expect(cairnMd).toContain('## Mentor authority (decision delegation)');
+    expect(cairnMd).toContain('## For Cairn-aware coding agents');
+    expect(cairnMd).toContain('agent_brief/<your-agent-id>');
 
     // .mcp.json
     const mcpJson = JSON.parse(fs.readFileSync(path.join(tmpDir, '.mcp.json'), 'utf8'));
@@ -216,6 +223,27 @@ describe('path in .mcp.json', () => {
 
     const mcpJson = JSON.parse(fs.readFileSync(path.join(tmpDir, '.mcp.json'), 'utf8'));
     expect(mcpJson.mcpServers['cairn-wedge'].args[0]).toBe(customEntry);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 8: Existing CAIRN.md — preserved
+// ---------------------------------------------------------------------------
+
+describe('existing CAIRN.md', () => {
+  it('preserves an existing CAIRN.md (does not overwrite)', () => {
+    makeFakeRepo();
+
+    const userContent = '# my project\n\n## Goal\n\nthe owner wrote this.\n';
+    fs.writeFileSync(path.join(tmpDir, 'CAIRN.md'), userContent, 'utf8');
+
+    const result = runInstall(baseOpts());
+
+    expect(result.ok).toBe(true);
+    expect(result.cairnMdAction).toBe('preserved');
+
+    const after = fs.readFileSync(path.join(tmpDir, 'CAIRN.md'), 'utf8');
+    expect(after).toBe(userContent);
   });
 });
 

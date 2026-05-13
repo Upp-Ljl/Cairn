@@ -33,6 +33,7 @@
  */
 
 const crypto = require('node:crypto');
+const mentorProfile = require('./mentor-project-profile.cjs');
 
 const ENC = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 function newUlid() {
@@ -191,66 +192,160 @@ function evaluateRuleB_errorRepetition(ctx) {
 }
 
 /**
- * Rule D — BLOCKED with question.
+ * Rule D — BLOCKED with question (3-layer).
  *
- * Trigger: task is BLOCKED + has open blocker. Action: match question
- * substring against config.knownAnswers; on match → emit nudge with
- * answer; on no-match → escalate.
+ * Trigger: task is BLOCKED + has open blocker.
+ *
+ * Decision order:
+ *   L1.0  profile.known_answers substring match    → nudge with answer (cheapest)
+ *   L1.1  profile.authority.escalate match         → escalate (always-escalate wins)
+ *   L1.2  profile.authority.auto_decide match      → nudge per L2 brief / matched bullet
+ *   L1.3  profile.authority.decide_and_announce    → nudge + announce in Activity
+ *   L2    config.knownAnswers legacy map           → nudge (back-compat)
+ *   ----  no match anywhere → conservative default → escalate
+ *
+ * The L3 LLM polish call is intentionally NOT in this synchronous path;
+ * see ctx.llmPolish + plan §3 acceptance gate. dogfood-llm-3layer.mjs
+ * exercises L3 directly.
  */
 function evaluateRuleD_blocked(ctx) {
-  const { db, project, task, openBlockers, config, emit } = ctx;
+  const { db, project, task, openBlockers, config, emit, profile, briefs } = ctx;
   if (!task || task.state !== 'BLOCKED' || !openBlockers || openBlockers.length === 0) return null;
-  // Only consider blockers we haven't decided on yet.
   const state = readMentorState(db, task.task_id);
   const fresh = openBlockers.filter(b => b.raised_at > state.last_check_at);
   if (fresh.length === 0) return null;
   const blocker = fresh[0];
-  const q = (blocker.question || '').toLowerCase();
+  const question = String(blocker.question || '');
 
-  // Try known-answer match.
+  // L1.0 — known_answers from CAIRN.md (cheapest path)
+  if (profile && profile.exists) {
+    const known = mentorProfile.matchKnownAnswer(profile.known_answers, question);
+    if (known) {
+      const nudgeKey = emit.nudge({
+        message: `Mentor → agent (re: blocker ${blocker.blocker_id}): ${known.answer}`,
+        to_agent_id: task.created_by_agent_id || null,
+        task_id: task.task_id,
+        rule: 'D',
+        layer: 'L1',
+        source: 'profile.known_answers',
+        match_pattern: known.pattern,
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, nudge_count: state.nudge_count + 1,
+        last_nudge_at: Date.now(), last_check_at: Date.now(),
+      });
+      return { rule: 'D', action: 'nudge_from_profile', route: 'auto',
+               source: 'profile.known_answers', match_pattern: known.pattern,
+               nudge_key: nudgeKey };
+    }
+
+    // L1.1 / L1.2 / L1.3 — route by authority bucket
+    const routed = routeBySignal(profile, question);
+    if (routed.route === 'escalate') {
+      const r = emit.escalation({
+        reason: 'AGENT_BLOCKED_QUESTION',
+        task_id: task.task_id,
+        blocker_id: blocker.blocker_id,
+        body: question,
+        rule: 'D',
+        layer: 'L1',
+        source: 'profile.authority.escalate',
+        matched_bullet: routed.matched_bullet,
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, escalation_count: state.escalation_count + 1, last_check_at: Date.now(),
+      });
+      return { rule: 'D', action: 'escalate', route: 'escalate',
+               source: 'profile.authority.escalate', matched_bullet: routed.matched_bullet,
+               escalation: r };
+    }
+    if (routed.route === 'auto' || routed.route === 'announce') {
+      // L2 — use brief lean if available
+      const brief = pickBriefForTask(briefs, task);
+      const briefLine = brief ? require('./mentor-agent-brief.cjs').briefSnippet(brief.brief) : null;
+      const body = composeNudgeBody(
+        `Mentor → agent (re: blocker ${blocker.blocker_id}):`,
+        briefLine ? 'proceed with your stated lean' : `proceed per CAIRN.md rule`,
+        routed.matched_bullet,
+        briefLine,
+      );
+      const nudgeKey = emit.nudge({
+        message: body,
+        to_agent_id: task.created_by_agent_id || null,
+        task_id: task.task_id,
+        rule: 'D',
+        layer: brief ? 'L2' : 'L1',
+        source: routed.route === 'auto' ? 'profile.authority.auto_decide' : 'profile.authority.decide_and_announce',
+        matched_bullet: routed.matched_bullet,
+        brief_consulted: !!brief,
+        brief_stale: brief ? brief.is_stale : false,
+        announce: routed.route === 'announce',
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, nudge_count: state.nudge_count + 1,
+        last_nudge_at: Date.now(), last_check_at: Date.now(),
+      });
+      return { rule: 'D', action: 'nudge_from_profile', route: routed.route,
+               source: routed.route === 'auto' ? 'profile.authority.auto_decide' : 'profile.authority.decide_and_announce',
+               matched_bullet: routed.matched_bullet,
+               brief_used: !!brief, brief_stale: brief ? brief.is_stale : false,
+               nudge_key: nudgeKey };
+    }
+    // route === 'unmatched' → fall through to L2 legacy / default
+  }
+
+  // L2 legacy — config.knownAnswers map (back-compat for callers without a profile)
+  const qLower = question.toLowerCase();
   for (const [pat, ans] of Object.entries(config.knownAnswers || {})) {
-    if (pat && q.includes(pat.toLowerCase())) {
+    if (pat && qLower.includes(pat.toLowerCase())) {
       const nudgeKey = emit.nudge({
         message: `Mentor → agent (re: blocker ${blocker.blocker_id}): ${ans}`,
         to_agent_id: task.created_by_agent_id || null,
         task_id: task.task_id,
         rule: 'D',
+        layer: 'L2-legacy',
+        source: 'config.knownAnswers',
         match_pattern: pat,
       });
       writeMentorState(db, task.task_id, {
-        ...state,
-        nudge_count: state.nudge_count + 1,
-        last_nudge_at: Date.now(),
-        last_check_at: Date.now(),
+        ...state, nudge_count: state.nudge_count + 1,
+        last_nudge_at: Date.now(), last_check_at: Date.now(),
       });
-      return { rule: 'D', action: 'nudge_with_known_answer', nudge_key: nudgeKey };
+      return { rule: 'D', action: 'nudge_with_known_answer', nudge_key: nudgeKey, source: 'config.knownAnswers' };
     }
   }
 
-  // No pattern match → escalate.
+  // No match anywhere → conservative escalate
   const r = emit.escalation({
     reason: 'AGENT_BLOCKED_QUESTION',
     task_id: task.task_id,
     blocker_id: blocker.blocker_id,
-    body: blocker.question || '(empty question)',
+    body: question || '(empty question)',
     rule: 'D',
+    layer: 'fallback',
+    source: profile && profile.exists ? 'profile.unmatched' : 'no_profile',
   });
   writeMentorState(db, task.task_id, {
-    ...state,
-    escalation_count: state.escalation_count + 1,
-    last_check_at: Date.now(),
+    ...state, escalation_count: state.escalation_count + 1, last_check_at: Date.now(),
   });
-  return { rule: 'D', action: 'escalate', escalation: r };
+  return { rule: 'D', action: 'escalate', escalation: r,
+           source: profile && profile.exists ? 'profile.unmatched' : 'no_profile' };
 }
 
 /**
- * Rule E — time budget hit.
+ * Rule E — time budget hit (3-layer).
  *
  * Trigger: task has a budget set (via task.metadata_json.budget_ms or
- * project default) and elapsed >= fraction × budget. Action: escalate.
+ * project default) and elapsed >= fraction × budget.
+ *
+ * 3-layer routing:
+ *   L1.1  profile escalate matches "time budget"   → escalate (preserves old default)
+ *   L1.2  profile auto_decide matches              → nudge "wrap up / extend per lean"
+ *   L1.3  profile announce matches                 → same as L1.2 + announce flag
+ *   ----  no profile (or unmatched)                → escalate (back-compat)
  */
 function evaluateRuleE_timeBudget(ctx) {
-  const { db, project, task, config, emit } = ctx;
+  const { db, project, task, config, emit, profile, briefs } = ctx;
   if (!task) return null;
   const meta = task.metadata_json ? safeJson(task.metadata_json) : {};
   const budget = Number(meta && meta.budget_ms) || config.defaultTaskBudgetMs || 0;
@@ -258,22 +353,79 @@ function evaluateRuleE_timeBudget(ctx) {
   const elapsed = Date.now() - (task.created_at || Date.now());
   if (elapsed < budget * config.timeBudgetEscalationFraction) return null;
   const state = readMentorState(db, task.task_id);
-  // Avoid duplicate escalations: once we've escalated for this budget,
-  // don't re-escalate every tick.
-  if (state.escalation_count > 0 && state.last_check_at > task.created_at) return null;
+  // Avoid duplicate decisions: once we've decided for this budget,
+  // don't re-fire every tick.
+  if ((state.escalation_count > 0 || state.nudge_count > 0) && state.last_check_at > task.created_at) return null;
+
+  const elapsedMin = Math.round(elapsed / 60000);
+  const budgetMin = Math.round(budget / 60000);
+  const pctNum = Math.round((elapsed / budget) * 100);
+  const signal = `time budget at ${pctNum}% (${elapsedMin}m / ${budgetMin}m budget)`;
+
+  if (profile && profile.exists) {
+    const routed = routeBySignal(profile, 'time budget');
+    if (routed.route === 'escalate') {
+      const r = emit.escalation({
+        reason: 'TIME_BUDGET_NEAR_LIMIT',
+        task_id: task.task_id,
+        body: `Task has run ${elapsedMin}m vs ${budgetMin}m budget (${pctNum}%).`,
+        rule: 'E',
+        layer: 'L1',
+        source: 'profile.authority.escalate',
+        matched_bullet: routed.matched_bullet,
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, escalation_count: state.escalation_count + 1, last_check_at: Date.now(),
+      });
+      return { rule: 'E', action: 'escalate', escalation: r, route: 'escalate',
+               source: 'profile.authority.escalate', matched_bullet: routed.matched_bullet };
+    }
+    if (routed.route === 'auto' || routed.route === 'announce') {
+      const brief = pickBriefForTask(briefs, task);
+      const briefLine = brief ? require('./mentor-agent-brief.cjs').briefSnippet(brief.brief) : null;
+      const body = composeNudgeBody(
+        `${task.task_id}: ${signal} —`,
+        briefLine ? 'wrap up per your lean' : 'wrap up or request a budget extension',
+        routed.matched_bullet,
+        briefLine,
+      );
+      const nudgeKey = emit.nudge({
+        message: body,
+        to_agent_id: task.created_by_agent_id || null,
+        task_id: task.task_id,
+        rule: 'E',
+        layer: brief ? 'L2' : 'L1',
+        source: routed.route === 'auto' ? 'profile.authority.auto_decide' : 'profile.authority.decide_and_announce',
+        matched_bullet: routed.matched_bullet,
+        brief_consulted: !!brief,
+        brief_stale: brief ? brief.is_stale : false,
+        announce: routed.route === 'announce',
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, nudge_count: state.nudge_count + 1, last_nudge_at: Date.now(), last_check_at: Date.now(),
+      });
+      return { rule: 'E', action: 'nudge_from_profile', route: routed.route,
+               source: routed.route === 'auto' ? 'profile.authority.auto_decide' : 'profile.authority.decide_and_announce',
+               matched_bullet: routed.matched_bullet,
+               brief_used: !!brief, brief_stale: brief ? brief.is_stale : false,
+               nudge_key: nudgeKey };
+    }
+  }
+
+  // No-profile or unmatched → escalate (back-compat with Phase 5 behavior)
   const r = emit.escalation({
     reason: 'TIME_BUDGET_NEAR_LIMIT',
     task_id: task.task_id,
-    body: `Task has run ${Math.round(elapsed / 60000)}m vs ${Math.round(budget / 60000)}m budget` +
-          ` (${Math.round((elapsed / budget) * 100)}%).`,
+    body: `Task has run ${elapsedMin}m vs ${budgetMin}m budget (${pctNum}%).`,
     rule: 'E',
+    layer: 'fallback',
+    source: profile && profile.exists ? 'profile.unmatched' : 'no_profile',
   });
   writeMentorState(db, task.task_id, {
-    ...state,
-    escalation_count: state.escalation_count + 1,
-    last_check_at: Date.now(),
+    ...state, escalation_count: state.escalation_count + 1, last_check_at: Date.now(),
   });
-  return { rule: 'E', action: 'escalate', escalation: r };
+  return { rule: 'E', action: 'escalate', escalation: r,
+           source: profile && profile.exists ? 'profile.unmatched' : 'no_profile' };
 }
 
 /**
@@ -309,16 +461,75 @@ function evaluateRuleF_abortKeywords(ctx) {
 }
 
 /**
- * Rule G — outcomes evaluation repeated failure.
+ * Rule G — outcomes evaluation repeated failure (3-layer).
  *
  * Trigger: task has an outcomes row with status='FAILED' AND task is
- * not at TERMINAL_FAIL. Phase 5 simplification: escalate after `outcomesRetryCap`
- * accumulated failures (counted via mentor_state.escalation_count).
+ * not at TERMINAL_FAIL. Default: nudge first failure, escalate at
+ * `outcomesRetryCap` accumulated escalations.
+ *
+ * 3-layer routing:
+ *   L1.1  profile escalate matches "outcomes" or "tests failing" → escalate immediately
+ *   L1.2  profile auto_decide matches                            → nudge "retry" per L2 brief
+ *   L1.3  profile announce matches                               → nudge + announce
+ *   ----  no profile (or unmatched) → existing nudge-then-escalate behavior
  */
 function evaluateRuleG_outcomesFail(ctx) {
-  const { db, project, task, outcome, config, emit } = ctx;
+  const { db, project, task, outcome, config, emit, profile, briefs } = ctx;
   if (!task || !outcome || outcome.status !== 'FAILED') return null;
   const state = readMentorState(db, task.task_id);
+
+  // L1 — profile routing on "outcomes failed" signal
+  if (profile && profile.exists) {
+    const signal = 'outcomes evaluation failed';
+    const routed = routeBySignal(profile, signal);
+    if (routed.route === 'escalate') {
+      const r = emit.escalation({
+        reason: 'OUTCOMES_REPEATED_FAILURE',
+        task_id: task.task_id,
+        body: `Outcomes evaluation failed. CAIRN.md says always escalate this category.`,
+        rule: 'G',
+        layer: 'L1',
+        source: 'profile.authority.escalate',
+        matched_bullet: routed.matched_bullet,
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, escalation_count: state.escalation_count + 1, last_check_at: Date.now(),
+      });
+      return { rule: 'G', action: 'escalate', escalation: r, route: 'escalate',
+               source: 'profile.authority.escalate', matched_bullet: routed.matched_bullet };
+    }
+    if (routed.route === 'auto' || routed.route === 'announce') {
+      const brief = pickBriefForTask(briefs, task);
+      const briefLine = brief ? require('./mentor-agent-brief.cjs').briefSnippet(brief.brief) : null;
+      const body = composeNudgeBody(
+        `${task.task_id}: outcomes FAILED —`,
+        briefLine ? 'retry with your stated next step' : 'retry once with the fix applied, then re-evaluate',
+        routed.matched_bullet,
+        briefLine,
+      );
+      const nudgeKey = emit.nudge({
+        message: body,
+        to_agent_id: task.created_by_agent_id || null,
+        task_id: task.task_id,
+        rule: 'G',
+        layer: brief ? 'L2' : 'L1',
+        source: routed.route === 'auto' ? 'profile.authority.auto_decide' : 'profile.authority.decide_and_announce',
+        matched_bullet: routed.matched_bullet,
+        brief_consulted: !!brief,
+        announce: routed.route === 'announce',
+      });
+      writeMentorState(db, task.task_id, {
+        ...state, nudge_count: state.nudge_count + 1, last_nudge_at: Date.now(), last_check_at: Date.now(),
+      });
+      return { rule: 'G', action: 'nudge_from_profile', route: routed.route,
+               source: routed.route === 'auto' ? 'profile.authority.auto_decide' : 'profile.authority.decide_and_announce',
+               matched_bullet: routed.matched_bullet,
+               brief_used: !!brief, nudge_key: nudgeKey };
+    }
+    // route === 'unmatched' → fall through to legacy behavior
+  }
+
+  // Legacy / fallback path — nudge first, escalate after cap
   if (state.escalation_count >= config.outcomesRetryCap) {
     const r = emit.escalation({
       reason: 'OUTCOMES_REPEATED_FAILURE',
@@ -326,11 +537,11 @@ function evaluateRuleG_outcomesFail(ctx) {
       body: `Outcomes evaluation failed ${state.escalation_count + 1} times. ` +
             `Manual review required before another retry.`,
       rule: 'G',
+      layer: 'fallback',
+      source: profile && profile.exists ? 'profile.unmatched' : 'no_profile',
     });
     writeMentorState(db, task.task_id, {
-      ...state,
-      escalation_count: state.escalation_count + 1,
-      last_check_at: Date.now(),
+      ...state, escalation_count: state.escalation_count + 1, last_check_at: Date.now(),
     });
     return { rule: 'G', action: 'escalate', escalation: r };
   }
@@ -339,18 +550,83 @@ function evaluateRuleG_outcomesFail(ctx) {
     to_agent_id: task.created_by_agent_id || null,
     task_id: task.task_id,
     rule: 'G',
+    layer: 'fallback',
+    source: profile && profile.exists ? 'profile.unmatched' : 'no_profile',
   });
   writeMentorState(db, task.task_id, {
-    ...state,
-    nudge_count: state.nudge_count + 1,
-    last_nudge_at: Date.now(),
-    last_check_at: Date.now(),
+    ...state, nudge_count: state.nudge_count + 1, last_nudge_at: Date.now(), last_check_at: Date.now(),
   });
   return { rule: 'G', action: 'nudge', nudge_key: nudgeKey };
 }
 
 function safeJson(s) {
   try { return JSON.parse(s); } catch (_e) { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// 3-layer routing helpers (L1 profile / L2 brief / L3 light LLM polish)
+//
+// L1 = CAIRN.md profile (see mentor-project-profile.cjs).
+// L2 = scratchpad agent_brief/<agent_id> (see mentor-agent-brief.cjs).
+// L3 = optional async LLM polish; injected via ctx.llmPolish when
+//      the caller (mentor-tick) wants to enable it. Default null —
+//      rules degrade gracefully to default-escalate.
+// ---------------------------------------------------------------------------
+
+/**
+ * Match a free-form signal text against the profile authority buckets.
+ * Order: 🛑 escalate → ✅ auto_decide → ⚠️ decide_and_announce.
+ * Returns { route, matched_bullet } where route ∈ 'escalate'|'auto'|
+ * 'announce'|'unmatched'.
+ */
+function routeBySignal(profile, signalText) {
+  if (!profile || !profile.exists || !signalText) {
+    return { route: 'unmatched', matched_bullet: null };
+  }
+  const text = String(signalText);
+  // 🛑 first — always-escalate wins over auto/announce when both match.
+  const esc = mentorProfile.matchBucket(profile.authority.escalate, text);
+  if (esc) return { route: 'escalate', matched_bullet: esc };
+  const auto = mentorProfile.matchBucket(profile.authority.auto_decide, text);
+  if (auto) return { route: 'auto', matched_bullet: auto };
+  const ann = mentorProfile.matchBucket(profile.authority.decide_and_announce, text);
+  if (ann) return { route: 'announce', matched_bullet: ann };
+  return { route: 'unmatched', matched_bullet: null };
+}
+
+/**
+ * Pull the most relevant L2 brief lean for a task: prefer the brief
+ * tagged with the current task_id; else the most recently written;
+ * else null. Briefs are { agent_id, brief, age_ms, is_stale, ... }.
+ */
+function pickBriefForTask(briefs, task) {
+  if (!Array.isArray(briefs) || briefs.length === 0 || !task) return null;
+  const taskId = task.task_id;
+  let exact = null;
+  let fresh = null;
+  let any = null;
+  for (const b of briefs) {
+    if (!b || !b.brief) continue;
+    any = any || b;
+    if (b.brief.task_id === taskId) {
+      if (!exact || (exact.age_ms || 0) > (b.age_ms || 0)) exact = b;
+    }
+    if (!fresh || (fresh.age_ms || 0) > (b.age_ms || 0)) fresh = b;
+  }
+  return exact || fresh || any || null;
+}
+
+/**
+ * Compose a one-line "Mentor decided X" message body. `decisionText` is
+ * what Mentor concluded; `signal` describes why we're being polite about
+ * announcing it. `brief` is optional L2 input.
+ */
+function composeNudgeBody(prefix, decisionText, source, briefLine) {
+  const bits = [prefix];
+  if (decisionText) bits.push(decisionText);
+  if (source) bits.push(`(via ${source})`);
+  if (briefLine) bits.push(`— agent lean: ${briefLine}`);
+  return bits.join(' ');
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +711,10 @@ module.exports = {
   evaluateRuleE_timeBudget,
   evaluateRuleF_abortKeywords,
   evaluateRuleG_outcomesFail,
+  // 3-layer routing helpers (exported for tests)
+  routeBySignal,
+  pickBriefForTask,
+  composeNudgeBody,
   // state helpers
   readMentorState,
   writeMentorState,

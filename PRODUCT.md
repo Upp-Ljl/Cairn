@@ -130,6 +130,15 @@ Cairn 现在 = 5 层叠加，不是 5 个 phase。每层都可独立讨论，但
 
 cockpit redesign 把这个边界 first-class 化：Mentor 在用户授权下**主动给 agent 发引导消息**，但 escalate 给用户的时机由 §5 policy 明文定义（见 `docs/superpowers/plans/2026-05-12-panel-cockpit-redesign.md` §5 escalation policy），不是 LLM 自由发挥。
 
+**2026-05-13 patch — Mentor is team lead via CAIRN.md authority delegation**：
+
+User 在 2026-05-13 进一步收紧 Mentor 的工作模型（plan: `docs/superpowers/plans/2026-05-13-mentor-3-layer-decision.md`，memory `cairn-md-protocol` / `trust-with-rewind-safety`）：
+
+- **Mentor 默认 decide，不是 escalate**——cockpit Module 4 rewind 让 Mentor 的错误成本只剩 5 秒一键回退，所以 Mentor 可以替项目主决策；只有 npm publish / force-push / LICENSE / 新依赖等不可逆动作走 🛑 escalate。
+- **Mentor 不靠自己想**：判断依据来自 **L1 per-project `CAIRN.md`**（项目主声音）+ **L2 `scratchpad:agent_brief/<agent_id>`**（agent 自报 lean）+ 可选 **L3 light haiku polish**。Mentor 是 *coordinator*，不是 *thinker*。
+- **`CAIRN.md`** 与 `CLAUDE.md` 平行：前者是项目主对 Mentor 的授权（✅/⚠️/🛑 + Known answers + Current phase），后者是 coding agent 的 playbook。两者共生，互不替代。schema 见 `docs/CAIRN-md-spec.md`。
+- 边界仍由 §1.3 #1/#2/#4/#6 兜底：Mentor 仍不写代码 / 不替用户拍板战略 / 不是 IDE / 不是 generic agent framework。CAIRN.md 只放大了 Mentor 在"项目运行期事件"上的权限，没改 anti-definitions。
+
 ### 1.3.cockpit 驾驶舱架构（v4 cockpit patch · 2026-05-12）
 
 > Cairn 不是动力源；agent 才是。
