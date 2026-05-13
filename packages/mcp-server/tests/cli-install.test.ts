@@ -65,11 +65,16 @@ describe('fresh repo', () => {
     expect(result.cairnMdAction).toBe('created');
     expect(result.warnings).toHaveLength(0);
 
-    // CAIRN.md scaffold
+    // CAIRN.md scaffold — schema v2 (2026-05-14)
     const cairnMd = fs.readFileSync(path.join(tmpDir, 'CAIRN.md'), 'utf8');
     expect(cairnMd).toContain('## Mentor authority (decision delegation)');
     expect(cairnMd).toContain('## For Cairn-aware coding agents');
     expect(cairnMd).toContain('agent_brief/<your-agent-id>');
+    // schema v2: Whole + Goal both present; Current phase removed
+    expect(cairnMd).toContain('## Whole');
+    expect(cairnMd).toContain('## Goal');
+    expect(cairnMd).not.toContain('## Current phase');
+    expect(cairnMd).not.toContain('**Last updated**');
 
     // .mcp.json
     const mcpJson = JSON.parse(fs.readFileSync(path.join(tmpDir, '.mcp.json'), 'utf8'));

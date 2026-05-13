@@ -37,7 +37,7 @@ function freshGitRepo(): string {
 
 describe('cairn CLI — argument parsing (unit)', () => {
   it('parses --help', () => {
-    expect(parseArgs(['--help'])).toEqual({ showHelp: true, showVersion: false, dryRun: false, unknown: [] });
+    expect(parseArgs(['--help'])).toEqual({ showHelp: true, showVersion: false, dryRun: false, json: false, unknown: [] });
   });
   it('parses -h short form', () => {
     expect(parseArgs(['-h']).showHelp).toBe(true);
@@ -51,14 +51,18 @@ describe('cairn CLI — argument parsing (unit)', () => {
   it('parses --dry-run', () => {
     expect(parseArgs(['--dry-run']).dryRun).toBe(true);
   });
+  it('parses --json', () => {
+    expect(parseArgs(['--json']).json).toBe(true);
+  });
   it('captures unknown flags into unknown[]', () => {
     expect(parseArgs(['--bogus']).unknown).toEqual(['--bogus']);
   });
   it('parses combined flags', () => {
-    const p = parseArgs(['--help', '--version', '--dry-run']);
+    const p = parseArgs(['--help', '--version', '--dry-run', '--json']);
     expect(p.showHelp).toBe(true);
     expect(p.showVersion).toBe(true);
     expect(p.dryRun).toBe(true);
+    expect(p.json).toBe(true);
   });
 });
 
@@ -138,6 +142,41 @@ describe.skipIf(!HAS_BUILD)('cairn CLI — end-to-end flag behavior', () => {
       run([], dir);
       const after = readFileSync(path.join(dir, '.mcp.json'), 'utf8');
       expect(after).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --json e2e — daemon (desktop-shell install-bridge) parses this format.
+  // Contract: single line of JSON on stdout, nothing on stderr on success.
+  it('--json emits machine-readable result on success', () => {
+    const dir = freshGitRepo();
+    try {
+      const r = run(['--json'], dir);
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+      const parsed = JSON.parse(r.stdout.trim());
+      expect(parsed.ok).toBe(true);
+      expect(parsed.mcpJsonAction).toBe('created');
+      expect(parsed.hookAction).toBe('created');
+      expect(parsed.petLauncherAction).toBe('created');
+      expect(parsed.cairnMdAction).toBe('created');
+      expect(parsed.targetDir).toBe(dir);
+      // No human-formatted "[ok]" lines in JSON mode
+      expect(r.stdout).not.toContain('[ok]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('--json emits structured error on non-git directory', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cairn-cli-flags-nogit-'));
+    try {
+      const r = run(['--json'], dir);
+      expect(r.status).toBe(1);
+      const parsed = JSON.parse(r.stdout.trim());
+      expect(parsed.ok).toBe(false);
+      expect(parsed.warnings[0]).toContain('Not a git repository');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

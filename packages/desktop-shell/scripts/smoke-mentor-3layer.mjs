@@ -72,9 +72,13 @@ const TASK = (overrides) => Object.assign({
 
 const SAMPLE_CAIRN_MD = `# Smoke Test Project
 
+## Whole
+
+A test fixture project that validates the schema-v2 3-layer Mentor architecture end to end.
+
 ## Goal
 
-Validate the 3-layer architecture end to end.
+Get smoke + dogfood passing.
 
 ## What this project IS / IS NOT
 
@@ -103,13 +107,6 @@ Validate the 3-layer architecture end to end.
 
 - which test framework => vitest with real DB, not mocks
 - prefer ts or js => prefer TypeScript
-
-## Current phase
-
-**Last updated**: 2026-05-13
-- Phase: 3-layer ship
-- This week: smoke + dogfood
-- Next week: onboarding wizard
 `;
 
 header('smoke-mentor-3layer');
@@ -126,7 +123,7 @@ let scanProfile;
   ok(scanProfile.exists === true, 'profile.exists === true');
   ok(scanProfile.project_name === 'Smoke Test Project', 'project_name parsed');
   ok(typeof scanProfile.source_sha1 === 'string' && scanProfile.source_sha1.length === 16, 'sha1 truncated 16-hex');
-  ok(scanProfile.goal && scanProfile.goal.startsWith('Validate the 3-layer'), 'goal parsed');
+  ok(scanProfile.goal && scanProfile.goal.length > 0, 'goal parsed (non-empty)');
   ok(scanProfile.is_list.includes('a kernel for multi-agent coordination'), 'is_list captures kernel line');
   ok(scanProfile.is_list.includes('shared state primitives'), 'is_list captures primitives line');
   ok(scanProfile.is_not_list.includes('an agent'), 'is_not_list captures agent');
@@ -137,9 +134,12 @@ let scanProfile;
   ok(scanProfile.constraints.includes('no new npm deps'), 'constraints captured');
   ok(scanProfile.known_answers.some(k => k.pattern === 'which test framework' && k.answer.includes('vitest')), 'known_answers: vitest entry');
   ok(scanProfile.known_answers.some(k => k.pattern === 'prefer ts or js' && k.answer.includes('TypeScript')), 'known_answers: ts entry');
-  ok(scanProfile.current_phase.last_updated === '2026-05-13', 'phase.last_updated');
-  ok(scanProfile.current_phase.phase === '3-layer ship', 'phase.phase');
-  ok(scanProfile.current_phase.this_week === 'smoke + dogfood', 'phase.this_week');
+  // schema v2 (2026-05-14): whole_sentence extracted, goal kept, current_phase gone
+  ok(scanProfile.version === 2, 'profile.version === 2 (schema v2)');
+  ok(typeof scanProfile.whole_sentence === 'string' && scanProfile.whole_sentence.includes('schema-v2 3-layer'),
+     'whole_sentence parsed from ## Whole');
+  ok(scanProfile.goal === 'Get smoke + dogfood passing.', 'goal parsed from ## Goal');
+  ok(!('current_phase' in scanProfile), 'current_phase removed from profile (v2)');
   fs.unlinkSync(tmp);
 }
 
