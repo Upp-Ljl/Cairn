@@ -67,7 +67,8 @@ const HOOK_MARKER = '# cairn-pre-commit-v1';
 // we never silently overwrite human or other-tool content.
 // v2 (A3 session-naming): adds cairn.session.name startup instruction.
 // v3 (A1.1 timeline): adds session timeline write protocol.
-const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v3 -->';
+// v4 (A2.2 dispatch wire): adds agent self-proposal convention via scratchpad.
+const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v4 -->';
 
 // Claude Code project-level skill that makes CC actually Cairn-aware
 // without manual user setup. Loaded by `cairn install` into
@@ -77,7 +78,7 @@ const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v3 -->';
 // inside CAIRN.md which CC didn't read until told.
 const CAIRN_AWARE_SKILL = `---
 name: cairn-aware
-description: This project uses Cairn. At session start read CAIRN.md, call cairn.session.name to self-report what you are about to do, write an agent_brief to scratchpad before raising blockers via cairn.task.block, poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions, and write session timeline events before/after each meaningful step.
+description: This project uses Cairn. At session start read CAIRN.md, call cairn.session.name to self-report what you are about to do, write an agent_brief to scratchpad before raising blockers via cairn.task.block, poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions, write session timeline events before/after each meaningful step, and propose next steps via scratchpad agent_proposal/<agent-id>/<ulid> so they appear in the panel todolist.
 ---
 
 ${CAIRN_AWARE_SKILL_MARKER}
@@ -217,6 +218,44 @@ function newUlid() {
   return ts + rand;
 }
 \`\`\`
+
+## Agent self-proposal (propose next steps to the panel)
+
+When you complete a meaningful step and have a clear next-step idea, write
+it to scratchpad so it appears in the panel todolist. The user (or another
+agent) can then approve it with a single click — Cairn will route it back
+to you (or a target session) via \`dispatch_requests\`.
+
+**Format — write one entry per proposal:**
+
+\`\`\`
+cairn.scratchpad.write({
+  key: "agent_proposal/<your-agent-id>/<ulid>",
+  value: JSON.stringify({
+    ts: Date.now(),
+    label: "<≤200 char: what you suggest doing next>",
+    agent_id: "<your-cairn-session-agent-id>",
+    task_id: "<current task_id if any, or omit>",
+    why: "<why this matters — optional, ≤120 chars>",
+    source: "agent"
+  })
+})
+\`\`\`
+
+**When to propose — yes:**
+- You just finished a phase / deliverable and the next phase is obvious
+- You spotted a bug, risk, or tech-debt item that warrants a follow-up task
+- A subagent result reveals a natural continuation
+
+**When not to propose — no:**
+- Routine micro-steps within a single flow (don't spam; one per meaningful
+  completion is enough)
+- Things already in the current task's scope (those are just doing the work)
+
+After the user clicks "Approve" in the panel, Cairn creates a
+\`dispatch_requests\` row targeting the selected session. You will receive
+the dispatch as a steer message in \`agent_inbox/<your-agent-id>/<ulid>\`
+on your next inbox poll — treat it as a new work item.
 
 ## Reserved keys
 
@@ -509,9 +548,10 @@ export function runInstall(opts: InstallOptions): InstallResult {
     }
     if (fs.existsSync(skillPath)) {
       const cur = fs.readFileSync(skillPath, 'utf8');
-      // Accept the current marker AND legacy v1/v2 markers so existing
-      // installs are upgraded to v3 rather than left as-is.
+      // Accept the current marker AND legacy v1/v2/v3 markers so existing
+      // installs are upgraded to v4 rather than left as-is.
       const isOurSkill = cur.includes(CAIRN_AWARE_SKILL_MARKER) ||
+                         cur.includes('<!-- cairn-aware-skill-v3 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v2 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v1 -->');
       if (isOurSkill) {
