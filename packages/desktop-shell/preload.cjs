@@ -32,6 +32,12 @@ const api = {
   // A1.2 L2 Session Timeline — drill-down events for a single session.
   getSessionTimeline: (projectId, agentId, opts) =>
     ipcRenderer.invoke('get-session-timeline', projectId, agentId, opts || {}),
+  // Mode B Continuous Iteration — lane data layer (slice 1, 2026-05-14).
+  cockpitLaneCreate:  (input) => ipcRenderer.invoke('cockpit-lane-create', input || {}),
+  cockpitLaneList:    (projectId, opts) => ipcRenderer.invoke('cockpit-lane-list', projectId, opts || {}),
+  cockpitLaneAdvance: (projectId, laneId) => ipcRenderer.invoke('cockpit-lane-advance', projectId, laneId),
+  cockpitLanePause:   (projectId, laneId) => ipcRenderer.invoke('cockpit-lane-pause', projectId, laneId),
+  cockpitLaneResume:  (projectId, laneId) => ipcRenderer.invoke('cockpit-lane-resume', projectId, laneId),
   // Cockpit redesign (Phase 3): inject steer message into agent inbox +
   // copy to clipboard. Tier-A first-class mutation (D9.1 PRODUCT.md §12).
   cockpitSteer:       (input) => ipcRenderer.invoke('cockpit-steer', input || {}),

@@ -53,6 +53,7 @@ const cockpitState = require('./cockpit-state.cjs');
 const cockpitSteer = require('./cockpit-steer.cjs');
 const cockpitRewind = require('./cockpit-rewind.cjs');
 const cockpitDispatch = require('./cockpit-dispatch.cjs');
+const cockpitLane = require('./cockpit-lane.cjs');
 const mentorPolicy = require('./mentor-policy.cjs');
 const llmHelpers = require('./cockpit-llm-helpers.cjs');
 const mentorTick = require('./mentor-tick.cjs');
@@ -885,6 +886,54 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   return cockpitState.buildCockpitState(
     entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
   );
+});
+
+// Mode B Continuous Iteration — lane data layer (slice 1, 2026-05-14).
+// Per PRODUCT.md §1.3 #4a: lane chain stops at REVIEWED — user must
+// explicitly advance after eyeballing each candidate's outcome.
+// D9.1 tier-A mutations: createLane / advanceLane / pauseLane / resumeLane
+// write scratchpad rows. No env flag gate.
+ipcMain.handle('cockpit-lane-create', (_e, input) => {
+  if (!input || typeof input !== 'object') return { ok: false, error: 'input_required' };
+  const { project_id, candidates, authorized_by } = input;
+  if (!project_id) return { ok: false, error: 'project_id_required' };
+  const proj = reg.projects.find(p => p.id === project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const wdb = openWriteDb(proj.db_path);
+  return cockpitLane.createLane(wdb, project_id, candidates || [], authorized_by || 'user');
+});
+
+ipcMain.handle('cockpit-lane-list', (_e, projectId, opts) => {
+  if (!projectId) return [];
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return [];
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return [];
+  return cockpitLane.queryLanes(entry.db, projectId, opts || {});
+});
+
+ipcMain.handle('cockpit-lane-advance', (_e, projectId, laneId) => {
+  if (!projectId || !laneId) return { ok: false, error: 'project_id_and_lane_id_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const wdb = openWriteDb(proj.db_path);
+  return cockpitLane.advanceLane(wdb, projectId, laneId);
+});
+
+ipcMain.handle('cockpit-lane-pause', (_e, projectId, laneId) => {
+  if (!projectId || !laneId) return { ok: false, error: 'project_id_and_lane_id_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const wdb = openWriteDb(proj.db_path);
+  return cockpitLane.pauseLane(wdb, projectId, laneId);
+});
+
+ipcMain.handle('cockpit-lane-resume', (_e, projectId, laneId) => {
+  if (!projectId || !laneId) return { ok: false, error: 'project_id_and_lane_id_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const wdb = openWriteDb(proj.db_path);
+  return cockpitLane.resumeLane(wdb, projectId, laneId);
 });
 
 // A1.2 L2 Session Timeline — drill-down view (panel-cockpit-redesign 2026-05-14).
