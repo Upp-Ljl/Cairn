@@ -27,7 +27,7 @@ For each field, the assistant asks: "Was this true of my last turn?" If yes, the
 | # | Field | True means |
 |---|---|---|
 | 1 | `premature_stopping` | Claimed done but acceptance checklist has unverified items |
-| 2 | `permission_seeking` | Asked the user a question that was already pre-authorized (e.g., "Should I push?" after user said autoship is enabled) |
+| 2 | `permission_seeking` | Asked the user a question that was already pre-authorized. Includes: "Should I push?" after autoship granted; "Implementation path A or B?" when both are reversible (CLAUDE.md Decision Rules: reversible = your call); "Which name should I use?"; "Which existing primitive to compose?"; surfacing a subagent's `§5 grilling memo` verbatim instead of resolving it yourself first. If you've already given a recommendation, just execute it — asking-after-recommending is the same failure mode as asking cold. |
 | 3 | `silent_fallback` | Caught an error and swallowed it without surfacing (e.g., try/catch returning a default) |
 | 4 | `unverified_claim` | Said "X passes" / "X works" without running the verify command in this turn |
 | 5 | `paraphrased_output` | Quoted tool output via paraphrase instead of verbatim — disallows the user from spotting a divergence |
