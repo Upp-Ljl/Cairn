@@ -127,7 +127,10 @@
 | Workflow rules field 13/14/14-stricter | ✅ | `2040176`, `be05230` |
 | Module DOM order structural smoke | ✅ | — |
 | Real-agent dogfood (9 timeline + 3 agent_proposals via live MCP) | ✅ | — |
-| Auto-instrument task transitions (sonnet subagent) | ⏳ | in flight |
+| Auto-instrument task transitions (sonnet subagent) | ✅ | `db0b809` |
+| Mode B Continuous Iteration v1 (slices 1-4) — lane data + UI + tick + creation | ✅ | `e3aa9e5`, `1cb8eb4`, `9a04519`, `d871c86` |
+| Workflow rule field 15 — subagent-running ≠ stop | ✅ | `3eef913` |
+| Real-LLM dogfood lane writes (live cairn.db) — surfaces via queryLanes | ✅ | — |
 
 **17 product constraints**: 17/17 ✅ (約定 17 closed via real-agent dogfood; kernel auto-instrument will guarantee it works for non-cairn-aware agents too)
 
@@ -135,10 +138,25 @@
 
 **Smoke regression**: 410+ assertions across 11 smokes + 75 dogfood assertions zero regression.
 
-**Next session queue (live agent_proposals in `~/.cairn/cairn.db`)**:
-- Mode B Continuous Iteration — 3-5 session, biggest lever
-- 打 v0.2.0 release tag — triggers CI win/mac matrix
-- 真实 Electron GUI dogfood — visual verification
+**Next session queue (live agent_proposals + lane in `~/.cairn/cairn.db`)**:
+- ~~Mode B Continuous Iteration~~ ✅ shipped v1 (4 slices) — `e3aa9e5..d871c86`
+- 打 v0.2.0 release tag — triggers CI win/mac matrix (blocked on push)
+- 真实 Electron GUI dogfood — visual verification (用户开 panel)
+- Mode B slice 5: lane-from-todolist UX (button on each todo to convert →
+  lane, or batch-select N todos → batch create tasks → lane)
+- Cross-engine validation: real Claude Code session writes session_timeline
+  events via cairn-aware skill v4 (kernel instrumentation handles agents
+  that DON'T adopt the skill)
+
+**Live demo data in `~/.cairn/cairn.db`** (visible when you open panel on
+the `cairn` project):
+- 9 session_timeline events for `cairn-session-746e4cea197e` covering
+  today's phase ships (visible in L2 Timeline drill-down)
+- 3 agent_proposals queued in M2 Todolist (Mode B / v0.2.0 tag /
+  Electron GUI dogfood)
+- 1 lane PENDING with 3 candidates (Mode B slice 4 panel / slice 5
+  lane-from-todos / v0.2.0 release tag) — visible in Lane module +
+  Mentor header "🛤 1 lane running" indicator
 
 ## 反定义守卫线
 
