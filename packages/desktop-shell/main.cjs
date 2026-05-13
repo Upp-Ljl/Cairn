@@ -589,7 +589,7 @@ function refreshTray() {
     const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, p, agentIds);
     const built = agentActivity.buildProjectActivities(
       p, mcpForActivity, claudeAll, codexAll,
-      { claude: claudeSessionScan, codex: codexSessionScan },
+      { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
     );
     for (const a of built.activities) allActivities.push(a);
   }
@@ -716,7 +716,7 @@ function getProjectsList() {
     const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, p, agentIds);
     const built = agentActivity.buildProjectActivities(
       p, mcpForActivity, claudeAll, codexAll,
-      { claude: claudeSessionScan, codex: codexSessionScan },
+      { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
     );
     summary.agent_activity = built.summary;
 
@@ -756,6 +756,7 @@ function getProjectsList() {
       mcpForActivity,
       isPrimaryBucket ? claudeUnassigned : [],
       isPrimaryBucket ? codexUnassigned  : [],
+      entry.db,
     );
     u.agent_activity = builtU.summary;
 
@@ -1325,7 +1326,7 @@ ipcMain.handle('get-project-sessions', () => {
   }
   const built = agentActivity.buildProjectActivities(
     proj, mcp.sessions, claudeAll, codexAll,
-    { claude: claudeSessionScan, codex: codexSessionScan },
+    { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
   );
 
   return {
@@ -1385,6 +1386,7 @@ ipcMain.handle('get-unassigned-detail', (_e, dbPath) => {
     detail.agents,
     isPrimaryBucket ? claudeUnassigned : [],
     isPrimaryBucket ? codexUnassigned  : [],
+    entry.db,
   );
   detail.activities = built.activities;
   detail.activity_summary = built.summary;
@@ -1427,7 +1429,7 @@ function buildInterpretationInput(proj, entry, agentIds) {
   const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, proj, agentIds);
   const built = agentActivity.buildProjectActivities(
     proj, mcpForActivity, claudeAll, codexAll,
-    { claude: claudeSessionScan, codex: codexSessionScan },
+    { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
   );
   summary.agent_activity = built.summary;
 
@@ -1672,7 +1674,7 @@ function buildCoordinationInput(proj, entry, agentIds) {
   }
   const built = agentActivity.buildProjectActivities(
     proj, sess.sessions, claudeAll, codexAll,
-    { claude: claudeSessionScan, codex: codexSessionScan },
+    { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
   );
   summary.agent_activity = built.summary;
   const tasksPayload   = projectQueries.queryProjectScopedTasks(entry.db, entry.tables, agentIds);
@@ -2309,7 +2311,7 @@ ipcMain.handle('get-project-pulse', () => {
   const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, proj, agentIds);
   const built = agentActivity.buildProjectActivities(
     proj, mcpForActivity, claudeAll, codexAll,
-    { claude: claudeSessionScan, codex: codexSessionScan },
+    { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
   );
   summary.agent_activity = built.summary;
   return goalSignals.deriveProjectPulse(summary, built.activities, {});
@@ -2338,7 +2340,7 @@ ipcMain.handle('get-project-summary', () => {
     const mcpForActivity = buildMcpActivityRows(entry.db, entry.tables, proj, agentIds);
     const built = agentActivity.buildProjectActivities(
       proj, mcpForActivity, claudeAll, codexAll,
-      { claude: claudeSessionScan, codex: codexSessionScan },
+      { claude: claudeSessionScan, codex: codexSessionScan, db: entry.db },
     );
     summary.agent_activity = built.summary;
     return summary;
