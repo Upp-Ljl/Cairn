@@ -1346,6 +1346,74 @@
     display: flex;
     flex-direction: column;
   }
+  /* Module 4 Sessions — replaces Activity Feed.
+     Per CEO grill: per-session card showing display_name + state pill +
+     current task intent + last seen. idle is a first-class state. */
+  .cockpit-sessions {
+    padding: 10px 12px;
+    border-bottom: 1px solid #2a2a2a;
+    flex: 1 1 0;
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+  }
+  .cockpit-sessions-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .cockpit-session-row {
+    padding: 8px 0;
+    border-bottom: 1px solid #232323;
+    font-size: 0.88em;
+    line-height: 1.4;
+    cursor: default;
+  }
+  .cockpit-session-row:last-child { border-bottom: none; }
+  .cockpit-session-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cockpit-session-state {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .cockpit-session-state.working { background: #2a5a3a; color: #c6ffd6; }
+  .cockpit-session-state.blocked { background: #7a5a2a; color: #fff5e8; }
+  .cockpit-session-state.idle    { background: #2a2a2a; color: #aaa; border: 1px solid #444; }
+  .cockpit-session-state.stale   { background: #3a2a2a; color: #d0a0a0; border: 1px solid #4a3a3a; }
+  .cockpit-session-name {
+    color: #e8e8e8;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cockpit-session-age {
+    color: #666;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85em;
+    flex-shrink: 0;
+  }
+  .cockpit-session-task {
+    color: #888;
+    font-size: 0.85em;
+    margin-top: 2px;
+    margin-left: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cockpit-session-task .label {
+    color: #555;
+    margin-right: 6px;
+  }
   .cockpit-section-title {
     font-size: 0.85em;
     color: #888;
@@ -2771,17 +2839,24 @@
       <div class="cockpit-steer-status" id="cockpit-steer-status"></div>
     </div>
 
-    <!-- Module 3: ACTIVITY FEED -->
-    <div class="cockpit-activity" id="cockpit-activity">
-      <div class="cockpit-section-title">Activity</div>
-      <div class="cockpit-activity-filters">
-        <button class="cockpit-filter active" data-filter="all">all</button>
-        <button class="cockpit-filter" data-filter="mentor">Mentor</button>
-        <button class="cockpit-filter" data-filter="agent">agent</button>
-        <button class="cockpit-filter" data-filter="state">state</button>
-      </div>
-      <div class="cockpit-activity-list" id="cockpit-activity-list">
-        <div class="placeholder">no activity yet</div>
+    <!-- Module 4: SESSIONS (panel-cockpit-redesign 2026-05-14 — A3-part2).
+         Replaces the old Activity Feed. Per CEO grill, "agent 工作脉络"
+         is session-centric: list every session attributed to this project
+         (working / blocked / idle / stale), then drill into one to see
+         its execution timeline (A1 phase, not yet built).
+
+         Activity Feed's project-level events stream is being relocated:
+         per-session events → L2 timeline; system events → Module 5 Needs You.
+         A2 phase will fold Mentor + Needs You into M2 (this module's
+         position will then become M4 per the 17 product constraints).
+
+         Until A2 lands, this module sits in the M3 slot (where Activity
+         was) and the legacy module order is M3=Sessions / M4=Safety /
+         M5=NeedsYou. Final reordering happens in A4. -->
+    <div class="cockpit-sessions" id="cockpit-sessions">
+      <div class="cockpit-section-title">Sessions</div>
+      <div class="cockpit-sessions-list" id="cockpit-sessions-list">
+        <div class="placeholder">no sessions yet — start an agent in this project</div>
       </div>
     </div>
 
@@ -2806,7 +2881,7 @@
       <p>
         <strong>① State Strip</strong>：项目跑得怎样、Mentor 上次说啥<br>
         <strong>② Steer</strong>：不切 session 直接给 agent 发话<br>
-        <strong>③ Activity</strong>：按时间排的 agent + Mentor 全流水<br>
+        <strong>③ Sessions</strong>：本项目下每个 agent session 的工作脉络 (working / blocked / idle / stale)<br>
         <strong>④ Safety</strong>：一键回退到某个 checkpoint<br>
         <strong>⑤ Needs You</strong>：Mentor 搞不定才闪红
       </p>

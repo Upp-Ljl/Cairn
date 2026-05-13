@@ -78,6 +78,7 @@ function emptyCockpitState(project, dbPath, reason) {
     autopilot_status: AUTOPILOT_STATUS.AGENT_IDLE,
     autopilot_reason: reason || 'no_data',
     agents: [],
+    sessions: [],
     progress: {
       tasks_total: 0, tasks_done: 0, tasks_running: 0,
       tasks_blocked: 0, tasks_waiting_review: 0, percent: 0,
@@ -175,6 +176,140 @@ function queryAgents(db, tables, hints, now) {
       };
     })
     .filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
+}
+
+/**
+ * Sessions for cockpit Module 4 (panel-cockpit-redesign 2026-05-14).
+ *
+ * A "session" is a row in `processes` attributed to this project. Unlike
+ * queryAgents() (which drops STALE/DEAD), querySessions keeps idle and
+ * stale-but-recent entries so Module 4 can show:
+ *   - working: heartbeat fresh AND has a RUNNING task
+ *   - blocked: has a BLOCKED task
+ *   - idle:    heartbeat fresh AND no active task
+ *   - stale:   heartbeat older than ttl × 2 but within last 24h
+ *   (rows older than 24h are dropped — that's DB junk, not "a session
+ *    that's still around")
+ *
+ * Per CEO grill 2026-05-14: "哪怕当前没在执行任务，只要这个 session
+ * 已经在运行了" — idle is a first-class state, must show.
+ *
+ * display_name resolution order (forward-compat with A3-part1 session-naming):
+ *   1. scratchpad `session_name/<agent_id>` if present (agent-self-named)
+ *   2. fallback: short prefix of agent_id (e.g. `cairn-session-746e4cea`
+ *      → "746e4cea")
+ *
+ * @returns Array<{
+ *   agent_id, display_name, state: 'working'|'blocked'|'idle'|'stale',
+ *   last_heartbeat_ts, last_seen_age_ms,
+ *   current_task: { task_id, intent, state } | null,
+ *   last_action: { kind, label, ts } | null
+ * }>
+ */
+function querySessions(db, tables, hints, now, opts) {
+  const o = opts || {};
+  const stale24hMs = 24 * 60 * 60_000;
+  if (!tables.has('processes') || !hints || hints.length === 0) return [];
+
+  const placeholders = '(' + hints.map(() => '?').join(',') + ')';
+  const procRows = db.prepare(`
+    SELECT agent_id, agent_type, status, last_heartbeat, heartbeat_ttl, registered_at, capabilities
+    FROM processes
+    WHERE agent_id IN ${placeholders}
+    ORDER BY last_heartbeat DESC
+  `).all(...hints);
+
+  // Pre-fetch session_name overrides in one query (forward-compat with A3-part1).
+  const nameMap = new Map();
+  if (tables.has('scratchpad')) {
+    try {
+      const nameLikes = hints.map(h => `session_name/${h}`);
+      const np = '(' + nameLikes.map(() => '?').join(',') + ')';
+      const nameRows = db.prepare(`
+        SELECT key, value_json FROM scratchpad WHERE key IN ${np}
+      `).all(...nameLikes);
+      for (const r of nameRows) {
+        const aid = r.key.slice('session_name/'.length);
+        try {
+          const body = JSON.parse(r.value_json || '{}');
+          if (body && typeof body.name === 'string' && body.name.trim()) {
+            nameMap.set(aid, body.name.trim());
+          }
+        } catch (_e) { /* skip bad rows */ }
+      }
+    } catch (_e) { /* ignore — falls back to hex prefix */ }
+  }
+
+  // Per-agent: most recent task (any state) for context line.
+  const taskMap = new Map();
+  if (tables.has('tasks')) {
+    try {
+      const tRows = db.prepare(`
+        SELECT task_id, intent, state, created_by_agent_id, updated_at
+        FROM tasks
+        WHERE created_by_agent_id IN ${placeholders}
+        ORDER BY updated_at DESC
+      `).all(...hints);
+      for (const t of tRows) {
+        if (!taskMap.has(t.created_by_agent_id)) {
+          taskMap.set(t.created_by_agent_id, t);
+        }
+      }
+    } catch (_e) { /* leave map empty */ }
+  }
+
+  const out = [];
+  for (const r of procRows) {
+    const ttl = r.heartbeat_ttl || 60000;
+    const ageMs = now - r.last_heartbeat;
+    const liveCutoff = ttl;          // fresh
+    const staleCutoff = ttl * 2;     // beyond ttl×2 = stale; we still show within 24h
+    if (ageMs > stale24hMs) continue;  // very old — DB junk, drop
+
+    const currentTask = taskMap.get(r.agent_id) || null;
+    let state;
+    if (ageMs <= liveCutoff) {
+      if (currentTask && currentTask.state === 'BLOCKED') state = 'blocked';
+      else if (currentTask && (currentTask.state === 'RUNNING' || currentTask.state === 'WAITING_REVIEW')) state = 'working';
+      else state = 'idle';
+    } else if (ageMs <= staleCutoff) {
+      state = 'idle';
+    } else {
+      state = 'stale';
+    }
+
+    const display_name = nameMap.get(r.agent_id) || deriveSessionDisplayName(r.agent_id);
+
+    out.push({
+      agent_id: r.agent_id,
+      display_name,
+      state,
+      agent_type: r.agent_type || null,
+      last_heartbeat_ts: r.last_heartbeat,
+      last_seen_age_ms: ageMs,
+      registered_at: r.registered_at,
+      current_task: currentTask
+        ? { task_id: currentTask.task_id, intent: currentTask.intent, state: currentTask.state, updated_at: currentTask.updated_at }
+        : null,
+    });
+  }
+  // Sort: working > blocked > idle > stale; tie-break by recency.
+  const stateOrder = { working: 0, blocked: 1, idle: 2, stale: 3 };
+  out.sort((a, b) => {
+    if (stateOrder[a.state] !== stateOrder[b.state]) return stateOrder[a.state] - stateOrder[b.state];
+    return a.last_seen_age_ms - b.last_seen_age_ms;
+  });
+  // Cap to keep panel render bounded.
+  return out.slice(0, o.limit || 20);
+}
+
+function deriveSessionDisplayName(agentId) {
+  if (!agentId || typeof agentId !== 'string') return '(unknown)';
+  // `cairn-session-746e4cea197e` → `746e4cea` (8-char short prefix)
+  const sessionMatch = agentId.match(/^cairn-session-([0-9a-f]+)$/i);
+  if (sessionMatch) return sessionMatch[1].slice(0, 8);
+  // Generic fallback: last 8 chars
+  return agentId.length > 12 ? agentId.slice(-8) : agentId;
 }
 
 function queryLatestMentorNudge(db, tables, projectId) {
@@ -569,6 +704,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
   const now = Date.now();
 
   const agents = queryAgents(db, tables, hints, now);
+  const sessions = querySessions(db, tables, hints, now);
   const progress = queryProgress(db, tables, hints);
   const currentTask = queryCurrentTask(db, tables, hints);
   const latestMentor = queryLatestMentorNudge(db, tables, project.id);
@@ -772,6 +908,10 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
           ? `${escalationsPending.length} escalation(s) need your attention`
           : 'agent working — Mentor handling on track',
     agents,
+    // Module 4 Sessions (panel-cockpit-redesign 2026-05-14): richer than
+    // `agents` — includes idle + stale entries (within 24h), per-session
+    // display name, current task context.
+    sessions,
     progress,
     current_task: currentTask,
     latest_mentor_nudge: latestMentor,
@@ -794,6 +934,8 @@ module.exports = {
   queryProgress,
   queryCurrentTask,
   queryAgents,
+  querySessions,
+  deriveSessionDisplayName,
   queryLatestMentorNudge,
   queryEscalations,
   queryCheckpoints,
