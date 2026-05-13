@@ -1365,6 +1365,23 @@
     padding: 4px 0;
     font-style: italic;
   }
+  /* Slice 5: lane-eligibility checkbox + footer batch button */
+  .cockpit-todo-lane-check { margin-right: 6px; cursor: pointer; }
+  .cockpit-todo-lane-na { color: #444; margin-right: 6px; font-size: 0.78em; cursor: help; }
+  .cockpit-todolist-footer { display: flex; justify-content: flex-end; margin-top: 6px; }
+  .cockpit-todolist-footer button {
+    background: transparent;
+    color: #8ac;
+    border: 1px solid #2a3a4a;
+    border-radius: 4px;
+    padding: 2px 12px;
+    font-size: 0.82em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-todolist-footer button:hover:not(:disabled) { color: #eef; border-color: #4a6a8a; }
+  .cockpit-todolist-footer button:disabled { opacity: 0.4; cursor: not-allowed; }
+
   .cockpit-todo-row {
     display: flex;
     align-items: center;

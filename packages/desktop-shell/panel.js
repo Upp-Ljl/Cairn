@@ -4213,14 +4213,67 @@ function renderTodolist(todos) {
       btnText = 'Approve →';
       btnClass = 'approve';
     }
+    // Slice 5: lane-eligible = todo has a task_id (only agent_proposals
+    // scoped to an existing task can directly join a lane; user_todo /
+    // mentor_todo would need task.create first → deferred).
+    const taskId = t.task_id || '';
+    const laneEligible = !!taskId;
+    const checkbox = laneEligible
+      ? `<input type="checkbox" class="cockpit-todo-lane-check" data-task-id="${escapeHtml(taskId)}" title="Select to authorize as lane candidate" />`
+      : '<span class="cockpit-todo-lane-na" title="Only todos with a task_id can join a lane">·</span>';
     const todoId = escapeHtml(t.todo_id || '');
     return `<div class="cockpit-todo-row" data-todo-id="${todoId}" data-todo-source="${escapeHtml(src)}">
+      ${checkbox}
       <span class="cockpit-todo-source-pill ${pillClass}">${pillText}</span>
       <span class="cockpit-todo-label" title="${escapeHtml(t.label || '')}">${escapeHtml(t.label || '(no label)')}</span>
       <button class="cockpit-todo-action-btn ${btnClass}" data-todo-id="${todoId}" data-todo-source="${escapeHtml(src)}" type="button">${btnText}</button>
     </div>`;
   });
-  listEl.innerHTML = rows.join('');
+  // Slice 5 footer: "Authorize N as lane" button — only visible when ≥1
+  // checkbox checked AND those todos have task_ids.
+  const footer = `<div class="cockpit-todolist-footer">
+    <button id="cockpit-todo-lane-btn" type="button" disabled>Authorize 0 as lane</button>
+  </div>`;
+  listEl.innerHTML = rows.join('') + footer;
+
+  // Slice 5 wire: update button label/disabled state on checkbox change.
+  const laneBtn = document.getElementById('cockpit-todo-lane-btn');
+  function refreshLaneBtn() {
+    const checked = Array.from(listEl.querySelectorAll('.cockpit-todo-lane-check:checked'));
+    if (!laneBtn) return;
+    laneBtn.textContent = `Authorize ${checked.length} as lane`;
+    laneBtn.disabled = checked.length === 0;
+  }
+  listEl.querySelectorAll('.cockpit-todo-lane-check').forEach(cb => {
+    cb.addEventListener('change', refreshLaneBtn);
+  });
+  if (laneBtn) {
+    laneBtn.addEventListener('click', async () => {
+      const checked = Array.from(listEl.querySelectorAll('.cockpit-todo-lane-check:checked'));
+      if (checked.length === 0 || !selectedProject) return;
+      const taskIds = checked.map(cb => cb.getAttribute('data-task-id')).filter(Boolean);
+      if (taskIds.length === 0) return;
+      laneBtn.disabled = true;
+      const orig = laneBtn.textContent;
+      laneBtn.textContent = `creating lane (${taskIds.length} candidates)…`;
+      let res = null;
+      try {
+        res = await window.cairn.cockpitLaneCreate({
+          project_id: selectedProject.id,
+          candidates: taskIds,
+          authorized_by: 'user-batch',
+        });
+      } catch (e) { res = { ok: false, error: (e && e.message) || String(e) }; }
+      if (res && res.ok) {
+        laneBtn.textContent = `✓ lane ${res.id.slice(0, 10)}…`;
+        setTimeout(() => poll().catch(() => {}), 600);
+      } else {
+        laneBtn.textContent = `✗ ${(res && res.error) || 'failed'}`;
+        laneBtn.disabled = false;
+        setTimeout(() => { laneBtn.textContent = orig; refreshLaneBtn(); }, 2500);
+      }
+    });
+  }
 
   // Wire up action buttons — A2.2 dispatch_requests integration.
   // Approve/派给 → pick target session → cockpit-todo-dispatch IPC.
