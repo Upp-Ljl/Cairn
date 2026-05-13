@@ -367,6 +367,115 @@ async function draftCairnMd(opts) {
   return { ok: true, source, content, validation, signals_used: signalsUsed, written };
 }
 
+// ---------------------------------------------------------------------------
+// A2 — agent_inbox dispatch (refinement request to attached CC)
+// ---------------------------------------------------------------------------
+
+const crypto = require('node:crypto');
+const _ENC = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function _newUlid() {
+  const ts = Date.now();
+  let t = '';
+  let n = ts;
+  for (let i = 9; i >= 0; i--) { t = _ENC[n % 32] + t; n = Math.floor(n / 32); }
+  const rand = crypto.randomBytes(10);
+  let r = '';
+  for (let i = 0; i < 16; i++) r += _ENC[rand[i % 10] % 32];
+  return t + r;
+}
+
+/**
+ * Anti-framing prompt body (per A5). This is what Cairn tells the
+ * attached CC when asking it to refine the haiku draft.
+ *
+ * Built as a single template; opts let callers append project-specific
+ * context (e.g. the haiku draft markdown).
+ */
+function buildDispatchPromptBody(opts) {
+  const o = opts || {};
+  const lines = [];
+  lines.push('[Cairn → coding agent: please refine CAIRN.md]');
+  lines.push('');
+  lines.push('This project just got added to Cairn. Cairn\'s haiku produced a');
+  lines.push('first draft of CAIRN.md (the per-project policy file Cairn Mentor');
+  lines.push('reads). You have the full repo context — please read the haiku');
+  lines.push('draft below and either confirm it or replace it with a better');
+  lines.push('version. Either way, write the result to `' + (o.projectRoot || '<project root>') + '/CAIRN.md`.');
+  lines.push('');
+  lines.push('ANTI-FRAMING (critical — this changes what you write):');
+  lines.push('  You are drafting a PROJECT DIRECTOR\'s job description for Cairn');
+  lines.push('  Mentor — not a Senior Engineer\'s job description for yourself.');
+  lines.push('  Mentor COORDINATES; Mentor does NOT write code; Mentor is NOT');
+  lines.push('  your plan-mode output.');
+  lines.push('');
+  lines.push('  The `## Whole` line is the project\'s STABLE complete-form');
+  lines.push('  sentence — what this project BECOMES when "done." Not what it');
+  lines.push('  does this week. ONE sentence. 20-200 chars.');
+  lines.push('');
+  lines.push('  The `## Goal` line is the CURRENT sub-Whole milestone — drift');
+  lines.push('  is OK; Whole stays. ONE sentence.');
+  lines.push('');
+  lines.push('Schema reference: `docs/CAIRN-md-spec.md` (in the Cairn repo).');
+  lines.push('');
+  if (o.haikuDraft) {
+    lines.push('--- Cairn-haiku first draft (your input — replace or improve) ---');
+    lines.push(o.haikuDraft);
+    lines.push('--- end first draft ---');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Write a CAIRN.md refinement request into the agent's scratchpad
+ * inbox. The attached CC picks it up on its next inbox-poll cycle
+ * (per the protocol Cairn just shipped into CAIRN.md's `## For
+ * Cairn-aware coding agents` footer).
+ *
+ * Tier-A mutation: scratchpad write from desktop-shell is allowed
+ * per PRODUCT.md §12 D9.1 (visible / revokable; same precedent as
+ * cockpit-steer Module 2).
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Set<string>} tables
+ * @param {object} input
+ * @param {string} input.agent_id    target CC's agent_id
+ * @param {string} input.project_id
+ * @param {string} input.projectRoot
+ * @param {string} [input.haikuDraft]
+ * @returns {{ok:boolean, key?:string, error?:string}}
+ */
+function dispatchDraftRefinement(db, tables, input) {
+  if (!db || !tables || !tables.has('scratchpad')) {
+    return { ok: false, error: 'scratchpad_unavailable' };
+  }
+  if (!input || !input.agent_id) return { ok: false, error: 'agent_id_required' };
+  if (!input.projectRoot) return { ok: false, error: 'projectRoot_required' };
+  const key = `agent_inbox/${input.agent_id}/${_newUlid()}`;
+  const message = buildDispatchPromptBody({
+    projectRoot: input.projectRoot,
+    haikuDraft: input.haikuDraft || null,
+  });
+  const now = Date.now();
+  const body = {
+    from: 'cairn-bootstrap',
+    message,
+    ts: now,
+    project_id: input.project_id || null,
+    source: 'add-project',
+    intent: 'refine_cairn_md',
+    project_root: input.projectRoot,
+  };
+  try {
+    db.prepare(`
+      INSERT INTO scratchpad (key, value_json, value_path, task_id, expires_at, created_at, updated_at)
+      VALUES (?, ?, NULL, NULL, NULL, ?, ?)
+    `).run(key, JSON.stringify(body), now, now);
+  } catch (e) {
+    return { ok: false, error: 'scratchpad_write_failed: ' + (e && e.message ? e.message : String(e)) };
+  }
+  return { ok: true, key };
+}
+
 module.exports = {
   SIGNAL_BYTE_BUDGETS,
   WHOLE_RE,
@@ -374,6 +483,9 @@ module.exports = {
   buildPrompt,
   renderDraftToMarkdown,
   draftCairnMd,
+  // A2 dispatch + A5 anti-framing
+  buildDispatchPromptBody,
+  dispatchDraftRefinement,
   // exported for tests
   _validateDraft,
 };

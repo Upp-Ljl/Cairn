@@ -275,6 +275,137 @@ section('9 draftCairnMd — bad input');
 }
 
 // ---------------------------------------------------------------------------
+section('10 buildDispatchPromptBody — anti-framing (A5)');
+{
+  const body = drafter.buildDispatchPromptBody({
+    projectRoot: 'D:/tmp/foo',
+    haikuDraft: '# Foo\n\n## Whole\nA tiny widget.\n',
+  });
+  ok(typeof body === 'string' && body.length > 200, 'prompt body non-empty');
+  ok(/project director/i.test(body), 'anti-framing: Project Director');
+  ok(/senior engineer/i.test(body), 'anti-framing: not Senior Engineer');
+  ok(/plan-mode/i.test(body), 'anti-framing: not plan-mode output');
+  ok(body.includes('D:/tmp/foo'), 'embeds project root path');
+  ok(body.includes('## Whole'), 'instructs Whole section');
+  ok(body.includes('## Goal'), 'instructs Goal section');
+  ok(body.includes('A tiny widget'), 'haiku draft included as input');
+  ok(body.includes('--- end first draft ---') || body.includes('end first draft'),
+     'haiku draft fenced for clarity');
+}
+
+// ---------------------------------------------------------------------------
+section('11 dispatchDraftRefinement — scratchpad write');
+{
+  const repoRoot = path.resolve(dsRoot, '..', '..');
+  const Database = require(path.join(repoRoot, 'packages', 'daemon', 'node_modules', 'better-sqlite3'));
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE scratchpad (
+      key TEXT PRIMARY KEY, value_json TEXT, value_path TEXT, task_id TEXT,
+      expires_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+  `);
+  const tables = new Set(['scratchpad']);
+
+  const r = drafter.dispatchDraftRefinement(db, tables, {
+    agent_id: 'cairn-session-test12345678',
+    project_id: 'proj_smoke',
+    projectRoot: 'D:/tmp/test-proj',
+    haikuDraft: '# Test\n\n## Whole\nA test project.',
+  });
+  ok(r.ok === true, 'dispatch returns ok');
+  ok(typeof r.key === 'string' && r.key.startsWith('agent_inbox/cairn-session-test12345678/'),
+     'scratchpad key prefix correct');
+
+  const row = db.prepare('SELECT value_json FROM scratchpad WHERE key = ?').get(r.key);
+  ok(row, 'row exists');
+  const body = JSON.parse(row.value_json);
+  ok(body.from === 'cairn-bootstrap', 'from = cairn-bootstrap');
+  ok(body.source === 'add-project', 'source = add-project');
+  ok(body.intent === 'refine_cairn_md', 'intent = refine_cairn_md');
+  ok(body.project_id === 'proj_smoke', 'project_id round-trips');
+  ok(body.project_root === 'D:/tmp/test-proj', 'project_root round-trips');
+  ok(typeof body.message === 'string' && /project director/i.test(body.message), 'message has anti-framing');
+  ok(body.message.includes('A test project'), 'message has haiku draft inline');
+
+  // bad inputs
+  const eA = drafter.dispatchDraftRefinement(db, tables, { projectRoot: 'x' });
+  ok(eA.ok === false && eA.error === 'agent_id_required', 'missing agent_id');
+  const eB = drafter.dispatchDraftRefinement(db, tables, { agent_id: 'a' });
+  ok(eB.ok === false && eB.error === 'projectRoot_required', 'missing projectRoot');
+
+  // no scratchpad table
+  const r2 = drafter.dispatchDraftRefinement(db, new Set(), { agent_id: 'a', projectRoot: 'x' });
+  ok(r2.ok === false && r2.error === 'scratchpad_unavailable', 'no scratchpad table → unavailable');
+
+  db.close();
+}
+
+// ---------------------------------------------------------------------------
+section('12 findCairnAwareAgent (project-queries)');
+{
+  const repoRoot = path.resolve(dsRoot, '..', '..');
+  const Database = require(path.join(repoRoot, 'packages', 'daemon', 'node_modules', 'better-sqlite3'));
+  const pq = require(path.join(dsRoot, 'project-queries.cjs'));
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE processes (
+      agent_id TEXT PRIMARY KEY,
+      capabilities TEXT,
+      status TEXT,
+      last_heartbeat INTEGER
+    );
+  `);
+  const tables = new Set(['processes']);
+
+  const now = 1_700_000_000_000;
+  const projectRoot = 'D:/lll/my-project';
+  const recent = now - 10_000;
+  const stale = now - 200_000;
+
+  // Insert: 1 matching CC + 1 stale CC + 1 active but wrong project + 1 active but unknown client
+  db.prepare('INSERT INTO processes VALUES (?,?,?,?)').run(
+    'cairn-session-cc111111',
+    JSON.stringify(['client:claude-code', 'git_root:' + projectRoot, 'pid:1234']),
+    'active', recent,
+  );
+  db.prepare('INSERT INTO processes VALUES (?,?,?,?)').run(
+    'cairn-session-stale1',
+    JSON.stringify(['client:claude-code', 'git_root:' + projectRoot]),
+    'active', stale,
+  );
+  db.prepare('INSERT INTO processes VALUES (?,?,?,?)').run(
+    'cairn-session-wrong1',
+    JSON.stringify(['client:claude-code', 'git_root:D:/other-project']),
+    'active', recent,
+  );
+  db.prepare('INSERT INTO processes VALUES (?,?,?,?)').run(
+    'cairn-session-mcp01',
+    JSON.stringify(['client:mcp-server', 'git_root:' + projectRoot]),
+    'active', recent,
+  );
+
+  const hit = pq.findCairnAwareAgent(db, tables, projectRoot, { nowMs: now });
+  ok(hit && hit.agent_id === 'cairn-session-cc111111', 'finds the matching fresh CC');
+  ok(hit.client === 'claude-code', 'client tagged claude-code');
+
+  // No match: project root that nothing claims
+  const miss = pq.findCairnAwareAgent(db, tables, 'D:/never-heard-of', { nowMs: now });
+  ok(miss === null, 'unknown project → null');
+
+  // Tightening freshness window invalidates the only match
+  const tightFresh = pq.findCairnAwareAgent(db, tables, projectRoot, { nowMs: now, freshnessMs: 5000 });
+  ok(tightFresh === null, '5s freshness rejects 10s-old heartbeat');
+
+  // Bad inputs
+  ok(pq.findCairnAwareAgent(null, tables, projectRoot) === null, 'null db → null');
+  ok(pq.findCairnAwareAgent(db, new Set(), projectRoot) === null, 'no processes table → null');
+  ok(pq.findCairnAwareAgent(db, tables, '(unknown)') === null, 'unknown project root → null');
+
+  db.close();
+}
+
+// ---------------------------------------------------------------------------
 header(`${asserts - fails}/${asserts} assertions passed (${fails} failed)`);
 if (fails) {
   for (const f of failures) process.stdout.write(`  - ${f}\n`);

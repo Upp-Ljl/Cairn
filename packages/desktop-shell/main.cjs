@@ -68,6 +68,11 @@ const recoverySummary    = require('./recovery-summary.cjs');
 const coordinationSignals = require('./coordination-signals.cjs');
 const managedLoopHandlers = require('./managed-loop-handlers.cjs');
 const mentorHandler = require('./mentor-handler.cjs');
+// Bootstrap (Phase 1, 2026-05-14): install-bridge spawns `cairn install`
+// in --json mode; cairn-md-drafter produces a haiku-fallback CAIRN.md so
+// the panel's "＋ Add project" is one click end-to-end.
+const installBridge   = require('./install-bridge.cjs');
+const cairnMdDrafter  = require('./cairn-md-drafter.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -1027,8 +1032,84 @@ ipcMain.handle('add-project', async (_e, input) => {
 
   const result = registry.addProject(reg, { project_root, db_path, label });
   reg = result.reg;
-  ensureDbHandle(db_path); // open the handle eagerly so L1 can render
-  return { ok: true, entry: result.entry };
+  const dbEntry = ensureDbHandle(db_path); // open the handle eagerly so L1 can render
+
+  // ------------------------------------------------------------------
+  // Bootstrap pipeline (Phase 1 / 2026-05-14):
+  //   1. spawn `cairn install --json` → writes .mcp.json + pre-commit
+  //      hook + start-cairn-pet launchers + initial CAIRN.md scaffold
+  //   2. haiku-draft a richer CAIRN.md if a provider is configured
+  //      (replaces the scaffold from step 1 on success); always-on
+  //      fallback to scaffold so the daemon never blocks
+  //   3. if a Cairn-aware coding agent (CC / Cursor / Codex / Aider)
+  //      is attached, write a refinement request to its agent_inbox
+  //      so it can replace/keep the draft on its next poll
+  //
+  // All three steps are non-fatal: any failure surfaces in the return
+  // value but does NOT roll back the project registration. The user
+  // can re-trigger any step from the project's context menu later
+  // (post-Phase-1 work).
+  // ------------------------------------------------------------------
+
+  let bootstrap = {
+    install: null,
+    draft: null,
+    dispatch: null,
+  };
+
+  try {
+    bootstrap.install = await installBridge.runInstallInProject({ projectRoot: project_root });
+  } catch (e) {
+    bootstrap.install = { ok: false, error: 'install_bridge_threw', detail: e && e.message ? e.message : String(e) };
+  }
+
+  // Step 2: haiku draft — only attempt if the install step succeeded,
+  // otherwise the scaffold from step 1 might not exist either and we'd
+  // be writing into a project root that hasn't been set up.
+  if (bootstrap.install && bootstrap.install.ok) {
+    try {
+      const draftResult = await cairnMdDrafter.draftCairnMd({
+        projectRoot: project_root,
+        projectName: result.entry.label,
+      });
+      bootstrap.draft = {
+        ok: draftResult.ok,
+        source: draftResult.source,
+        validation_reason: draftResult.validation && draftResult.validation.reason ? draftResult.validation.reason : null,
+        written: draftResult.written,
+      };
+
+      // Step 3: dispatch refinement to attached CC if any
+      try {
+        if (dbEntry && dbEntry.db && dbEntry.tables) {
+          const cairnAware = projectQueries.findCairnAwareAgent(dbEntry.db, dbEntry.tables, project_root);
+          if (cairnAware) {
+            const dispatchResult = cairnMdDrafter.dispatchDraftRefinement(dbEntry.db, dbEntry.tables, {
+              agent_id: cairnAware.agent_id,
+              project_id: result.entry.id,
+              projectRoot: project_root,
+              haikuDraft: draftResult.content,
+            });
+            bootstrap.dispatch = {
+              ok: dispatchResult.ok,
+              agent_id: cairnAware.agent_id,
+              client: cairnAware.client,
+              key: dispatchResult.key || null,
+              error: dispatchResult.error || null,
+            };
+          } else {
+            bootstrap.dispatch = { ok: false, error: 'no_cairn_aware_agent_attached' };
+          }
+        }
+      } catch (e) {
+        bootstrap.dispatch = { ok: false, error: 'dispatch_threw', detail: e && e.message ? e.message : String(e) };
+      }
+    } catch (e) {
+      bootstrap.draft = { ok: false, error: 'drafter_threw', detail: e && e.message ? e.message : String(e) };
+    }
+  }
+
+  return { ok: true, entry: result.entry, bootstrap };
 });
 
 ipcMain.handle('remove-project', (_e, id) => {

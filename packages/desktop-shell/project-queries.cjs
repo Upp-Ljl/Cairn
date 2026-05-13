@@ -863,6 +863,84 @@ function resolveProjectAgentIds(db, tables, project) {
 }
 
 /**
+ * Find a "Cairn-aware" coding agent currently attached to this project.
+ *
+ * Used by the bootstrap flow: when the user adds a new project in the
+ * panel, Cairn wants to dispatch a CAIRN.md draft request to whichever
+ * coding agent the user already has open in that project. This is the
+ * scratchpad-agent_inbox dispatch path (per 2026-05-14-bootstrap-grill
+ * D-4) — no clipboard, no user copy-paste.
+ *
+ * Criteria (AND-aggregated):
+ *   - `processes.status` ∈ {'active', 'connected'} — not DEAD / IDLE / etc
+ *   - `last_heartbeat` within `freshnessMs` (default 90s — 3× heartbeat)
+ *   - `capabilities` contains a `client:<known-coding-agent>` tag
+ *   - `capabilities` matches the project via `git_root:` or `cwd:`
+ *
+ * Returns the first matching row, or null. If multiple agents match,
+ * we prefer the one with the most recent `last_heartbeat`. The caller
+ * dispatches to one agent — additional agents (if any) can pick up the
+ * draft refinement via the durable `agent_inbox` scratchpad key on
+ * their next inbox-poll cycle.
+ *
+ * @param {import('better-sqlite3').Database|null} db
+ * @param {Set<string>} tables
+ * @param {string} projectRoot
+ * @param {object} [opts]
+ * @param {number} [opts.freshnessMs=90000]
+ * @param {string[]} [opts.acceptClients]  default ['claude-code','cursor','codex','aider','cline']
+ * @param {number} [opts.nowMs]  injection for tests
+ * @returns {{agent_id, client, last_heartbeat, capabilities} | null}
+ */
+const DEFAULT_CAIRN_AWARE_CLIENTS = Object.freeze([
+  'claude-code', 'cursor', 'codex', 'aider', 'cline',
+]);
+function findCairnAwareAgent(db, tables, projectRoot, opts) {
+  if (!db || !tables || !tables.has('processes')) return null;
+  if (!projectRoot || projectRoot === '(unknown)') return null;
+  const o = opts || {};
+  const freshness = Number(o.freshnessMs) > 0 ? Number(o.freshnessMs) : 90_000;
+  const now = Number(o.nowMs) > 0 ? Number(o.nowMs) : Date.now();
+  const accept = Array.isArray(o.acceptClients) && o.acceptClients.length > 0
+    ? o.acceptClients
+    : DEFAULT_CAIRN_AWARE_CLIENTS;
+
+  let rows;
+  try {
+    rows = db.prepare(`
+      SELECT agent_id, capabilities, status, last_heartbeat
+        FROM processes
+       WHERE status IN ('active','connected')
+    `).all();
+  } catch (_e) { return null; }
+
+  const candidates = [];
+  for (const r of rows) {
+    if (!r.last_heartbeat || now - Number(r.last_heartbeat) > freshness) continue;
+    let caps = null;
+    try { caps = r.capabilities ? JSON.parse(r.capabilities) : null; } catch (_e) { continue; }
+    if (!Array.isArray(caps)) continue;
+    if (!capabilitiesMatchProject(caps, projectRoot)) continue;
+    // Find a client:* tag whose value is in accept[]
+    let client = null;
+    for (const tag of caps) {
+      const kv = parseCapabilityTag(tag);
+      if (kv && kv.key === 'client' && accept.includes(kv.value)) { client = kv.value; break; }
+    }
+    if (!client) continue;
+    candidates.push({
+      agent_id: r.agent_id,
+      client,
+      last_heartbeat: Number(r.last_heartbeat),
+      capabilities: caps,
+    });
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.last_heartbeat - a.last_heartbeat);
+  return candidates[0];
+}
+
+/**
  * Resolve the attributed-id union across every registered project
  * pointing at `dbPath`. Used by the Unassigned bucket: anything in
  * this DB that is NOT in this union is unassigned.
@@ -1181,4 +1259,6 @@ module.exports = {
   capabilitiesMatchProject,
   resolveProjectAgentIds,
   resolveAttributedAgentIdsForDb,
+  findCairnAwareAgent,
+  DEFAULT_CAIRN_AWARE_CLIENTS,
 };
