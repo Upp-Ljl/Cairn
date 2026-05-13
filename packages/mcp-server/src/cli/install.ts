@@ -66,7 +66,8 @@ const HOOK_MARKER = '# cairn-pre-commit-v1';
 // party skill of the same name is left alone (action='preserved') —
 // we never silently overwrite human or other-tool content.
 // v2 (A3 session-naming): adds cairn.session.name startup instruction.
-const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v2 -->';
+// v3 (A1.1 timeline): adds session timeline write protocol.
+const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v3 -->';
 
 // Claude Code project-level skill that makes CC actually Cairn-aware
 // without manual user setup. Loaded by `cairn install` into
@@ -76,7 +77,7 @@ const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v2 -->';
 // inside CAIRN.md which CC didn't read until told.
 const CAIRN_AWARE_SKILL = `---
 name: cairn-aware
-description: This project uses Cairn. At session start read CAIRN.md, call cairn.session.name to self-report what you are about to do, write an agent_brief to scratchpad before raising blockers via cairn.task.block, and poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions.
+description: This project uses Cairn. At session start read CAIRN.md, call cairn.session.name to self-report what you are about to do, write an agent_brief to scratchpad before raising blockers via cairn.task.block, poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions, and write session timeline events before/after each meaningful step.
 ---
 
 ${CAIRN_AWARE_SKILL_MARKER}
@@ -149,6 +150,74 @@ Subagent runs still write to \`subagent/{agent_id}/result\` per
 \`docs/cairn-subagent-protocol.md\`. The agent_brief above is YOUR
 self-summary, not your subagents'.
 
+## Session timeline (write a record before/after each meaningful step)
+
+The panel reconstructs your work history from scratchpad keys under
+\`session_timeline/<your-agent-id>/<ulid>\`. Full spec:
+\`docs/cairn-session-timeline-protocol.md\`.
+
+**When to write — yes:**
+- Starting a chunk of meaningful work (> 30 s, involves file changes / tests / decisions)
+- Completing that chunk
+- Hitting a blocker (before calling \`cairn.task.block\`)
+- Spawning a subagent
+- Receiving a subagent result
+- Creating a checkpoint
+
+**When to skip — no:**
+- Pure reads: \`Read\`, \`Grep\`, \`Glob\`, \`cairn.scratchpad.read\`, \`cairn.task.get\`
+- Status / heartbeat queries
+
+**start event** (before work):
+\`\`\`
+cairn.scratchpad.write({
+  key: "session_timeline/<your-agent-id>/<startUlid>",
+  value: JSON.stringify({
+    ts: Date.now(), kind: "start",
+    label: "refactor auth tests setup",
+    agent_id: "<your-agent-id>",
+    task_id: "<task_id if any>",
+    source: "agent"
+  })
+})
+\`\`\`
+
+**done event** (after work, references start):
+\`\`\`
+cairn.scratchpad.write({
+  key: "session_timeline/<your-agent-id>/<doneUlid>",
+  value: JSON.stringify({
+    ts: Date.now(), kind: "done",
+    label: "auth tests refactored — 51/51 passing",
+    agent_id: "<your-agent-id>",
+    task_id: "<task_id if any>",
+    parent_event_id: "<startUlid>",
+    source: "agent"
+  })
+})
+\`\`\`
+
+**Spawning a subagent:**
+1. Write a \`kind: "spawn"\` event; note its ULID (\`spawnUlid\`).
+2. Pass \`spawnUlid\` into the subagent prompt:
+   \`"Your parent's spawn event ULID is: <spawnUlid>"\`
+3. Subagent writes its first \`kind: "start"\` with
+   \`parent_event_id: "<spawnUlid>"\`.
+4. Parent writes \`kind: "subagent_return"\` with
+   \`parent_event_id: "<spawnUlid>"\` when the result arrives.
+
+**ULID generation** (Crockford base-32, 26 chars, sortable):
+\`\`\`javascript
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function newUlid() {
+  let t = Date.now(), ts = '';
+  for (let i = 9; i >= 0; i--) { ts = CROCKFORD[t % 32] + ts; t = Math.floor(t / 32); }
+  let rand = '';
+  for (let i = 0; i < 16; i++) rand += CROCKFORD[Math.floor(Math.random() * 32)];
+  return ts + rand;
+}
+\`\`\`
+
 ## Reserved keys
 
 Do not write to:
@@ -160,9 +229,9 @@ Do not write to:
 ## Why this skill exists
 
 This file is auto-installed by \`cairn install\`. Without it, CC would
-not know to poll \`agent_inbox\` or write agent_briefs, which means
-Mentor's decisions would never reach you and you'd ask the user the
-questions Cairn could already answer.
+not know to poll \`agent_inbox\` or write agent_briefs / timeline events,
+which means Mentor's decisions would never reach you and the panel would
+have no history to show.
 `;
 
 
@@ -440,9 +509,10 @@ export function runInstall(opts: InstallOptions): InstallResult {
     }
     if (fs.existsSync(skillPath)) {
       const cur = fs.readFileSync(skillPath, 'utf8');
-      // Accept both the current marker AND the legacy v1 marker so
-      // existing installs are upgraded to v2 rather than left as-is.
+      // Accept the current marker AND legacy v1/v2 markers so existing
+      // installs are upgraded to v3 rather than left as-is.
       const isOurSkill = cur.includes(CAIRN_AWARE_SKILL_MARKER) ||
+                         cur.includes('<!-- cairn-aware-skill-v2 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v1 -->');
       if (isOurSkill) {
         fs.writeFileSync(skillPath, CAIRN_AWARE_SKILL, 'utf8');

@@ -82,12 +82,18 @@ describe('fresh repo', () => {
     expect(fs.existsSync(skillPath)).toBe(true);
     const skill = fs.readFileSync(skillPath, 'utf8');
     expect(skill).toContain('name: cairn-aware');
-    expect(skill).toContain('cairn-aware-skill-v2');
+    expect(skill).toContain('cairn-aware-skill-v3');
     expect(skill).toContain('agent_inbox/<your-');
     expect(skill).toContain('agent_brief');
     expect(skill).toContain('cairn.task.block');
-    // A3 session-naming: v2 adds cairn.session.name instruction
+    // A3 session-naming: v2+ has cairn.session.name instruction
     expect(skill).toContain('cairn.session.name');
+    // A1.1 timeline: v3 adds session timeline write protocol
+    expect(skill).toContain('session_timeline/');
+    expect(skill).toContain('kind: "start"');
+    expect(skill).toContain('kind: "done"');
+    expect(skill).toContain('parent_event_id');
+    expect(skill).toContain('spawn');
 
     // .mcp.json
     const mcpJson = JSON.parse(fs.readFileSync(path.join(tmpDir, '.mcp.json'), 'utf8'));
@@ -283,7 +289,7 @@ describe('cairn-aware skill (Phase 4)', () => {
     const r2 = runInstall(baseOpts());
     expect(r2.cairnAwareSkillAction).toBe('replaced');
     const skill = fs.readFileSync(skillPath, 'utf8');
-    expect(skill).toContain('cairn-aware-skill-v2');
+    expect(skill).toContain('cairn-aware-skill-v3');
   });
 
   it('preserves a non-cairn skill of the same name (no overwrite of foreign content)', () => {
@@ -301,6 +307,25 @@ describe('cairn-aware skill (Phase 4)', () => {
     expect(result.warnings.some(w => w.includes('NOT cairn-marked'))).toBe(true);
     const after = fs.readFileSync(skillPath, 'utf8');
     expect(after).toBe(userSkill); // untouched
+  });
+
+  it('upgrades a v2-marked skill to v3 (timeline section added)', () => {
+    makeFakeRepo();
+    const skillDir = path.join(tmpDir, '.claude', 'skills');
+    fs.mkdirSync(skillDir, { recursive: true });
+    // Simulate an existing v2 install (legacy marker)
+    const v2Skill = '---\nname: cairn-aware\n---\n<!-- cairn-aware-skill-v2 -->\n# old v2 content\n';
+    const skillPath = path.join(skillDir, 'cairn-aware.md');
+    fs.writeFileSync(skillPath, v2Skill, 'utf8');
+
+    const result = runInstall(baseOpts());
+
+    expect(result.ok).toBe(true);
+    expect(result.cairnAwareSkillAction).toBe('replaced');
+    const upgraded = fs.readFileSync(skillPath, 'utf8');
+    expect(upgraded).toContain('cairn-aware-skill-v3');
+    expect(upgraded).toContain('session_timeline/');
+    expect(upgraded).not.toContain('old v2 content');
   });
 
   it('creates the .claude/skills directory when it does not exist', () => {
