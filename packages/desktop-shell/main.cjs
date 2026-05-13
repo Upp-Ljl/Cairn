@@ -1142,6 +1142,30 @@ ipcMain.handle('get-selected-project', () => {
     : null;
 });
 
+// ---------------------------------------------------------------------------
+// B4 Onboarding wizard IPC handlers
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('get-onboarded-at', () => {
+  return registry.getOnboardedAt(reg);
+});
+
+ipcMain.handle('mark-onboarded', () => {
+  reg = registry.markOnboarded(reg);
+  registry.saveRegistry(reg);
+  return { ok: true, onboarded_at: registry.getOnboardedAt(reg) };
+});
+
+ipcMain.handle('choose-project-folder', async () => {
+  const panelWin = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+  const result = await dialog.showOpenDialog(panelWin || null, {
+    title: 'Choose your project folder',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: false, error: 'cancelled' };
+  return { ok: true, path: result.filePaths[0] };
+});
+
 ipcMain.handle('add-project', async (_e, input) => {
   let project_root = input && typeof input.project_root === 'string' ? input.project_root : '';
   let db_path      = input && typeof input.db_path === 'string'      ? input.db_path      : '';
