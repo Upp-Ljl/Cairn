@@ -1,6 +1,17 @@
 /**
  * CDP-driven panel ↔ IPC ↔ handler ↔ launcher ↔ fixture integration smoke.
  *
+ * **LEGACY** (2026-05-14): tests the legacy view-project + mentor-pane
+ * Mode A advisory chat flow. The cockpit redesign (v0.2.0) supersedes
+ * this — clicking a project card now opens view-cockpit + M2 Mentor
+ * module instead of view-project + mentor-pane. This smoke remains as
+ * a regression net for the env-gated legacy code path
+ * (CAIRN_DESKTOP_ENABLE_MUTATIONS=1) but is SKIPPED in the default
+ * sweep unless `CAIRN_RUN_LEGACY_SMOKE=1` is set. New integration smoke
+ * for the cockpit redesign is via smoke-cockpit-state + smoke-cockpit-
+ * todolist + smoke-cockpit-dispatch + smoke-cockpit-lane (no CDP needed —
+ * pure module-layer dogfood).
+ *
  * Catches field-name / schema / spawn-context drift between panel.js,
  * preload.cjs, main.cjs, mentor-handler.cjs, and worker-launcher.cjs
  * — the class of bugs that manual GUI verification found during A2-fix (34b6b06).
@@ -9,6 +20,11 @@
  * Uses: CAIRN_DESKTOP_ENABLE_MUTATIONS=1, fixture-mentor provider.
  * Sandbox: isolates ~/.cairn by overriding USERPROFILE / HOME.
  */
+
+if (process.env.CAIRN_RUN_LEGACY_SMOKE !== '1') {
+  console.log('==> smoke-panel-mentor-integration: SKIPPED (legacy view-project + mentor-pane Mode A path; set CAIRN_RUN_LEGACY_SMOKE=1 to run)');
+  process.exit(0);
+}
 
 import { spawn, execSync }  from 'node:child_process';
 import fs                   from 'node:fs';

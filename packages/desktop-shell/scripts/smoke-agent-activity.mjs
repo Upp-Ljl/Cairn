@@ -341,7 +341,15 @@ if (beforeCodex != null)  eq(afterCodex,  beforeCodex,  '~/.codex mtime unchange
 const src = fs.readFileSync(path.join(root, 'agent-activity.cjs'), 'utf8');
 ok(!/\.run\s*\(/.test(src),     'agent-activity.cjs has no .run(');
 ok(!/\.exec\s*\(/.test(src),    'agent-activity.cjs has no .exec(');
-ok(!/\.prepare\s*\(/.test(src), 'agent-activity.cjs has no .prepare(');
+// A3-part1 (cairn.session.name) added SELECT-only .prepare() in
+// deriveDisplayName to read scratchpad session_name override. The
+// mutation guard is via .run() / .exec() / SQL-keyword checks below;
+// .prepare() alone with SELECT is read-only safe. (Original assertion
+// was overly strict — relaxed 2026-05-14.)
+const prepareLines = (src.match(/^\s*[^\/]*\.prepare\s*\([^)]*\)/gm) || [])
+  .map(s => s.trim());
+const writeStmts = prepareLines.filter(s => /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b/i.test(s));
+ok(writeStmts.length === 0, `agent-activity.cjs prepare() calls are SELECT-only (${prepareLines.length} prepare, 0 mutation)`);
 ok(!/\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b/i.test(src),
    'agent-activity.cjs has no SQL mutation keywords');
 ok(!/writeFileSync|writeFile\b|appendFile/.test(src),
