@@ -3905,6 +3905,24 @@ function renderCockpit(state) {
     }
   }
 
+  // Phase 5 (2026-05-14): "Mentor saved you N" productivity badge.
+  // Hidden when 0 handled — the badge is positive-feedback only;
+  // we don't surface "Mentor did 0 things" as that's clutter.
+  const savedEl = document.getElementById('cockpit-mentor-saved');
+  const savedTextEl = document.getElementById('cockpit-mentor-saved-text');
+  if (savedEl && savedTextEl) {
+    const m = state.mentor_decisions;
+    const handled = m ? (m.auto_resolve + m.auto_decide + m.announce) : 0;
+    if (handled > 0) {
+      const parts = [`Mentor handled ${handled} blocker${handled === 1 ? '' : 's'} for you`];
+      if (m.escalate > 0) parts.push(`flagged ${m.escalate} for review`);
+      savedTextEl.textContent = parts.join(' · ');
+      savedEl.hidden = false;
+    } else {
+      savedEl.hidden = true;
+    }
+  }
+
   const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
   const liveAgentCount = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE').length;
   const agentSuffix = liveAgentCount > 0 ? `  ·  ⚡ ${liveAgentCount} agent${liveAgentCount === 1 ? '' : 's'}` : '';

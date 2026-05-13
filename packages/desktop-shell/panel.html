@@ -1179,6 +1179,21 @@
   .cockpit-whole-text {
     font-style: italic;
   }
+  /* Phase 5 (2026-05-14): Mentor productivity-feedback badge */
+  .cockpit-mentor-saved {
+    font-size: 0.82em;
+    margin-bottom: 6px;
+    padding: 4px 8px;
+    background: #1a2418;
+    border-left: 2px solid #5dd45d;
+    border-radius: 2px;
+    color: #b0d8b0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cockpit-mentor-saved-icon { color: #5dd45d; }
+  .cockpit-mentor-saved-text { color: #b0d8b0; }
   .cockpit-status-line {
     font-size: 1em;
     display: flex;
@@ -2675,6 +2690,12 @@
       <div class="cockpit-whole" id="cockpit-whole" hidden>
         <span class="cockpit-whole-label">Whole</span>
         <span class="cockpit-whole-text" id="cockpit-whole-text"></span>
+      </div>
+      <!-- Phase 5 (2026-05-14): "Mentor saved you N" productivity badge.
+           Counts kernel-side sync mentor decisions for this project. Hidden when 0. -->
+      <div class="cockpit-mentor-saved" id="cockpit-mentor-saved" hidden>
+        <span class="cockpit-mentor-saved-icon">⚡</span>
+        <span class="cockpit-mentor-saved-text" id="cockpit-mentor-saved-text"></span>
       </div>
       <div class="cockpit-status-line">
         <span class="cockpit-status-dot" id="cockpit-status-dot">○</span>

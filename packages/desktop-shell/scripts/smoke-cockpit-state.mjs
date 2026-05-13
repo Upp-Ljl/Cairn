@@ -167,6 +167,32 @@ ok('cairn_md_present' in s1, 'cockpit state exposes cairn_md_present field');
 ok('in_flight' in s1, 'cockpit state exposes in_flight field');
 ok(s1.cairn_md_present === false, 'no CAIRN.md → cairn_md_present = false');
 ok(s1.whole_sentence === null, 'no CAIRN.md → whole_sentence = null');
+// Phase 5 (2026-05-14): productivity-feedback counter
+ok('mentor_decisions' in s1, 'cockpit state exposes mentor_decisions field');
+ok(s1.mentor_decisions && typeof s1.mentor_decisions === 'object', 'mentor_decisions is an object');
+ok(s1.mentor_decisions.total === 0, 'fresh DB → mentor_decisions.total === 0');
+ok(s1.mentor_decisions.auto_resolve === 0, 'fresh DB → auto_resolve counter zero');
+ok(s1.mentor_decisions.auto_decide === 0, 'fresh DB → auto_decide counter zero');
+ok(s1.mentor_decisions.announce === 0, 'fresh DB → announce counter zero');
+ok(s1.mentor_decisions.escalate === 0, 'fresh DB → escalate counter zero');
+
+// Seed 4 kernel-sync mentor scratchpad rows for AGENT_A — each route bumps.
+{
+  const seedAt = NOW - 1000;
+  const insertSp = db.prepare(`INSERT INTO scratchpad
+    (key, value_json, value_path, task_id, expires_at, created_at, updated_at)
+    VALUES (?, ?, NULL, NULL, NULL, ?, ?)`);
+  insertSp.run(`mentor/${AGENT_A}/auto_resolve/01R1`, JSON.stringify({}), seedAt, seedAt);
+  insertSp.run(`mentor/${AGENT_A}/auto_decide/01D1`, JSON.stringify({}), seedAt, seedAt);
+  insertSp.run(`mentor/${AGENT_A}/announce/01A1`, JSON.stringify({}), seedAt, seedAt);
+  insertSp.run(`mentor/${AGENT_A}/escalate/01E2`, JSON.stringify({}), seedAt, seedAt);
+  const sCount = cockpit.buildCockpitState(db, tables, PROJ, 'build the cockpit', PROJ.agent_id_hints, {});
+  ok(sCount.mentor_decisions.auto_resolve === 1, 'auto_resolve counter increments after seed');
+  ok(sCount.mentor_decisions.auto_decide === 1, 'auto_decide counter increments after seed');
+  ok(sCount.mentor_decisions.announce === 1, 'announce counter increments after seed');
+  ok(sCount.mentor_decisions.escalate === 1, 'escalate counter increments after seed');
+  ok(sCount.mentor_decisions.total === 4, 'mentor_decisions.total = sum of 4 routes');
+}
 
 // ---------------------------------------------------------------------------
 // Test 3 — seed scratchpad mentor + escalation

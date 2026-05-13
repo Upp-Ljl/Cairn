@@ -609,6 +609,45 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     ? progress.total_active
     : (agents.filter(a => a.state === 'running' || a.state === 'active').length);
 
+  // Phase 5 (2026-05-14): "Mentor saved you N" productivity-feedback
+  // counter. Counts kernel-side sync mentor decisions for this
+  // project's attributed agents:
+  //   mentor/<agent_id>/auto_resolve/<ulid>  ← Phase 2 known_answers
+  //   mentor/<agent_id>/auto_decide/<ulid>   ← Phase 3 ✅
+  //   mentor/<agent_id>/announce/<ulid>      ← Phase 3 ⚠️
+  //   mentor/<agent_id>/escalate/<ulid>      ← Phase 3 🛑 (recommendation only)
+  //
+  // Plus the existing async tick decisions (mentor/<pid>/nudge/<ulid>)
+  // for completeness — but tick nudges are per-project not per-agent
+  // so we count them separately.
+  //
+  // The dogfood-perceived value: when a user opens the panel, they see
+  // a literal number for "blockers Mentor handled so you didn't have
+  // to." This is the productivity-feedback signal the bootstrap +
+  // sync-mentor work was building toward.
+  let mentor_decisions = { auto_resolve: 0, auto_decide: 0, announce: 0, escalate: 0, total: 0 };
+  if (tables.has('scratchpad') && hints.length > 0) {
+    try {
+      const hintsLike = hints.map(h => `mentor/${h}/%`);
+      const placeholders = hintsLike.map(() => 'key LIKE ?').join(' OR ');
+      const rows = db.prepare(`
+        SELECT key FROM scratchpad
+        WHERE ${placeholders}
+      `).all(...hintsLike);
+      for (const r of rows) {
+        if (r.key.includes('/auto_resolve/'))    mentor_decisions.auto_resolve++;
+        else if (r.key.includes('/auto_decide/')) mentor_decisions.auto_decide++;
+        else if (r.key.includes('/announce/'))    mentor_decisions.announce++;
+        else if (r.key.includes('/escalate/'))    mentor_decisions.escalate++;
+      }
+      mentor_decisions.total =
+        mentor_decisions.auto_resolve +
+        mentor_decisions.auto_decide +
+        mentor_decisions.announce +
+        mentor_decisions.escalate;
+    } catch (_e) { /* leave zeros */ }
+  }
+
   return {
     project: {
       id: project.id,
@@ -622,6 +661,8 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     whole_sentence,
     cairn_md_present,
     in_flight,
+    // Phase 5 (2026-05-14): "Mentor saved you N" productivity-feedback counter
+    mentor_decisions,
     autopilot_status: autopilot,
     autopilot_reason: autopilot === AUTOPILOT_STATUS.NO_GOAL
       ? 'project has no goal — set one to enable Mentor'
