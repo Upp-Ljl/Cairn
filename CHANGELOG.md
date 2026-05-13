@@ -4,6 +4,39 @@ All notable changes to Cairn are documented here. Format roughly follows [Keep a
 
 ---
 
+## [0.2.0-cockpit-redesign] — 2026-05-14 (Unreleased — push blocked on PAT scope)
+
+**17-constraint cockpit redesign + Mode B Continuous Iteration v1.**
+
+CEO 4-round grill defined 17 product约定 ("完整掌控感")；全 17 closed. Module order locked in spec: M1 State / **M2 Mentor + Todolist** / M3 Steer (session dropdown) / M4 **Sessions** (idle 一等公民 + L2 timeline drill-down) / M5 Safety. Mode B (走开就行) shipped v1 across 5 slices.
+
+### What's new
+
+- **M2 Mentor module** — primary first-class, status header (state · last nudge · today's decisions · 🛤 lanes · needs review)
+- **M2 Todolist** — 3 sources (🤖 agent self-propose / 🧑‍🏫 Mentor / 🐤 user), `[派给]` / `[Approve]` write `dispatch_requests` (kernel R1-R6); batch-select → lane
+- **M3 Steer per-session dropdown**
+- **M4 Sessions module** — replaces Activity Feed; click → L2 timeline drill-down
+- **L2 Session Timeline** — chronological agent events, subagent缩进 tree, checkpoint Rewind anchors; scratchpad `session_timeline/<agent>/<ulid>` namespace
+- **🛤 Mode B Continuous Iteration v1** — 5 slices: lane data layer + UI module + tick auto-detect WAITING_REVIEW + "+ New lane" form + batch-from-todos
+- **First-launch onboarding wizard** — 3 screens for non-dev users
+- **Kernel auto-instrumentation** — task tools auto-write session_timeline events (`source: 'kernel'`); agents without skill adoption still produce timeline data
+- **Rule C off-goal drift** — LLM-judged, prompt-tuned, strict-mode for high-confidence
+- **Session 人话命名** — new MCP tool `cairn.session.name` (#29)
+- **B-track ship pipeline** — GH Actions release.yml + extraResources mcp-server bundle + icon.icns
+- **Workflow rules** — SELF-REPORT-STOP fields 13/14/15 (mid-run report / push-block / subagent-running anti-patterns)
+
+### MCP tools: 29 (was 28). New: `cairn.session.name`.
+
+### Tests
+
+daemon 411 / mcp-server 424 / desktop-shell smokes ~410 assertions / dogfood ~84 / real-LLM Rule C 9/9. Real-agent dogfood: live `~/.cairn/cairn.db` has 9 session_timeline + 3 agent_proposals + 1 lane PENDING.
+
+### Hard blocker
+
+`git push` rejected — PAT lacks `workflow` scope. 41 commits queued. Resolve at https://github.com/settings/tokens.
+
+---
+
 ## [0.3.0-mentor-3layer] — 2026-05-13 (Unreleased)
 
 **Mentor becomes team lead — 3-layer decision via CAIRN.md + agent_brief.**
