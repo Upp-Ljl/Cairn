@@ -34,7 +34,7 @@ import type { Workspace } from '../workspace.js';
 import { assembleResumePacket, type ResumePacket } from '../resume-packet.js';
 // Phase 2 (sync mentor): CAIRN.md known-answer auto-resolve inside task.block.
 // See docs/superpowers/plans/2026-05-14-phase2-sync-mentor.md.
-import { loadProfile, matchKnownAnswer } from '../../../daemon/dist/cairn-md/index.js';
+import { loadProfile, matchKnownAnswer, matchBucket, type Profile } from '../../../daemon/dist/cairn-md/index.js';
 import { putScratch } from '../../../daemon/dist/storage/repositories/scratchpad.js';
 import * as crypto from 'node:crypto';
 
@@ -290,15 +290,42 @@ function blockerAlreadyAnsweredError(blocker_id: string) {
  *
  * SESSION_AGENT_ID injection: raised_by defaults to ws.agentId when omitted.
  */
+/**
+ * Phase 2/3 result shapes for cairn.task.block.
+ *
+ * Phase 2 (known_answers): auto_resolved: true / route omitted-or-'auto' / answer.
+ * Phase 3 (authority buckets): same auto_resolved: true shape but route is one
+ * of 'auto' (✅ auto_decide) | 'announce' (⚠️ decide_and_announce); the
+ * synthesized answer reads "Mentor proceeded per CAIRN.md rule: <bullet>".
+ * Phase 3 escalate (🛑) does NOT auto-resolve — auto_resolved: false but a
+ * `mentor_recommendation` field is set to tell the agent "kernel flagged
+ * this as irreversible; you / user decide."
+ */
+export type BlockRoute = 'auto' | 'announce';
 export interface BlockTaskResultBase { blocker: BlockerRow; task: TaskRow; auto_resolved: boolean }
 export interface BlockTaskResultAutoResolved extends BlockTaskResultBase {
   auto_resolved: true;
   answer: string;
   matched_pattern: string;
   scratchpad_key: string;
+  /** Which bucket fired — `'auto'` (Phase 2 known_answers OR Phase 3 ✅ auto_decide),
+   * `'announce'` (Phase 3 ⚠️ decide_and_announce). Phase 2 known_answers maps to 'auto'. */
+  route: BlockRoute;
+  /** Source bucket label for the Activity feed: `'known_answers'`
+   * (Phase 2) | `'auto_decide'` | `'decide_and_announce'` (Phase 3). */
+  source: 'known_answers' | 'auto_decide' | 'decide_and_announce';
 }
 export interface BlockTaskResultPassive extends BlockTaskResultBase {
   auto_resolved: false;
+  /** Set when Phase 3 detected a 🛑 escalate-bucket match. The blocker
+   * stays OPEN and the task stays BLOCKED — kernel does not unilaterally
+   * resolve an escalate-class question; caller (agent / user) decides. */
+  mentor_recommendation?: {
+    route: 'escalate';
+    matched_pattern: string;
+    body: string;
+    scratchpad_key: string;
+  };
 }
 export type BlockTaskResult = BlockTaskResultAutoResolved | BlockTaskResultPassive;
 
@@ -324,16 +351,53 @@ export function toolBlockTask(
       ? args.raised_by
       : ws.agentId;
 
-  // Phase 2: peek at the project's CAIRN.md for a known_answer match.
-  // Loaded BEFORE the transaction so the scan + cache write don't bloat
-  // the outer txn. matchKnownAnswer is pure; safe to call cold.
+  // Phase 2 + Phase 3: peek at the project's CAIRN.md.
+  //
+  // Phase 2 (known_answers) is the cheapest path — exact-pattern matches
+  // get an explicit answer. If known_answers misses, Phase 3 (2026-05-14)
+  // does a second pass against profile.authority in priority order:
+  //   🛑 escalate     → mentor_recommendation, do NOT auto-resolve
+  //   ✅ auto_decide  → auto-resolve, route='auto'
+  //   ⚠️ announce     → auto-resolve, route='announce'
+  // Plan: docs/superpowers/plans/2026-05-14-phase3-authority-routing.md
   let autoMatch: { pattern: string; answer: string } | null = null;
+  let authoritySource: 'auto_decide' | 'decide_and_announce' | null = null;
+  let escalateMatch: { pattern: string } | null = null;
+  let profileForActivity: Profile | null = null;
   try {
-    const profile = loadProfile(ws.db, ws.blobRoot, ws.gitRoot);
-    autoMatch = matchKnownAnswer(profile, args.question);
+    profileForActivity = loadProfile(ws.db, ws.blobRoot, ws.gitRoot);
+    autoMatch = matchKnownAnswer(profileForActivity, args.question);
+    if (!autoMatch && profileForActivity && profileForActivity.exists) {
+      // Phase 3 second-pass — priority order matches routeBySignal in
+      // desktop-shell/mentor-policy.cjs so kernel + panel agree.
+      const escHit = matchBucket(profileForActivity.authority.escalate, args.question);
+      if (escHit) {
+        escalateMatch = { pattern: escHit };
+      } else {
+        const autoHit = matchBucket(profileForActivity.authority.auto_decide, args.question);
+        if (autoHit) {
+          autoMatch = {
+            pattern: autoHit,
+            answer: `Mentor proceeded per CAIRN.md rule: ${autoHit}`,
+          };
+          authoritySource = 'auto_decide';
+        } else {
+          const annHit = matchBucket(profileForActivity.authority.decide_and_announce, args.question);
+          if (annHit) {
+            autoMatch = {
+              pattern: annHit,
+              answer: `Mentor proceeded per CAIRN.md rule: ${annHit}`,
+            };
+            authoritySource = 'decide_and_announce';
+          }
+        }
+      }
+    }
   } catch (_e) {
     // CAIRN.md absent / unreadable / parse error → fall through to normal block.
     autoMatch = null;
+    escalateMatch = null;
+    authoritySource = null;
   }
 
   try {
@@ -351,13 +415,24 @@ export function toolBlockTask(
       // better-sqlite3 flattens nested transactions to SAVEPOINTs, so the
       // recordBlocker/markAnswered inner transactions are safe inside this wrap.
       const ulid = _newUlid();
-      const scratchKey = `mentor/${raised_by}/auto_resolve/${ulid}`;
+      // Source determines route + scratchpad key prefix:
+      //   null         → Phase 2 known_answers path → mentor/<a>/auto_resolve/<u>
+      //   auto_decide  → Phase 3 ✅              → mentor/<a>/auto_decide/<u>
+      //   decide_and_announce → Phase 3 ⚠️       → mentor/<a>/announce/<u>
+      const source: 'known_answers' | 'auto_decide' | 'decide_and_announce' =
+        authoritySource ?? 'known_answers';
+      const keyRoute =
+        source === 'known_answers' ? 'auto_resolve'
+        : source === 'auto_decide' ? 'auto_decide'
+        : 'announce';
+      const route: BlockRoute = source === 'decide_and_announce' ? 'announce' : 'auto';
+      const scratchKey = `mentor/${raised_by}/${keyRoute}/${ulid}`;
       const autoResolvedAt = Date.now();
       const result = ws.db.transaction(() => {
         const blockResult = recordBlocker(ws.db, recordInput);
         const answerResult = markAnswered(ws.db, blockResult.blocker.blocker_id, {
           answer: autoMatch!.answer,
-          answered_by: raised_by, // self-answered via Cairn known_answer mechanism
+          answered_by: raised_by, // self-answered via Cairn mechanism
         });
         putScratch(ws.db, ws.blobRoot, {
           key: scratchKey,
@@ -367,7 +442,10 @@ export function toolBlockTask(
             question: args.question,
             matched_pattern: autoMatch!.pattern,
             answer: autoMatch!.answer,
-            source: 'kernel_sync',
+            source,
+            route,
+            announce: route === 'announce',
+            kernel: 'sync',
             resolved_at: autoResolvedAt,
             raised_by,
           },
@@ -384,6 +462,47 @@ export function toolBlockTask(
         answer: autoMatch.answer,
         matched_pattern: autoMatch.pattern,
         scratchpad_key: scratchKey,
+        route,
+        source,
+      };
+    }
+
+    if (escalateMatch) {
+      // Phase 3: 🛑 escalate match — record the blocker (BLOCKED stays),
+      // write a recommendation scratchpad event, do NOT auto-answer.
+      const ulid = _newUlid();
+      const scratchKey = `mentor/${raised_by}/escalate/${ulid}`;
+      const recommendationBody = `Cairn flagged this question via CAIRN.md 🛑 rule: ${escalateMatch.pattern}. Kernel will not auto-resolve. Caller (agent / user) decides next step.`;
+      const result = ws.db.transaction(() => {
+        const blockResult = recordBlocker(ws.db, recordInput);
+        putScratch(ws.db, ws.blobRoot, {
+          key: scratchKey,
+          value: {
+            task_id: args.task_id,
+            blocker_id: blockResult.blocker.blocker_id,
+            question: args.question,
+            matched_pattern: escalateMatch!.pattern,
+            body: recommendationBody,
+            source: 'escalate',
+            kernel: 'sync',
+            raised_at: Date.now(),
+            raised_by,
+          },
+          task_id: args.task_id,
+          expires_at: null,
+        });
+        return blockResult;
+      })();
+
+      return {
+        ...result,
+        auto_resolved: false,
+        mentor_recommendation: {
+          route: 'escalate' as const,
+          matched_pattern: escalateMatch.pattern,
+          body: recommendationBody,
+          scratchpad_key: scratchKey,
+        },
       };
     }
 

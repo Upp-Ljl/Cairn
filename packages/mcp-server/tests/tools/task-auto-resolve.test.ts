@@ -116,7 +116,12 @@ describe('cairn.task.block — auto-resolve via CAIRN.md known_answers (Phase 2)
     expect(body.blocker_id).toBe(r.blocker.blocker_id);
     expect(body.matched_pattern).toBe('prefer ts or js');
     expect(body.answer).toContain('TypeScript');
-    expect(body.source).toBe('kernel_sync');
+    // Phase 3 schema: `source` carries the bucket name (known_answers /
+    // auto_decide / decide_and_announce); the `kernel: 'sync'` marker
+    // identifies the kernel-side synchronous path. The old field
+    // `source: 'kernel_sync'` collapsed both — Phase 3 splits them.
+    expect(body.source).toBe('known_answers');
+    expect(body.kernel).toBe('sync');
     expect(typeof body.resolved_at).toBe('number');
     expect(body.raised_by).toBe(ws.agentId);
   });
@@ -320,5 +325,152 @@ describe('cairn.task.block — auto-resolve via CAIRN.md known_answers (Phase 2)
   it('fixture sanity: CAIRN.md actually written before each test that needs it', () => {
     writeFileSync(join(projectRoot, 'CAIRN.md'), SAMPLE_CAIRN_MD);
     expect(existsSync(join(projectRoot, 'CAIRN.md'))).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3 — Authority bucket routing (✅ / ⚠️ / 🛑)
+  // Plan: docs/superpowers/plans/2026-05-14-phase3-authority-routing.md
+  // ---------------------------------------------------------------------------
+
+  const AUTHORITY_FIXTURE = `# Authority Test Project
+
+## Whole
+
+Validate Phase 3 authority routing end to end.
+
+## Mentor authority (decision delegation)
+
+- ✅ retry transient test failures up to 2x
+- ⚠️ reduce a task time budget when 80% elapsed
+- 🛑 npm publish
+- 🛑 force-push to main
+
+## Known answers
+
+- exact pattern xyz => answer-xyz
+`;
+
+  it('✅ auto_decide match → auto_resolved=true with route=auto + synthesized answer', () => {
+    writeFileSync(join(projectRoot, 'CAIRN.md'), AUTHORITY_FIXTURE);
+    const created = toolCreateTask(ws, { intent: 'auto-decide' });
+    const taskId = created.task.task_id;
+    toolStartAttempt(ws, { task_id: taskId });
+    const r = toolBlockTask(ws, { task_id: taskId, question: 'Should I retry transient test failures here?' });
+    if ('error' in r) throw new Error('unexpected error');
+    expect(r.auto_resolved).toBe(true);
+    if (!r.auto_resolved) return;
+    expect(r.route).toBe('auto');
+    expect(r.source).toBe('auto_decide');
+    expect(r.answer).toContain('Mentor proceeded per CAIRN.md rule');
+    expect(r.answer).toContain('retry transient test failures');
+    expect(r.matched_pattern).toBe('retry transient test failures up to 2x');
+    expect(r.task.state).toBe('READY_TO_RESUME');
+    expect(r.scratchpad_key.includes('/auto_decide/')).toBe(true);
+    const row = ws.db.prepare('SELECT value_json FROM scratchpad WHERE key = ?').get(r.scratchpad_key) as
+      | { value_json: string } | undefined;
+    const body = JSON.parse(row!.value_json);
+    expect(body.source).toBe('auto_decide');
+    expect(body.route).toBe('auto');
+    expect(body.announce).toBe(false);
+  });
+
+  it('⚠️ decide_and_announce match → auto_resolved=true with route=announce + announce flag', () => {
+    writeFileSync(join(projectRoot, 'CAIRN.md'), AUTHORITY_FIXTURE);
+    const created = toolCreateTask(ws, { intent: 'announce' });
+    const taskId = created.task.task_id;
+    toolStartAttempt(ws, { task_id: taskId });
+    const r = toolBlockTask(ws, { task_id: taskId, question: 'Can I reduce the task time budget when most of it elapsed already?' });
+    if ('error' in r) throw new Error('unexpected error');
+    expect(r.auto_resolved).toBe(true);
+    if (!r.auto_resolved) return;
+    expect(r.route).toBe('announce');
+    expect(r.source).toBe('decide_and_announce');
+    expect(r.scratchpad_key.includes('/announce/')).toBe(true);
+    expect(r.task.state).toBe('READY_TO_RESUME');
+    const row = ws.db.prepare('SELECT value_json FROM scratchpad WHERE key = ?').get(r.scratchpad_key) as
+      | { value_json: string } | undefined;
+    const body = JSON.parse(row!.value_json);
+    expect(body.announce).toBe(true);
+  });
+
+  it('🛑 escalate match → auto_resolved=false WITH mentor_recommendation (task stays BLOCKED)', () => {
+    writeFileSync(join(projectRoot, 'CAIRN.md'), AUTHORITY_FIXTURE);
+    const created = toolCreateTask(ws, { intent: 'escalate' });
+    const taskId = created.task.task_id;
+    toolStartAttempt(ws, { task_id: taskId });
+    const r = toolBlockTask(ws, { task_id: taskId, question: 'Should I run npm publish to ship this fix?' });
+    if ('error' in r) throw new Error('unexpected error');
+    expect(r.auto_resolved).toBe(false);
+    if (r.auto_resolved) return;
+    expect(r.task.state).toBe('BLOCKED');
+    expect(r.blocker.status).toBe('OPEN');
+    expect(r.mentor_recommendation).toBeDefined();
+    expect(r.mentor_recommendation!.route).toBe('escalate');
+    expect(r.mentor_recommendation!.matched_pattern).toBe('npm publish');
+    expect(r.mentor_recommendation!.body).toContain('CAIRN.md 🛑 rule: npm publish');
+    expect(r.mentor_recommendation!.scratchpad_key.includes('/escalate/')).toBe(true);
+    const row = ws.db.prepare('SELECT value_json FROM scratchpad WHERE key = ?')
+      .get(r.mentor_recommendation!.scratchpad_key) as { value_json: string } | undefined;
+    expect(row).toBeDefined();
+    const body = JSON.parse(row!.value_json);
+    expect(body.source).toBe('escalate');
+    expect(body.matched_pattern).toBe('npm publish');
+  });
+
+  it('priority: 🛑 escalate wins over ✅ auto_decide when both match', () => {
+    writeFileSync(join(projectRoot, 'CAIRN.md'), `# X
+
+## Mentor authority (decision delegation)
+
+- ✅ npm publish workflow needs review
+- 🛑 npm publish
+`);
+    const created = toolCreateTask(ws, { intent: 'priority' });
+    const taskId = created.task.task_id;
+    toolStartAttempt(ws, { task_id: taskId });
+    const r = toolBlockTask(ws, { task_id: taskId, question: 'thinking about doing npm publish later' });
+    if ('error' in r) throw new Error('unexpected error');
+    expect(r.auto_resolved).toBe(false);
+    if (r.auto_resolved) return;
+    expect(r.mentor_recommendation!.route).toBe('escalate');
+  });
+
+  it('priority: known_answers wins over authority buckets (Phase 2 cheapest path)', () => {
+    writeFileSync(join(projectRoot, 'CAIRN.md'), `# X
+
+## Mentor authority (decision delegation)
+
+- 🛑 vitest
+
+## Known answers
+
+- vitest => use vitest with real DB, not mocks
+`);
+    const created = toolCreateTask(ws, { intent: 'known-wins' });
+    const taskId = created.task.task_id;
+    toolStartAttempt(ws, { task_id: taskId });
+    const r = toolBlockTask(ws, { task_id: taskId, question: 'should I use vitest?' });
+    if ('error' in r) throw new Error('unexpected error');
+    expect(r.auto_resolved).toBe(true);
+    if (!r.auto_resolved) return;
+    expect(r.source).toBe('known_answers');
+    expect(r.answer).toContain('vitest with real DB');
+    expect(r.scratchpad_key.includes('/auto_resolve/')).toBe(true);
+  });
+
+  it('passive path (no match anywhere) still has no route or mentor_recommendation', () => {
+    writeFileSync(join(projectRoot, 'CAIRN.md'), AUTHORITY_FIXTURE);
+    const created = toolCreateTask(ws, { intent: 'passive' });
+    const taskId = created.task.task_id;
+    toolStartAttempt(ws, { task_id: taskId });
+    const r = toolBlockTask(ws, {
+      task_id: taskId,
+      question: 'a totally unrelated question about purple submarines and tea',
+    });
+    if ('error' in r) throw new Error('unexpected error');
+    expect(r.auto_resolved).toBe(false);
+    if (r.auto_resolved) return;
+    expect(r.mentor_recommendation).toBeUndefined();
+    expect(r.task.state).toBe('BLOCKED');
   });
 });
