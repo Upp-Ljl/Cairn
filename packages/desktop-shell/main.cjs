@@ -524,6 +524,32 @@ function buildTrayTooltip(summary) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Tray idle / warn / alert aggregation — read-only across DB handles
+//
+// Algorithm (G3 in 2026-05-14-bootstrap-grill, formalized 2026-05-14):
+//   - For every registered project, open (or reuse) its DB handle and run
+//     projectQueries.queryProjectScopedSummary against the agent-IDs the
+//     attribution layer resolves (hints ∪ capability-tagged processes).
+//   - Each project yields a health verdict (`idle` / `warn` / `alert`).
+//   - The TRAY image takes the WORST across all projects — `alert` > `warn`
+//     > `idle`. Once `alert` is hit, the loop does NOT short-circuit
+//     (we still aggregate counters for the tooltip).
+//   - Unassigned buckets do NOT influence the verdict — a stray untagged
+//     process should not light the tray red.
+//   - Fallback (no registered projects yet): scan the default DB so first-
+//     run installs aren't entirely blind. Same idle/warn/alert rules.
+//
+// Counters that drive the tooltip ("X blockers · Y failed · Z conflicts ·
+// N live agents"):
+//   - totalBlockers  = SUM(summary.blockers_open)             // BLOCKED tasks
+//   - totalFail      = SUM(outcomes_failed + tasks_failed)
+//   - totalConflicts = SUM(conflicts_open)
+//   - liveAgents (counted in the tooltip section below) folds in Claude /
+//     Codex session-log scans + MCP capability rows via agentActivity.
+//
+// Read-only end to end. No writes to any DB from this path.
+// ---------------------------------------------------------------------------
 function refreshTray() {
   if (!tray) return;
   // Aggregate across all registered projects: tray reflects the worst

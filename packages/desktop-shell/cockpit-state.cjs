@@ -54,6 +54,10 @@ const SUPPORTED_TABLES = [
 // SQL helpers
 // ---------------------------------------------------------------------------
 
+// Schema-v2 CAIRN.md profile reader — mtime-gated cache via loadProfile,
+// surfaces ## Whole sentence into cockpit state for Module 1 rendering.
+const profileMod = require('./mentor-project-profile.cjs');
+
 function sqlInList(arr) {
   if (!arr || arr.length === 0) return '(NULL)';
   return '(' + arr.map(() => '?').join(',') + ')';
@@ -585,6 +589,26 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     escalationsPending: escalationsPending.length,
   });
 
+  // Schema v2 CAIRN.md: panel surfaces the `## Whole` sentence as
+  // Mentor's stable north-star line above the state strip. loadProfile
+  // is mtime-gated so this is free on unchanged CAIRN.md.
+  let whole_sentence = null;
+  let cairn_md_present = false;
+  try {
+    const profile = profileMod.loadProfile(db, project);
+    if (profile && profile.exists) {
+      cairn_md_present = true;
+      whole_sentence = profile.whole_sentence || null;
+    }
+  } catch (_e) { /* leave both null */ }
+
+  // "In flight" line — per schema v2, computed from live state, not
+  // stored in CAIRN.md. Counts active tasks + active processes that
+  // attribute to this project.
+  const in_flight = (progress && typeof progress.total_active === 'number')
+    ? progress.total_active
+    : (agents.filter(a => a.state === 'running' || a.state === 'active').length);
+
   return {
     project: {
       id: project.id,
@@ -594,6 +618,10 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     },
     goal: goal || null,
     leader: project.leader || null,
+    // schema-v2 surface (2026-05-14): Mentor north-star + computed in-flight
+    whole_sentence,
+    cairn_md_present,
+    in_flight,
     autopilot_status: autopilot,
     autopilot_reason: autopilot === AUTOPILOT_STATUS.NO_GOAL
       ? 'project has no goal — set one to enable Mentor'

@@ -3890,6 +3890,21 @@ function renderCockpit(state) {
   // Module 1: state strip — always include live agent count even when
   // autopilot isn't AGENT_WORKING (so the user sees ⚡N regardless of
   // whether goal/autopilot status would otherwise displace the agent line).
+  //
+  // CAIRN.md schema-v2 `## Whole` line (Mentor's stable north star) renders
+  // above the status dot when present. Hidden when CAIRN.md missing OR Whole
+  // section not yet drafted. Read-only — no edit affordance per D9 lock.
+  const wholeEl = document.getElementById('cockpit-whole');
+  const wholeTextEl = document.getElementById('cockpit-whole-text');
+  if (wholeEl && wholeTextEl) {
+    if (state.whole_sentence) {
+      wholeTextEl.textContent = state.whole_sentence;
+      wholeEl.hidden = false;
+    } else {
+      wholeEl.hidden = true;
+    }
+  }
+
   const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
   const liveAgentCount = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE').length;
   const agentSuffix = liveAgentCount > 0 ? `  ·  ⚡ ${liveAgentCount} agent${liveAgentCount === 1 ? '' : 's'}` : '';

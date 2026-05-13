@@ -161,6 +161,12 @@ ok(s1.progress.tasks_blocked === 1, 'progress.tasks_blocked = 1');
 ok(s1.progress.percent > 0 && s1.progress.percent < 1, 'progress.percent in (0,1)');
 ok(s1.current_task && s1.current_task.task_id === 't_001', 'current_task = t_001 (most recent RUNNING)');
 ok(s1.autopilot_status === cockpit.AUTOPILOT_STATUS.AGENT_WORKING, 'goal + live agent → AGENT_WORKING');
+// schema v2 surface fields (always present, may be null when CAIRN.md absent)
+ok('whole_sentence' in s1, 'cockpit state exposes whole_sentence field');
+ok('cairn_md_present' in s1, 'cockpit state exposes cairn_md_present field');
+ok('in_flight' in s1, 'cockpit state exposes in_flight field');
+ok(s1.cairn_md_present === false, 'no CAIRN.md → cairn_md_present = false');
+ok(s1.whole_sentence === null, 'no CAIRN.md → whole_sentence = null');
 
 // ---------------------------------------------------------------------------
 // Test 3 — seed scratchpad mentor + escalation
