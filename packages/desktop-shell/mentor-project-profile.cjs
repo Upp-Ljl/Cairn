@@ -22,10 +22,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const PROFILE_VERSION = 1;
+const PROFILE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Empty / default profile
+//
+// Schema v2 (2026-05-14, per 2026-05-14-bootstrap-grill plan D-1):
+//   - ADD `whole_sentence` — the project's stable complete-form sentence,
+//     CC-drafted and user-confirmed; Mentor's north star
+//   - KEEP `goal` — reframed as "the current sub-`Whole` milestone";
+//     can drift over time as the user iterates toward Whole
+//   - DROP `current_phase` — time-anchored (Last updated / This week /
+//     Next week) sections are mis-anchored at AI-development cadence
+//     (per CEO correction 2026-05-13); "in flight" is now panel-computed
+//     from tasks + processes, not stored in the file
+//
+// v1 profiles in the cache are invalidated on read (readCachedProfile
+// returns null when version mismatch) — fresh scan rewrites under v2.
 // ---------------------------------------------------------------------------
 
 function emptyProfile(absPath) {
@@ -37,6 +50,7 @@ function emptyProfile(absPath) {
     source_sha1: null,
     scanned_at: Date.now(),
     project_name: null,
+    whole_sentence: null,
     goal: null,
     is_list: [],
     is_not_list: [],
@@ -47,12 +61,6 @@ function emptyProfile(absPath) {
     },
     constraints: [],
     known_answers: [],
-    current_phase: {
-      last_updated: null,
-      phase: null,
-      this_week: null,
-      next_week: null,
-    },
     raw_sections: {},
   };
 }
@@ -314,11 +322,35 @@ function extractGoal(body) {
 }
 
 // ---------------------------------------------------------------------------
+// Whole-sentence extraction (schema v2, 2026-05-14)
+//
+// `## Whole` is the project's stable complete-form sentence — CC-drafted,
+// user-confirmed. Mentor's north star. Single sentence; no bullets.
+// Format-validated to be 20-200 chars, starts with capital, ends in
+// `.` / `!` / `？` / etc. Format failure → returns the raw text anyway
+// (caller decides whether to flag).
+// ---------------------------------------------------------------------------
+
+function extractWholeSentence(body) {
+  if (!body) return null;
+  for (const raw of body.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('>')) continue;
+    // Strip leading bullet marker if author wrote one (forgiving).
+    const cleaned = line.replace(/^[-*+]\s+/, '').trim();
+    return cleaned || null;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Section-key lookup (with synonyms)
 // ---------------------------------------------------------------------------
 
 const SECTION_SYNONYMS = {
-  goal: ['goal', '目标'],
+  whole: ['whole', '完整形态', '完整形态 / whole', 'whole (完整形态)', 'complete form', 'north star'],
+  goal: ['goal', '目标', 'current goal', 'current milestone', 'current sub-whole milestone'],
   is_isnot: ['what this project is / is not', 'what this project is/is not', 'project is / is not', 'is / is not', 'scope'],
   authority: ['mentor authority (decision delegation)', 'mentor authority', 'authority', 'decision delegation', '权限委托'],
   constraints: ['project constraints', 'constraints', 'project constraints (mentor + agent both follow)', '约束'],
@@ -364,6 +396,8 @@ function scanCairnMd(filePath) {
   const sections = splitSections(text);
   profile.raw_sections = sections;
 
+  // Schema v2 — Whole is the north star; Goal is the current sub-Whole milestone.
+  profile.whole_sentence = extractWholeSentence(findSectionBody(sections, 'whole'));
   profile.goal = extractGoal(findSectionBody(sections, 'goal'));
 
   for (const bullet of extractBullets(findSectionBody(sections, 'is_isnot'))) {
@@ -379,7 +413,7 @@ function scanCairnMd(filePath) {
 
   profile.constraints = extractBullets(findSectionBody(sections, 'constraints'));
   profile.known_answers = parseKnownAnswers(findSectionBody(sections, 'known_answers'));
-  profile.current_phase = parseCurrentPhase(findSectionBody(sections, 'current_phase'));
+  // schema v2: `## Current phase` removed; "in flight" is panel-computed.
 
   return profile;
 }
@@ -571,9 +605,10 @@ module.exports = {
   classifyAuthorityBullet,
   classifyIsBullet,
   parseKnownAnswers,
-  parseCurrentPhase,
+  parseCurrentPhase,    // schema-v1 legacy; no longer called by scanCairnMd
   extractProjectName,
   extractGoal,
+  extractWholeSentence, // schema-v2 (2026-05-14)
   normalizeSectionKey,
   findSectionBody,
   // cache layer

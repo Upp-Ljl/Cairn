@@ -51,18 +51,36 @@ function err(msg: string) { return `${RED}[err]${RESET}  ${msg}`; }
 
 const HOOK_MARKER = '# cairn-pre-commit-v1';
 
-// CAIRN.md scaffold — written verbatim on first install. After that, edits
-// are the user's. The scaffold is intentionally small (commented-out
-// examples) so the user fills it in. Schema in docs/CAIRN-md-spec.md.
+// CAIRN.md scaffold — written verbatim on first install (schema v2,
+// 2026-05-14, per docs/superpowers/plans/2026-05-14-bootstrap-grill.md
+// decision D-1). After install, edits are the user's. Cairn renders an
+// "in flight" line in the panel from live state — do not put it here.
+//
+// Schema v2 vs v1:
+//   - ADD `## Whole` (one sentence: the project's stable complete form,
+//     the north star Mentor measures progress against)
+//   - KEEP `## Goal` reframed as the current sub-Whole milestone
+//   - DROP `## Current phase` (time-anchored sections rot at AI cadence)
 const CAIRN_MD_TEMPLATE = `# <Project Name>
 
 > Per-project policy file for Cairn Mentor. Edit this — the scaffold is
 > intentionally sparse. Schema reference: docs/CAIRN-md-spec.md inside the
 > Cairn repo, or https://github.com/Upp-Ljl/Cairn.
+>
+> Cairn renders a "what's in flight" line in the panel from live tasks +
+> processes — do not edit progress / status here.
+
+## Whole
+
+<ONE sentence describing what this project becomes when "done" — the
+project's complete form. The stable north star Mentor steers toward.
+Cairn drafts this from your repo (CLAUDE.md / README / recent commits)
+and asks you to confirm a single sentence; you don't write it cold.>
 
 ## Goal
 
-<one sentence describing what success looks like for this project>
+<ONE sentence: the current sub-\`Whole\` milestone — what we are driving
+toward right now. Can change as the project iterates; \`Whole\` stays.>
 
 ## What this project IS / IS NOT
 
@@ -105,13 +123,6 @@ substrings (case-insensitive) and returns the answer directly. Format
 - which language => prefer TypeScript
 - test framework => vitest with real DB, not mocks
 -->
-
-## Current phase
-
-**Last updated**: YYYY-MM-DD
-- Phase: <phase name>
-- This week: <one line>
-- Next week: <one line>
 
 ---
 

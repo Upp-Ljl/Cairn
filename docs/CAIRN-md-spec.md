@@ -33,13 +33,25 @@ User-locked decisions on 2026-05-13 (memory: `cairn-md-protocol`):
   this file (L1) plus the active agent's brief (L2), with L3 LLM polish only
   as a last fallback. CAIRN.md is the L1 substrate.
 
-## Skeleton
+## Schema versions
+
+- **v1** (2026-05-13 — superseded): `## Goal` was the only direction-anchor; `## Current phase` carried time-anchored fields (`**Last updated**`, `Phase`, `This week`, `Next week`).
+- **v2** (2026-05-14 — current): adds `## Whole` (the stable complete-form sentence — the north star); reframes `## Goal` as "the current sub-`Whole` milestone"; drops `## Current phase` entirely. AI-development cadence makes human-week/-month framing rot fast; "what's in flight" is now panel-computed from live `tasks` + `processes`, not stored in the file.
+
+Profiles are tagged with `version: 2` in the scratchpad cache; pre-v2 cache rows are invalidated on read.
+
+## Skeleton (schema v2)
 
 ```markdown
 # <Project Name>
 
+## Whole
+<one sentence — the project's stable complete form; Mentor's north star.
+ CC-drafted from your repo, user-confirmed.>
+
 ## Goal
-<one sentence — what "success" looks like>
+<one sentence — the current sub-`Whole` milestone. Can change as the project
+ iterates; `Whole` stays.>
 
 ## What this project IS / IS NOT
 - IS: <one item per line, plain prose>
@@ -55,12 +67,6 @@ User-locked decisions on 2026-05-13 (memory: `cairn-md-protocol`):
 
 ## Known answers
 - <question substring> => <canonical answer>
-
-## Current phase
-**Last updated**: YYYY-MM-DD
-- Phase: <name>
-- This week: <line>
-- Next week: <line>
 ```
 
 All sections are **optional**. A missing section is valid — the scanner
@@ -69,10 +75,15 @@ default-escalate behavior for the affected category.
 
 ## Section semantics
 
+### `## Whole`
+
+The project's stable complete-form description. ONE sentence. Mentor's north star — every authority bullet (✅/⚠️/🛑) implicitly serves Whole. Cairn drafts this from artifacts the user has already produced (`CLAUDE.md`, `README.md`, `package.json`, recent commit messages) at first install and asks the user to confirm/correct ONE sentence. Users do not write this cold.
+
+Format expectation: single sentence, 20-200 chars, period/question/exclamation terminated. Sentences longer than ~200 chars usually indicate the author tried to pack a roadmap into Whole — split into Whole + Goal instead.
+
 ### `## Goal`
 
-One sentence stating the project's success criterion. Free prose. Mentor uses
-this in L3 LLM polish prompts as the "what is success" anchor.
+The current sub-`Whole` milestone — what we are driving toward right now. ONE sentence. CAN drift as the user iterates; `Whole` stays. Mentor uses Goal to disambiguate "is this work on the path to Whole?" vs "is this work off-goal drift?". When Goal and Whole conflict (rare), Whole wins.
 
 ### `## What this project IS / IS NOT`
 
@@ -126,15 +137,18 @@ The scanner parses each line on `=>` (whitespace-tolerant). Mentor's Rule D
 substring (also lowercased); first hit returns the corresponding answer
 as a nudge. This is the cheapest decision path — no LLM call required.
 
-### `## Current phase`
+### "What's in flight" (panel-computed, NOT a file section)
 
-A loose section. The scanner extracts:
+In schema v1 this lived as a `## Current phase` markdown section with `**Last updated** / This week / Next week` fields. In v2 it is **removed from the file** — AI-development cadence makes human-week framing mis-anchor in days.
 
-- `**Last updated**: <date>` → `current_phase.last_updated`
-- Any line starting with `- Phase:` → `current_phase.phase`
-- `- This week:` / `- Next week:` similarly
+The panel computes a live "in flight" line from kernel state:
 
-All optional. Used in agent briefs to anchor the agent's current-context POV.
+```
+in_flight_summary = count(tasks where state in {RUNNING, READY_TO_RESUME, BLOCKED, WAITING_REVIEW})
+                  + count(processes where state='active' and matches(project_root))
+```
+
+No file edit required. Always fresh. Survives across sessions because tasks + processes are durable kernel state.
 
 ## Scanner output shape
 
@@ -142,14 +156,15 @@ All optional. Used in agent briefs to anchor the agent's current-context POV.
 
 ```ts
 type Profile = {
-  version: 1,
+  version: 2,                    // schema v2 (2026-05-14)
   source_path: string,           // abs path scanned (may not exist)
   exists: boolean,               // false ⇒ all fields below are defaults
   source_mtime_ms: number | null,
   source_sha1: string | null,    // sha1 of file content (truncated 16-hex)
   scanned_at: number,            // Date.now() at scan time
   project_name: string | null,   // first H1, trimmed
-  goal: string | null,
+  whole_sentence: string | null, // ## Whole — single sentence, the north star
+  goal: string | null,           // ## Goal — current sub-Whole milestone
   is_list: string[],
   is_not_list: string[],
   authority: {
@@ -159,15 +174,11 @@ type Profile = {
   },
   constraints: string[],
   known_answers: Array<{ pattern: string, answer: string }>,
-  current_phase: {
-    last_updated: string | null,
-    phase: string | null,
-    this_week: string | null,
-    next_week: string | null,
-  },
   raw_sections: Record<string, string>, // section header → body text, for debug
 };
 ```
+
+`current_phase` was removed in v2 — see "What's in flight" section above. Pre-v2 cached rows are invalidated on read by the version check in `readCachedProfile`.
 
 ## Cache convention
 

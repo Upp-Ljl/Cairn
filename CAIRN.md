@@ -1,12 +1,19 @@
 # Cairn
 
 > Per-project policy file for Cairn Mentor. Cairn dogfoods Cairn — this
-> is the dogfood instance that the v0.3 scanner reads when the panel
+> is the dogfood instance that the schema-v2 scanner reads when the panel
 > watches this repo. Schema reference: `docs/CAIRN-md-spec.md`.
+>
+> Cairn renders a "what's in flight" line in the panel from live tasks +
+> processes — do not edit progress / status here.
+
+## Whole
+
+Cairn is the desktop daemon that lets a programmer (or non-developer) walk away from a long-horizon multi-agent coding project and trust the work to continue without losing context — they open Cairn, point it at a folder, and the panel shows tasks running, conflicts being resolved, Mentor making decisions, and a one-click rewind for anything that goes wrong.
 
 ## Goal
 
-Ship the host-level multi-agent coordination kernel + project control surface that lets a programmer (or non-developer) walk away from a long-horizon multi-agent coding project and trust the work to continue without losing context.
+Ship Phase 1 of the bootstrap reframe (per `docs/superpowers/plans/2026-05-14-bootstrap-grill.md`): make "Add project" in the panel a one-click full bootstrap (`.mcp.json` + pre-commit hook + scaffold launchers + CAIRN.md drafted by Cairn, not the user).
 
 ## What this project IS / IS NOT
 
@@ -58,13 +65,6 @@ Ship the host-level multi-agent coordination kernel + project control surface th
 - where do tasks live => `tasks` + `blockers` + `outcomes` (W5 Task Capsule, 3-table combo)
 - where does mentor write nudges => `scratchpad:mentor/<pid>/nudge/<ulid>`
 - where does mentor write escalations => `scratchpad:escalation/<pid>/<ulid>` with status PENDING
-
-## Current phase
-
-**Last updated**: 2026-05-13
-- Phase: Mentor 3-layer decision architecture
-- This week: ship CAIRN.md + agent_brief + 3-layer rules D/E/G + dogfood
-- Next week: monitor live tick decisions; refine matcher / staleness window from real usage
 
 ---
 
