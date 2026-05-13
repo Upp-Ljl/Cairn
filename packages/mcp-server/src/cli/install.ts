@@ -65,7 +65,8 @@ const HOOK_MARKER = '# cairn-pre-commit-v1';
 // our own installs on re-run and replace them. A user-edited or third-
 // party skill of the same name is left alone (action='preserved') —
 // we never silently overwrite human or other-tool content.
-const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v1 -->';
+// v2 (A3 session-naming): adds cairn.session.name startup instruction.
+const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v2 -->';
 
 // Claude Code project-level skill that makes CC actually Cairn-aware
 // without manual user setup. Loaded by `cairn install` into
@@ -75,7 +76,7 @@ const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v1 -->';
 // inside CAIRN.md which CC didn't read until told.
 const CAIRN_AWARE_SKILL = `---
 name: cairn-aware
-description: This project uses Cairn. At session start read CAIRN.md, write an agent_brief to scratchpad before raising blockers via cairn.task.block, and poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions.
+description: This project uses Cairn. At session start read CAIRN.md, call cairn.session.name to self-report what you are about to do, write an agent_brief to scratchpad before raising blockers via cairn.task.block, and poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions.
 ---
 
 ${CAIRN_AWARE_SKILL_MARKER}
@@ -93,7 +94,18 @@ sessions productive.
 1. **Read CAIRN.md** at the repo root (if present). Treat the IS/IS NOT
    and Mentor authority sections as policy from the project owner — what
    you can decide reversibly vs what needs the user.
-2. **Check your inbox**: call \`cairn.scratchpad.list\` (or read keys
+2. **Self-report your session name**: call \`cairn.session.name\` with a
+   human-readable title of ≤ 50 characters that describes what this
+   session is about to do. Example:
+
+   \`\`\`
+   cairn.session.name({ name: "ship Phase 8 §8 Rule C" })
+   \`\`\`
+
+   This lets the desktop-shell panel show your session's purpose instead
+   of an opaque hex id. Do this as the **first** Cairn tool call so the
+   panel is updated before any work begins.
+3. **Check your inbox**: call \`cairn.scratchpad.list\` (or read keys
    directly) and look for entries with the prefix \`agent_inbox/<your-
    cairn-session-agent-id>/\`. Each entry is a steer message from Cairn
    (or another agent acting through Cairn). Handle items in order, then
@@ -428,7 +440,11 @@ export function runInstall(opts: InstallOptions): InstallResult {
     }
     if (fs.existsSync(skillPath)) {
       const cur = fs.readFileSync(skillPath, 'utf8');
-      if (cur.includes(CAIRN_AWARE_SKILL_MARKER)) {
+      // Accept both the current marker AND the legacy v1 marker so
+      // existing installs are upgraded to v2 rather than left as-is.
+      const isOurSkill = cur.includes(CAIRN_AWARE_SKILL_MARKER) ||
+                         cur.includes('<!-- cairn-aware-skill-v1 -->');
+      if (isOurSkill) {
         fs.writeFileSync(skillPath, CAIRN_AWARE_SKILL, 'utf8');
         cairnAwareSkillAction = 'replaced';
       } else {

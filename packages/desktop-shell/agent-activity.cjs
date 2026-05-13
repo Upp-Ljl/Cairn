@@ -58,6 +58,45 @@
 const projectQueries = require('./project-queries.cjs');
 
 // ---------------------------------------------------------------------------
+// Session-name scratchpad lookup
+// ---------------------------------------------------------------------------
+//
+// Agents call cairn.session.name to write a human-readable label under
+// scratchpad key `session_name/<agent_id>`.  The desktop-shell reads
+// that entry here so the panel shows "ship Phase 8 §8 Rule C" instead
+// of the raw hex-truncated agent_id.
+//
+// Design choice: we do NOT import the MCP-server layer (no cross-package
+// require inside a product-layer cjs).  Instead the caller (main.cjs /
+// dogfood scripts) passes a pre-opened `db` handle that speaks the same
+// Cairn SQLite schema.  When no db is passed (pure-mode smoke tests),
+// the function returns null and the hex fallback applies.
+
+const SESSION_NAME_KEY_PREFIX = 'session_name/';
+
+/**
+ * Look up a session name written by cairn.session.name.
+ *
+ * @param {object|null} db    better-sqlite3 handle (read-only is fine)
+ * @param {string} agentId
+ * @returns {string|null}     the human name, or null when not set
+ */
+function deriveDisplayName(db, agentId) {
+  if (!db || !agentId) return null;
+  try {
+    const key = SESSION_NAME_KEY_PREFIX + agentId;
+    const row = db.prepare(
+      "SELECT value_json FROM scratchpad WHERE key = ?"
+    ).get(key);
+    if (!row || row.value_json == null) return null;
+    const parsed = JSON.parse(row.value_json);
+    return (parsed && typeof parsed.name === 'string') ? parsed.name : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // State / family mapping
 // ---------------------------------------------------------------------------
 //
@@ -138,9 +177,11 @@ function pickCapTag(capabilities, key) {
  *                        last_heartbeat, heartbeat_ttl, capabilities (already
  *                        parsed to string[]), owns_tasks.
  * @param {object|null} project  Registered project (or null for Unassigned).
- * @param {{attribution?:string}} [opts]
+ * @param {{attribution?:string, db?:object}} [opts]
  *                        attribution = "capability" | "hint" — passed
  *                        through if known; null otherwise.
+ *                        db — optional better-sqlite3 handle used to
+ *                        look up the session name from scratchpad.
  * @returns {object} AgentActivity
  */
 function activityFromMcpRow(row, project, opts) {
@@ -166,9 +207,15 @@ function activityFromMcpRow(row, project, opts) {
   const pidStr = pickCapTag(caps, 'pid');
   const pid = pidStr && /^\d+$/.test(pidStr) ? parseInt(pidStr, 10) : null;
 
-  const display = row && row.agent_id
-    ? row.agent_id.length > 18 ? row.agent_id.slice(0, 18) : row.agent_id
-    : '(unknown agent)';
+  // Priority 1: human name from cairn.session.name (scratchpad lookup).
+  // Priority 2: hex-truncated agent_id (backward-compatible fallback).
+  const agentIdForDisplay = (row && row.agent_id) || null;
+  const sessionName = deriveDisplayName((opts && opts.db) || null, agentIdForDisplay);
+  const display = sessionName
+    ? sessionName
+    : (agentIdForDisplay
+        ? (agentIdForDisplay.length > 18 ? agentIdForDisplay.slice(0, 18) : agentIdForDisplay)
+        : '(unknown agent)');
 
   return {
     id: 'mcp:' + (row && row.agent_id),
@@ -308,16 +355,20 @@ function activityFromCodexRow(row, project) {
  * @param {Array<object>} mcpRows
  * @param {Array<object>} claudeRowsAll
  * @param {Array<object>} codexRowsAll
- * @param {object} adapters  { claude, codex } — modules with
+ * @param {object} adapters  { claude, codex, db? } — modules with
  *                           partitionByProject. Injected so this file
  *                           doesn't have to require the adapters and
  *                           is therefore trivially mockable in smoke.
+ *                           `adapters.db` is an optional better-sqlite3
+ *                           handle passed through to activityFromMcpRow
+ *                           for session-name scratchpad lookups.
  * @returns {{ activities: object[], summary: object }}
  */
 function buildProjectActivities(project, mcpRows, claudeRowsAll, codexRowsAll, adapters) {
+  const db = (adapters && adapters.db) || null;
   const activities = [];
   for (const row of mcpRows || []) {
-    activities.push(activityFromMcpRow(row, project, { attribution: row && row._attribution }));
+    activities.push(activityFromMcpRow(row, project, { attribution: row && row._attribution, db }));
   }
   if (adapters && adapters.claude && project) {
     const { matched } = adapters.claude.partitionByProject(claudeRowsAll || [], project);
@@ -339,11 +390,16 @@ function buildProjectActivities(project, mcpRows, claudeRowsAll, codexRowsAll, a
  * not in any registered project's hints / capabilities). Claude / Codex
  * rows come from the global adapter scans, filtered to "no project
  * matches".
+ *
+ * @param {object[]} mcpRows
+ * @param {object[]} claudeRowsUnassigned
+ * @param {object[]} codexRowsUnassigned
+ * @param {object|null} [db]  optional better-sqlite3 handle for session-name lookups
  */
-function buildUnassignedActivities(mcpRows, claudeRowsUnassigned, codexRowsUnassigned) {
+function buildUnassignedActivities(mcpRows, claudeRowsUnassigned, codexRowsUnassigned, db) {
   const activities = [];
   for (const row of mcpRows || []) {
-    activities.push(activityFromMcpRow(row, null, { attribution: null }));
+    activities.push(activityFromMcpRow(row, null, { attribution: null, db: db || null }));
   }
   for (const row of claudeRowsUnassigned || []) {
     activities.push(activityFromClaudeRow(row, null));
@@ -612,4 +668,7 @@ module.exports = {
   HUMAN_STATE_LABEL,
   STATE_EXPLANATION,
   ATTRIBUTION_LABEL,
+  // Session naming (A3 session-naming).
+  deriveDisplayName,
+  SESSION_NAME_KEY_PREFIX,
 };

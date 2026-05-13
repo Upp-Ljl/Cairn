@@ -315,6 +315,87 @@ ok(builtClaude2 && builtClaude2.human_state_label === 'Ready',
    'claude idle session → human_state_label = Ready');
 
 // ---------------------------------------------------------------------------
+// Part F — session-name scratchpad lookup (A3 session-naming)
+// ---------------------------------------------------------------------------
+//
+// When scratchpad has session_name/<agent_id>, activityFromMcpRow should
+// use that name instead of the hex-truncated agent_id fallback.
+// We stub the db lookup by passing a minimal fake `db` in opts.
+
+console.log('\n==> Part F: session-name scratchpad lookup');
+
+// Build a minimal fake db that answers a single scratchpad SELECT.
+const NAMED_AGENT_ID = 'cairn-session-named0001';
+const NAMED_SESSION_NAME = 'ship Phase 8 §8 Rule C';
+const namedScratchKey = `session_name/${NAMED_AGENT_ID}`;
+const namedScratchValue = JSON.stringify({ name: NAMED_SESSION_NAME, set_at: Date.now(), set_by: 'agent' });
+
+function makeFakeDb(keyToReturn, valueJson) {
+  return {
+    prepare(sql) {
+      return {
+        get(key) {
+          if (key === keyToReturn) return { value_json: valueJson };
+          return undefined;
+        }
+      };
+    }
+  };
+}
+
+const fakeDb = makeFakeDb(namedScratchKey, namedScratchValue);
+
+// Construct a minimal MCP row for the named agent.
+const namedMcpRow = {
+  agent_id: NAMED_AGENT_ID,
+  agent_type: 'mcp-server',
+  status: 'ACTIVE',
+  computed_state: 'ACTIVE',
+  last_heartbeat: Date.now() - 1000,
+  heartbeat_ttl: 60000,
+  registered_at: Date.now() - 5000,
+  capabilities: [`cwd:/fake/project`, `git_root:/fake/project`, `pid:9999`, `session:named0001`],
+  owns_tasks: null,
+};
+
+const namedActivity = activity.activityFromMcpRow(namedMcpRow, null, { attribution: null, db: fakeDb });
+
+// display_name must be the human name, not the hex id.
+eq(namedActivity.display_name, NAMED_SESSION_NAME,
+   'session-name: display_name uses scratchpad name when set');
+ok(namedActivity.display_name.indexOf('named0001') === -1,
+   'session-name: display_name has no hex agent_id fragment');
+
+// Fallback: no db passed → hex truncation as before.
+const fallbackActivity = activity.activityFromMcpRow(namedMcpRow, null, { attribution: null });
+ok(fallbackActivity.display_name !== NAMED_SESSION_NAME,
+   'session-name fallback: display_name is NOT human name when no db passed');
+// NAMED_AGENT_ID = 'cairn-session-named0001' (23 chars) → truncated to 18: 'cairn-session-name'
+ok(fallbackActivity.display_name.startsWith('cairn-session-name'),
+   'session-name fallback: display_name is hex-based (backward compat)');
+
+// Also verify: when db has no matching key, fallback applies.
+const emptyDb = makeFakeDb('__no_match__', null);
+const noKeyActivity = activity.activityFromMcpRow(namedMcpRow, null, { attribution: null, db: emptyDb });
+ok(noKeyActivity.display_name !== NAMED_SESSION_NAME,
+   'session-name: display_name falls back when key absent in db');
+
+// deriveDisplayName exported function.
+ok(typeof activity.deriveDisplayName === 'function',
+   'deriveDisplayName is exported');
+eq(activity.deriveDisplayName(fakeDb, NAMED_AGENT_ID), NAMED_SESSION_NAME,
+   'deriveDisplayName returns name from scratchpad');
+eq(activity.deriveDisplayName(null, NAMED_AGENT_ID), null,
+   'deriveDisplayName returns null when db is null');
+eq(activity.deriveDisplayName(fakeDb, 'unknown-agent'), null,
+   'deriveDisplayName returns null when key absent');
+
+// SESSION_NAME_KEY_PREFIX exported.
+ok(typeof activity.SESSION_NAME_KEY_PREFIX === 'string' &&
+   activity.SESSION_NAME_KEY_PREFIX === 'session_name/',
+   'SESSION_NAME_KEY_PREFIX exported and correct');
+
+// ---------------------------------------------------------------------------
 // Part E — read-only invariants
 // ---------------------------------------------------------------------------
 

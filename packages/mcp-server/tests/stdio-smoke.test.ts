@@ -82,7 +82,7 @@ class MCPClient {
 }
 
 describe('stdio smoke test — production binary speaks MCP', () => {
-  it('initializes, lists 28 tools, write+read+delete roundtrip', async () => {
+  it('initializes, lists 29 tools, write+read+delete roundtrip', async () => {
     const cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-smoke-'));
     const client = new MCPClient({ CAIRN_HOME: cairnRoot });
     try {
@@ -121,6 +121,7 @@ describe('stdio smoke test — production binary speaks MCP', () => {
         'cairn.scratchpad.list',
         'cairn.scratchpad.read',
         'cairn.scratchpad.write',
+        'cairn.session.name',
         'cairn.task.answer',
         'cairn.task.block',
         'cairn.task.cancel',

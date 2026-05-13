@@ -16,6 +16,7 @@ import { toolInspectorQuery } from './tools/inspector.js';
 import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
 import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask, toolBlockTask, toolAnswerBlocker, toolResumePacket, toolSubmitForReview } from './tools/task.js';
 import { toolEvaluateOutcome, toolTerminalFailOutcome } from './tools/outcomes.js';
+import { toolSetSessionName } from './tools/session-name.js';
 
 const ws = openWorkspace();
 
@@ -428,6 +429,25 @@ const TOOLS = [
       required: ['task_id'],
     },
   },
+  {
+    name: 'cairn.session.name',
+    description: '为当前 agent session 自报一个人话名（写入 scratchpad session_name/<agent_id>）。panel 将用该名代替 hex 截断 id。建议在 session 启动后第一件事调用，传入 ≤ 50 字的标题描述本次 session 要干什么（例如 "ship Phase 8 §8 Rule C"）。agent_id 省略时自动取 CAIRN_SESSION_AGENT_ID。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: '人话 session 名（≤ 50 字，描述这个 session 准备干什么）',
+          minLength: 1,
+        },
+        agent_id: {
+          type: 'string',
+          description: '要命名的 agent_id。省略时自动取 CAIRN_SESSION_AGENT_ID（即当前 mcp-server session）。',
+        },
+      },
+      required: ['name'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -466,6 +486,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'cairn.task.block':          result = toolBlockTask(ws, a); break;
     case 'cairn.task.answer':         result = toolAnswerBlocker(ws, a); break;
     case 'cairn.task.resume_packet':  result = toolResumePacket(ws, a); break;
+    case 'cairn.session.name':        result = toolSetSessionName(ws, a); break;
     default: throw new Error(`unknown tool: ${name}`);
   }
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
