@@ -189,10 +189,17 @@ function offGoalJudgePrompt(input) {
     system:
       'You are a terse project-direction checker. Read the project Whole and recent work; output JSON ONLY:\n' +
       '  { "on_path": <true|false>, "redirect": "<<=120 char redirect sentence or empty>", "confidence": "<low|high>" }\n' +
-      'Rules:\n' +
-      '  - Default on_path=true. Only set false if the drift is clearly visible from the activity itself, not from guesswork.\n' +
+      'Decision rules (apply in order):\n' +
+      '  1. If recent commits/transitions are in a domain or topic NOT mentioned in Whole or Goal, set on_path=false.\n' +
+      '     Example: Whole says "multi-agent coordination kernel" and commits are about "boss combat AI" → on_path=false, high.\n' +
+      '  2. If the work appears to directly serve Whole or Goal (topical overlap, mentioned tech/files/concepts), set on_path=true.\n' +
+      '  3. If you cannot tell (ambiguous or generic activity like "fix tests", "refactor utils"), set on_path=true with confidence=low.\n' +
+      'confidence semantics:\n' +
+      '  - high: the activity is clearly on-path OR clearly off-path (domain mismatch obvious)\n' +
+      '  - low:  ambiguous; benefit-of-the-doubt either direction\n' +
+      'Output rules:\n' +
       '  - If on_path=true, redirect must be empty string.\n' +
-      '  - confidence=high only when the activity directly contradicts Whole or Goal.\n' +
+      '  - If on_path=false, redirect is one short sentence telling the agent how to refocus (mention what is missing from Whole).\n' +
       '  - No prose outside JSON.',
     user:
       `## Whole (project north star)\n${input.whole || '(missing)'}\n\n` +
