@@ -4020,9 +4020,28 @@ function renderCockpit(state) {
     }
   }
 
-  // Module 2: steer (just set placeholder text; Phase 3 wires Send)
+  // Module 3 Steer (A4 reorder, was M2) — populate target session dropdown
+  // from state.sessions so user picks who to send to. Default = first
+  // 'working' or 'blocked' session if any.
   const steerInput = document.getElementById('cockpit-steer-input');
   const steerSend = document.getElementById('cockpit-steer-send');
+  const steerTarget = document.getElementById('cockpit-steer-target');
+  if (steerTarget) {
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    if (sessions.length === 0) {
+      steerTarget.innerHTML = '<option value="">(no agents)</option>';
+    } else {
+      const previousValue = steerTarget.value;
+      steerTarget.innerHTML = sessions.map(s => {
+        const label = `${s.display_name || s.agent_id} [${s.state}]`;
+        return `<option value="${escapeHtml(s.agent_id || '')}" title="${escapeHtml(s.agent_id || '')}">${escapeHtml(label)}</option>`;
+      }).join('');
+      // Restore selection if user already picked one and it's still present.
+      if (previousValue && sessions.some(s => s.agent_id === previousValue)) {
+        steerTarget.value = previousValue;
+      }
+    }
+  }
   if (steerInput && steerSend) {
     const haveAgent = state.agents && state.agents.length > 0;
     steerInput.disabled = !haveAgent;
@@ -4306,15 +4325,19 @@ function setupCockpit() {
         if (steerStatus) { steerStatus.textContent = '没有选中项目'; steerStatus.className = 'cockpit-steer-status error'; }
         return;
       }
-      // Target agent: most recent ACTIVE row in current cockpit state.
-      // We re-fetch state here to avoid using a stale snapshot.
-      const state = await window.cairn.getCockpitState(selectedProject.id, {});
-      const active = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
-      if (active.length === 0) {
-        if (steerStatus) { steerStatus.textContent = '没有活跃 agent 可发话'; steerStatus.className = 'cockpit-steer-status error'; }
-        return;
+      // A4: use the dropdown-selected target if user picked one; else
+      // fall back to most recent ACTIVE agent.
+      const targetSel = document.getElementById('cockpit-steer-target');
+      let target = targetSel && targetSel.value ? targetSel.value : null;
+      if (!target) {
+        const state = await window.cairn.getCockpitState(selectedProject.id, {});
+        const active = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
+        if (active.length === 0) {
+          if (steerStatus) { steerStatus.textContent = '没有活跃 agent 可发话'; steerStatus.className = 'cockpit-steer-status error'; }
+          return;
+        }
+        target = active[0].agent_id;
       }
-      const target = active[0].agent_id;
       steerSend.disabled = true;
       if (steerStatus) { steerStatus.textContent = `发给 ${target}…`; steerStatus.className = 'cockpit-steer-status info'; }
       try {

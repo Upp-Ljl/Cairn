@@ -1299,6 +1299,16 @@
     color: #aaa;
     margin-bottom: 6px;
   }
+  .cockpit-steer-target {
+    background: #1a1a1a;
+    color: #ccc;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.85em;
+    font-family: inherit;
+    max-width: 140px;
+  }
   .cockpit-steer-row {
     display: flex;
     gap: 6px;
@@ -3067,21 +3077,25 @@
       <div class="cockpit-mentor-nudge" id="cockpit-mentor-nudge">—</div>
     </div>
 
-    <!-- Module 2: STEER (radio to agent) -->
-    <div class="cockpit-steer" id="cockpit-steer">
-      <label class="cockpit-steer-label">给 agent 说一句:</label>
-      <div class="cockpit-steer-row">
-        <input id="cockpit-steer-input" type="text" placeholder="一句话引导 agent…" />
-        <button id="cockpit-steer-send" type="button">Send</button>
+    <!-- M2 MENTOR (A4 reorder 2026-05-14) — first-class primary module, was at
+         bottom. Status header (always visible) + escalations + Ack.
+         CEO grill约定 3+7+11: Mentor 上移到 M2 位置. -->
+    <div class="cockpit-mentor-module" id="cockpit-mentor-module">
+      <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
+      <div class="cockpit-mentor-status" id="cockpit-mentor-status">
+        <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
+        <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
+        <span class="cockpit-mentor-today" id="cockpit-mentor-today"></span>
       </div>
-      <div class="cockpit-steer-status" id="cockpit-steer-status"></div>
+      <div class="cockpit-needs-list" id="cockpit-needs-list">
+        <div class="cockpit-needs-empty">No escalations — Mentor handling.</div>
+      </div>
     </div>
 
-    <!-- M2 Todolist (A2.1) — agent self-suggestions + Mentor recommendations + user adds.
-         Positioned between Steer (M2) and Sessions (M3). Per CEO brief: each row
-         shows source pill + label + action button.
-         [派给 ▾] for agent_proposal, [Approve →] for mentor_todo / user_todo.
-         Button click is stub (A2.2 wires dispatch_requests). -->
+    <!-- M2 Todolist (A2.1) — sits directly below Mentor status. Agent self-
+         proposals + Mentor recommendations + user adds. Each row has a source
+         pill + label + [派给 ▾] (agent_proposal) or [Approve →] (mentor_todo /
+         user_todo) button → writes dispatch_requests via A2.2 IPC. -->
     <div class="cockpit-todolist" id="cockpit-todolist">
       <div class="cockpit-todolist-title">📋 Todolist</div>
       <div id="cockpit-todolist-list">
@@ -3092,6 +3106,17 @@
         <button id="cockpit-todo-add-send" type="button">＋ Add</button>
       </div>
       <div class="cockpit-todo-add-status" id="cockpit-todo-add-status"></div>
+    </div>
+
+    <!-- M3 STEER (A4 reorder — was M2). Single-line radio to a session. -->
+    <div class="cockpit-steer" id="cockpit-steer">
+      <label class="cockpit-steer-label">给 agent 说一句:</label>
+      <div class="cockpit-steer-row">
+        <select id="cockpit-steer-target" class="cockpit-steer-target" title="目标 session"></select>
+        <input id="cockpit-steer-input" type="text" placeholder="一句话引导 agent…" />
+        <button id="cockpit-steer-send" type="button">Send</button>
+      </div>
+      <div class="cockpit-steer-status" id="cockpit-steer-status"></div>
     </div>
 
     <!-- Module 4: SESSIONS (panel-cockpit-redesign 2026-05-14 — A3-part2).
@@ -3134,11 +3159,11 @@
       </p>
       <h3>5 个模块</h3>
       <p>
-        <strong>① State Strip</strong>：项目跑得怎样、Mentor 上次说啥<br>
-        <strong>② Steer</strong>：不切 session 直接给 agent 发话<br>
-        <strong>③ Sessions</strong>：本项目下每个 agent session 的工作脉络 (working / blocked / idle / stale)<br>
-        <strong>④ Safety</strong>：一键回退到某个 checkpoint<br>
-        <strong>⑤ Mentor</strong>：状态 + 在管什么 + 搞不定时 Ack 升级
+        <strong>① State Strip</strong>：项目跑得怎样、Whole 是啥、最近 24h 战况<br>
+        <strong>② Mentor</strong>：状态 + Todolist（agent 自荐 + 鸭总加 + 派给 session）<br>
+        <strong>③ Steer</strong>：选个 session 直接喊一句<br>
+        <strong>④ Sessions</strong>：每个 agent session 的工作脉络 (点进去看 timeline)<br>
+        <strong>⑤ Safety</strong>：一键回退到某个 checkpoint
       </p>
       <h3>键盘快捷键</h3>
       <p>
@@ -3154,22 +3179,6 @@
       </p>
     </div>
 
-    <!-- Module 5: MENTOR (panel-cockpit-redesign A2.0, 2026-05-14).
-         Was "Needs you". Per CEO grill 17 product constraints §7+§11,
-         Mentor is a first-class primary module — always visible, shows
-         status header + escalations + Ack. A4 phase moves this to M2
-         position and folds Todolist into the same module. -->
-    <div class="cockpit-mentor-module" id="cockpit-mentor-module">
-      <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
-      <div class="cockpit-mentor-status" id="cockpit-mentor-status">
-        <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
-        <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
-        <span class="cockpit-mentor-today" id="cockpit-mentor-today"></span>
-      </div>
-      <div class="cockpit-needs-list" id="cockpit-needs-list">
-        <div class="cockpit-needs-empty">No escalations — Mentor handling.</div>
-      </div>
-    </div>
   </div>
 
   <!-- L2 Session Timeline drill-down (panel-cockpit-redesign A1.2, 2026-05-14).
