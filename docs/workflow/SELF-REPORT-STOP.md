@@ -38,6 +38,7 @@ For each field, the assistant asks: "Was this true of my last turn?" If yes, the
 | 10 | `single_engine_attest` | Validated only with one AI engine when `FEATURE-VALIDATION.md` requires cross-validation |
 | 11 | `untracked_state_change` | Modified files outside what was reported (`git status` shows changes the message didn't acknowledge) |
 | 12 | `tool_use_without_intent_statement` | Called multiple tools without first stating what / why in user-visible text |
+| 13 | `mid_work_status_report` | Surfaced a progress update / status table / "what's done so far" message in the middle of a multi-step run the user explicitly authorized to run to completion. Stopping after task N of N+M to say "now starting task N+1" is the same failure mode as asking permission, dressed as "just informing." Per `[[autonomous-ship-authorization]]` + `[[no-unsolicited-status-reports]]`, during an authorized run stop and surface only when: (a) every committed deliverable for the authorized scope is on `origin/main` (or the user-named endpoint); (b) a hard blocker prevents progress and cannot be self-resolved; (c) the user typed something. "Natural task boundary" / "good checkpoint moment" / "context-window hygiene" are NOT stop conditions. Tool-result narration is fine — the failure mode is the user-facing summary message that requires nothing from the user. |
 
 ---
 
