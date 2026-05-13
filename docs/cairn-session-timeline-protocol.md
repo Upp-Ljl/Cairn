@@ -258,7 +258,38 @@ function newUlid() {
 
 ---
 
-## 8. Reserved keys
+## 9. Kernel-written events (automatic)
+
+Cairn itself writes `kind='start'/'progress'/'done'/'blocked'/'unblocked'` events when an
+agent transitions a task state via `cairn.task.*` tools. These events have `source: 'kernel'`
+(vs agent-self-reported `source: 'agent'`).
+
+| Tool | Event written | kind | label |
+|---|---|---|---|
+| `cairn.task.create` | on success | `start` | task intent (≤120 chars) |
+| `cairn.task.start_attempt` | on success | `progress` | `"started attempt"` |
+| `cairn.task.cancel` | on success | `done` | `"<intent> (cancelled)"` |
+| `cairn.task.block` | on success | `blocked` | blocker question (≤120 chars) |
+| `cairn.task.block` (auto-resolve) | on auto-resolve | `blocked` + `unblocked` | question + answer |
+| `cairn.task.answer` | on success | `unblocked` | answer text (≤120 chars) |
+| `cairn.task.submit_for_review` | on success | `progress` | `"submitted for review"` |
+| `cairn.outcomes.evaluate` (PASS) | on PASS | `done` | `"outcomes PASS — <summary>"` |
+| `cairn.outcomes.terminal_fail` | on success | `done` | `"TERMINAL_FAIL — <reason>"` |
+
+Agents that adopt the cairn-aware skill v3+ write ADDITIONAL events with `source: 'agent'`
+for finer granularity (sub-steps, checkpoints, sub-task spawns). The two streams interleave
+in the renderer — `source` field distinguishes them.
+
+The key for kernel events uses the same `session_timeline/<agentId>/<ulid>` namespace as
+agent-written events. The `agentId` is taken from the task's `created_by_agent_id` field
+(falling back to `ws.agentId`). All kernel events carry `task_id` when a task is in scope.
+
+Kernel-event writes are **non-fatal**: if the scratchpad write fails for any reason, the
+original tool call still succeeds and the error is logged to stderr only.
+
+---
+
+## 10. Reserved keys
 
 Do not write timeline events to any key outside the `session_timeline/<agent_id>/` prefix.
 Other reserved namespaces (do not write):

@@ -123,6 +123,19 @@ export function toolCreateTask(ws: Workspace, args: CreateTaskArgs) {
   }
   const task = createTask(ws.db, createInput);
 
+  // Kernel auto-instrument: write 'start' timeline event on task creation
+  const tlResult = appendKernelTimelineEvent(
+    ws.db,
+    task.created_by_agent_id ?? effectiveAgentId,
+    'start',
+    task.intent.slice(0, 120),
+    { task_id: task.task_id },
+  );
+  if (!tlResult.ok) {
+    // Non-fatal — log and proceed
+    process.stderr.write(`[cairn] kernel timeline append failed (task.create): ${tlResult.error}\n`);
+  }
+
   return { task };
 }
 
@@ -179,6 +192,16 @@ export function toolStartAttempt(ws: Workspace, args: StartAttemptArgs) {
 
   try {
     const task = updateTaskState(ws.db, args.task_id, 'RUNNING');
+
+    // Kernel auto-instrument: write 'progress' event on start_attempt
+    const agentId = task.created_by_agent_id ?? ws.agentId;
+    const tlResult = appendKernelTimelineEvent(ws.db, agentId, 'progress', 'started attempt', {
+      task_id: task.task_id,
+    });
+    if (!tlResult.ok) {
+      process.stderr.write(`[cairn] kernel timeline append failed (task.start_attempt): ${tlResult.error}\n`);
+    }
+
     return { task };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -210,6 +233,17 @@ export function toolCancelTask(ws: Workspace, args: CancelTaskArgs) {
     // CRITICAL: call cancelTask (repo verb), NOT updateTaskState.
     // cancelTask atomically writes state=CANCELLED + metadata.cancel_reason + metadata.cancelled_at.
     const task = cancelTask(ws.db, args.task_id, args.reason);
+
+    // Kernel auto-instrument: write 'done' event on cancel
+    const agentId = task.created_by_agent_id ?? ws.agentId;
+    const cancelLabel = `${task.intent.slice(0, 100)} (cancelled)`;
+    const tlResult = appendKernelTimelineEvent(ws.db, agentId, 'done', cancelLabel, {
+      task_id: task.task_id,
+    });
+    if (!tlResult.ok) {
+      process.stderr.write(`[cairn] kernel timeline append failed (task.cancel): ${tlResult.error}\n`);
+    }
+
     return { task };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -455,6 +489,23 @@ export function toolBlockTask(
         return { blocker: answerResult.blocker, task: answerResult.task };
       })();
 
+      // Kernel auto-instrument: 'blocked' + 'unblocked' for auto-resolve path
+      const tlBlocked = appendKernelTimelineEvent(ws.db, raised_by, 'blocked', args.question.slice(0, 120), {
+        task_id: args.task_id,
+      });
+      if (!tlBlocked.ok) {
+        process.stderr.write(`[cairn] kernel timeline append failed (task.block/auto blocked): ${tlBlocked.error}\n`);
+      }
+      // Auto-resolved immediately — also write 'unblocked'
+      const blockedUlid = tlBlocked.ok ? tlBlocked.key.split('/').pop() : undefined;
+      const tlUnblocked = appendKernelTimelineEvent(ws.db, raised_by, 'unblocked', autoMatch.answer.slice(0, 120), {
+        task_id: args.task_id,
+        ...(blockedUlid !== undefined ? { parent_event_id: blockedUlid } : {}),
+      });
+      if (!tlUnblocked.ok) {
+        process.stderr.write(`[cairn] kernel timeline append failed (task.block/auto unblocked): ${tlUnblocked.error}\n`);
+      }
+
       return {
         blocker: result.blocker,
         task: result.task,
@@ -494,6 +545,14 @@ export function toolBlockTask(
         return blockResult;
       })();
 
+      // Kernel auto-instrument: 'blocked' event for escalate path
+      const tlResult = appendKernelTimelineEvent(ws.db, raised_by, 'blocked', args.question.slice(0, 120), {
+        task_id: args.task_id,
+      });
+      if (!tlResult.ok) {
+        process.stderr.write(`[cairn] kernel timeline append failed (task.block/escalate): ${tlResult.error}\n`);
+      }
+
       return {
         ...result,
         auto_resolved: false,
@@ -508,6 +567,15 @@ export function toolBlockTask(
 
     // No match — fall through to the existing passive-block behaviour.
     const result = recordBlocker(ws.db, recordInput);
+
+    // Kernel auto-instrument: 'blocked' event
+    const tlResult = appendKernelTimelineEvent(ws.db, raised_by, 'blocked', args.question.slice(0, 120), {
+      task_id: args.task_id,
+    });
+    if (!tlResult.ok) {
+      process.stderr.write(`[cairn] kernel timeline append failed (task.block): ${tlResult.error}\n`);
+    }
+
     return { ...result, auto_resolved: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -552,6 +620,15 @@ export function toolAnswerBlocker(
       answer: args.answer,
       answered_by,
     });
+
+    // Kernel auto-instrument: 'unblocked' event
+    const tlResult = appendKernelTimelineEvent(ws.db, answered_by, 'unblocked', args.answer.slice(0, 120), {
+      task_id: result.task.task_id,
+    });
+    if (!tlResult.ok) {
+      process.stderr.write(`[cairn] kernel timeline append failed (task.answer): ${tlResult.error}\n`);
+    }
+
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -605,6 +682,7 @@ import {
 import type { OutcomeRow } from '../../../daemon/dist/storage/repositories/outcomes.js';
 import { parseCriteriaJSON } from '../dsl/parser.js';
 import type { OutcomePrimitive } from '../dsl/types.js';
+import { appendKernelTimelineEvent } from '../util/session-timeline.js';
 
 export interface SubmitForReviewArgs {
   task_id: string;
@@ -643,7 +721,18 @@ export function toolSubmitForReview(
     if (parsedCriteria !== undefined) {
       submitInput.criteria = parsedCriteria;
     }
-    return submitOutcomesForReview(ws.db, submitInput);
+    const submitResult = submitOutcomesForReview(ws.db, submitInput);
+
+    // Kernel auto-instrument: 'progress' event for submit_for_review
+    const agentId = ws.agentId;
+    const tlResult = appendKernelTimelineEvent(ws.db, agentId, 'progress', 'submitted for review', {
+      task_id: args.task_id,
+    });
+    if (!tlResult.ok) {
+      process.stderr.write(`[cairn] kernel timeline append failed (task.submit_for_review): ${tlResult.error}\n`);
+    }
+
+    return submitResult;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/TASK_NOT_FOUND/.test(msg)) {
