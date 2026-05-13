@@ -73,6 +73,13 @@ const DEFAULTS = Object.freeze({
   // by default — populated by the project via cairn.mentor.knownAnswer
   // (not exposed in Phase 5; placeholder).
   knownAnswers: {},
+  // Rule C: consecutive off-path strikes before emitting a nudge.
+  // Conservative default — single one-off LLM "off" verdict shouldn't
+  // bother the user; we wait for a pattern.
+  offGoalStrikeCap: 2,
+  // Rule C: throttle window per task — burn at most one helper call
+  // per task per this interval. Default 5 minutes.
+  offGoalThrottleMs: 5 * 60 * 1000,
 });
 
 // ---------------------------------------------------------------------------
@@ -83,7 +90,7 @@ function readMentorState(db, taskId) {
   const row = db.prepare(`
     SELECT value_json FROM scratchpad WHERE key = ?
   `).get(`mentor_state/${taskId}`);
-  if (!row) return { nudge_count: 0, escalation_count: 0, last_nudge_at: 0, last_check_at: 0 };
+  if (!row) return { nudge_count: 0, escalation_count: 0, last_nudge_at: 0, last_check_at: 0, offgoal_strikes: 0, last_offgoal_check_at: 0 };
   try {
     const j = JSON.parse(row.value_json);
     return {
@@ -91,9 +98,11 @@ function readMentorState(db, taskId) {
       escalation_count: Number(j.escalation_count) || 0,
       last_nudge_at: Number(j.last_nudge_at) || 0,
       last_check_at: Number(j.last_check_at) || 0,
+      offgoal_strikes: Number(j.offgoal_strikes) || 0,
+      last_offgoal_check_at: Number(j.last_offgoal_check_at) || 0,
     };
   } catch (_e) {
-    return { nudge_count: 0, escalation_count: 0, last_nudge_at: 0, last_check_at: 0 };
+    return { nudge_count: 0, escalation_count: 0, last_nudge_at: 0, last_check_at: 0, offgoal_strikes: 0, last_offgoal_check_at: 0 };
   }
 }
 
@@ -429,6 +438,108 @@ function evaluateRuleE_timeBudget(ctx) {
 }
 
 /**
+ * Rule C — off-goal drift (LLM-judged, conservative).
+ *
+ * Trigger: project has a `## Whole` (north star) sentence AND
+ * ctx.recentActivity has at least one transition or commit AND
+ * ctx.llmJudgeOffGoal helper is injected. Calls the helper; on
+ * `on_path=false` increments `offgoal_strikes`. Once strikes reach
+ * `offGoalStrikeCap` (default 2 consecutive) emits a nudge with the
+ * redirect text. Resets on the next `on_path=true`.
+ *
+ * Async: this evaluator is the only one in the policy that awaits an
+ * external call. evaluatePolicy stays synchronous and skips Rule C;
+ * mentor-tick.runOnce calls evaluateRuleC_offGoal directly (await) when
+ * a profile + activity + helper triple is available.
+ *
+ * v1 behaviour: nudge only. No escalation — drift is a soft warning, not
+ * a hard stop. If the user wants stronger handling later, add an
+ * `escalateAfterNStrikes` knob.
+ */
+async function evaluateRuleC_offGoal(ctx) {
+  const { db, project, task, profile, recentActivity, emit, config, llmJudgeOffGoal, nowFn } = ctx;
+  if (!task || task.state !== 'RUNNING') return null;
+  if (!profile || !profile.exists || !profile.whole_sentence) return null;
+  if (!recentActivity) return null;
+  const hasActivity =
+    (recentActivity.transitions && recentActivity.transitions.length > 0) ||
+    (recentActivity.commits && recentActivity.commits.length > 0);
+  if (!hasActivity) return null;
+  if (typeof llmJudgeOffGoal !== 'function') return null;
+
+  const now = (typeof nowFn === 'function' ? nowFn : Date.now)();
+  const state = readMentorState(db, task.task_id);
+
+  // Throttle: don't refire on this task within offGoalThrottleMs after the
+  // last check (caller invokes per tick; we burn an LLM call only every
+  // so often per task).
+  if (state.last_offgoal_check_at && now - state.last_offgoal_check_at < config.offGoalThrottleMs) {
+    return null;
+  }
+
+  let r;
+  try {
+    r = await llmJudgeOffGoal({
+      enabled: true,
+      whole: profile.whole_sentence,
+      goal: profile.goal && profile.goal.text ? profile.goal.text : null,
+      recent_activity: recentActivity,
+    });
+  } catch (e) {
+    // Helper threw — record the check timestamp so we throttle retries.
+    writeMentorState(db, task.task_id, { ...state, last_offgoal_check_at: now });
+    return { rule: 'C', action: 'helper_threw', error: (e && e.message) || String(e) };
+  }
+
+  if (!r || !r.ok) {
+    writeMentorState(db, task.task_id, { ...state, last_offgoal_check_at: now });
+    return { rule: 'C', action: 'helper_skipped', reason: r && r.reason || 'no_result' };
+  }
+
+  if (r.on_path) {
+    // Reset strikes on first on_path result.
+    if (state.offgoal_strikes > 0) {
+      writeMentorState(db, task.task_id, {
+        ...state, offgoal_strikes: 0, last_offgoal_check_at: now,
+      });
+    } else {
+      writeMentorState(db, task.task_id, { ...state, last_offgoal_check_at: now });
+    }
+    return { rule: 'C', action: 'on_path', confidence: r.confidence };
+  }
+
+  // Off-path: increment strike counter.
+  const newStrikes = state.offgoal_strikes + 1;
+  if (newStrikes < config.offGoalStrikeCap) {
+    writeMentorState(db, task.task_id, {
+      ...state, offgoal_strikes: newStrikes, last_offgoal_check_at: now,
+    });
+    return { rule: 'C', action: 'strike', strikes: newStrikes, confidence: r.confidence };
+  }
+
+  // At cap → emit nudge once; reset strikes after emission so the next
+  // consecutive run starts fresh.
+  const body = (r.redirect && r.redirect.trim())
+    ? `${task.task_id}: off-goal drift detected — ${r.redirect.trim()}`
+    : `${task.task_id}: off-goal drift detected vs project Whole`;
+  const nudgeKey = emit.nudge({
+    message: body,
+    to_agent_id: task.created_by_agent_id || null,
+    task_id: task.task_id,
+    rule: 'C',
+    layer: 'L3',
+    source: 'profile.whole_drift',
+    confidence: r.confidence,
+    redirect: r.redirect || '',
+  });
+  writeMentorState(db, task.task_id, {
+    ...state, offgoal_strikes: 0, nudge_count: state.nudge_count + 1,
+    last_nudge_at: now, last_offgoal_check_at: now,
+  });
+  return { rule: 'C', action: 'nudge', confidence: r.confidence, redirect: r.redirect || '', nudge_key: nudgeKey };
+}
+
+/**
  * Rule F — abort keywords.
  *
  * Trigger: any agent-emitted text in recent events contains an abort
@@ -674,7 +785,10 @@ function evaluatePolicy(ctx) {
   }
   // Phase 6 stubs:
   decisions.push({ rule: 'A', action: 'no_action_phase_5', note: 'ambiguous-decision rule defers to LLM helper (Phase 6)' });
-  decisions.push({ rule: 'C', action: 'no_action_phase_5', note: 'off-goal-drift rule defers to LLM helper (Phase 6)' });
+  // Rule C is async; evaluatePolicy stays sync — mentor-tick calls
+  // evaluateRuleC_offGoal directly when the helper is wired. We still
+  // emit a marker decision so callers can see the gap is intentional.
+  decisions.push({ rule: 'C', action: 'deferred_to_async_caller', note: 'off-goal-drift rule is async; see mentor-tick.runOnce' });
   return { decisions };
 }
 
@@ -707,6 +821,7 @@ module.exports = {
   newUlid,
   // sub-evaluators (exported for tests)
   evaluateRuleB_errorRepetition,
+  evaluateRuleC_offGoal,
   evaluateRuleD_blocked,
   evaluateRuleE_timeBudget,
   evaluateRuleF_abortKeywords,

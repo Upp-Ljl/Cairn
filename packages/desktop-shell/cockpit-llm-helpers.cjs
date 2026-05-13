@@ -163,6 +163,77 @@ async function sortInbox(input, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// Helper 5 — off-goal drift judge (low-cost, gates Rule C in mentor-policy)
+//
+// Given the project's `## Whole` (and optional `## Goal`) + a digest of
+// recent agent activity (task transitions + commits), ask a cheap model
+// "is the work on-path?". Strict JSON output so the caller can route
+// the result deterministically.
+//
+// Conservative by design: prompt instructs the model to default to
+// on_path=true unless the drift is clearly visible. The threshold for
+// emitting a user-facing nudge (consecutive off-path strikes) lives in
+// mentor-policy.evaluateRuleC, not here.
+// ---------------------------------------------------------------------------
+
+function offGoalJudgePrompt(input) {
+  const transitionLines = (input.recent_activity && input.recent_activity.transitions || [])
+    .slice(0, 6)
+    .map(t => `  - task=${t.task_id} state=${t.state} intent=${(t.intent || '').slice(0, 80)}`)
+    .join('\n') || '  (none)';
+  const commitLines = (input.recent_activity && input.recent_activity.commits || [])
+    .slice(0, 4)
+    .map(c => `  - ${(c.subject || '').slice(0, 100)}`)
+    .join('\n') || '  (none)';
+  return {
+    system:
+      'You are a terse project-direction checker. Read the project Whole and recent work; output JSON ONLY:\n' +
+      '  { "on_path": <true|false>, "redirect": "<<=120 char redirect sentence or empty>", "confidence": "<low|high>" }\n' +
+      'Rules:\n' +
+      '  - Default on_path=true. Only set false if the drift is clearly visible from the activity itself, not from guesswork.\n' +
+      '  - If on_path=true, redirect must be empty string.\n' +
+      '  - confidence=high only when the activity directly contradicts Whole or Goal.\n' +
+      '  - No prose outside JSON.',
+    user:
+      `## Whole (project north star)\n${input.whole || '(missing)'}\n\n` +
+      (input.goal ? `## Goal (current milestone)\n${input.goal}\n\n` : '') +
+      `## Recent task transitions\n${transitionLines}\n\n` +
+      `## Recent commits\n${commitLines}\n`,
+  };
+}
+
+async function judgeOffGoal(input, opts) {
+  if (!input || !input.whole || !String(input.whole).trim()) {
+    return { ok: false, reason: 'no_input' };
+  }
+  if (input.enabled === false) return { ok: false, reason: 'disabled' };
+  const hasActivity =
+    (input.recent_activity && input.recent_activity.transitions && input.recent_activity.transitions.length > 0) ||
+    (input.recent_activity && input.recent_activity.commits && input.recent_activity.commits.length > 0);
+  if (!hasActivity) return { ok: false, reason: 'no_activity' };
+  const prompts = offGoalJudgePrompt(input);
+  const r = await runHelper(prompts, Object.assign({ maxTokens: 250, temperature: 0.1 }, opts));
+  if (!r.ok) return r;
+  try {
+    const first = r.content.indexOf('{');
+    const last = r.content.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      const parsed = JSON.parse(r.content.slice(first, last + 1));
+      if (typeof parsed.on_path === 'boolean') {
+        return {
+          ok: true,
+          on_path: parsed.on_path,
+          redirect: typeof parsed.redirect === 'string' ? parsed.redirect : '',
+          confidence: parsed.confidence === 'high' ? 'high' : 'low',
+          model: r.model,
+        };
+      }
+    }
+  } catch (_e) {}
+  return { ok: false, reason: 'parse_failed', raw: r.content };
+}
+
+// ---------------------------------------------------------------------------
 // Helper 4 — goal input assist (high-cost, default OFF)
 // ---------------------------------------------------------------------------
 
@@ -211,9 +282,11 @@ module.exports = {
   explainConflict,
   sortInbox,
   assistGoal,
+  judgeOffGoal,
   // exported for tests
   tailSummaryPrompt,
   conflictExplanationPrompt,
   inboxSortPrompt,
   goalAssistPrompt,
+  offGoalJudgePrompt,
 };

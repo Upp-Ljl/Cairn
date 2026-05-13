@@ -195,6 +195,113 @@ const r4 = tick.runOnce({ reg: regMixed, ensureDbHandle: stubEnsureThrowy, proje
 ok(r4.projects_scanned === 1, 'good project still scanned (bad ones return null entry)');
 
 // ---------------------------------------------------------------------------
+// 7 — Rule C wiring: when helper + profile + RUNNING task all present,
+//     tick fires Rule C async, accumulates strikes, and eventually nudges.
+// ---------------------------------------------------------------------------
+section('7 Rule C wiring (stub LLM, fixture profile)');
+{
+  // Build a Rule-C-specific tick state with a profile that has whole_sentence.
+  const dbC = new Database(':memory:');
+  dbC.exec(`
+    CREATE TABLE tasks (
+      task_id TEXT PRIMARY KEY, intent TEXT NOT NULL, state TEXT NOT NULL,
+      parent_task_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      created_by_agent_id TEXT, metadata_json TEXT
+    );
+    CREATE TABLE blockers (
+      blocker_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, question TEXT,
+      status TEXT NOT NULL, raised_at INTEGER NOT NULL, answered_at INTEGER, answer TEXT
+    );
+    CREATE TABLE outcomes (
+      outcome_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE,
+      criteria_json TEXT, status TEXT NOT NULL,
+      evaluated_at INTEGER, evaluation_summary TEXT, grader_agent_id TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, metadata_json TEXT
+    );
+    CREATE TABLE scratchpad (
+      key TEXT PRIMARY KEY, value_json TEXT, value_path TEXT, task_id TEXT,
+      expires_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+  `);
+  const tablesC = new Set(['tasks', 'blockers', 'outcomes', 'scratchpad']);
+  const AGENT_C = 'cairn-session-bbb22222';
+  const NOW_C = Date.now();
+  dbC.prepare(`INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES ('t_running', 'add caching to API', 'RUNNING', ?, ?, ?)`)
+    .run(NOW_C - 60000, NOW_C - 5000, AGENT_C);
+
+  // Stub profile: yes-whole, no authority match — so only Rule C should fire.
+  const stubProfile = {
+    exists: true,
+    whole_sentence: 'Cairn is a host-level multi-agent coordination kernel.',
+    goal: null,
+    authority: { auto_decide: [], decide_and_announce: [], escalate: [] },
+    known_answers: [],
+  };
+  const fakeMentorProfile = { loadProfile: () => stubProfile };
+  const fakeAgentBrief = { readAgentBriefs: () => [] };
+
+  // Stub LLM helper that always returns off-path so strikes accumulate.
+  const fakeHelpers = {
+    judgeOffGoal: async () => ({ ok: true, on_path: false, redirect: 'refocus on the kernel layer', confidence: 'high' }),
+  };
+
+  const regC = {
+    projects: [{
+      id: 'p_rulec_tick',
+      label: 'rule-c tick',
+      project_root: '/tmp/rulec',
+      db_path: '/tmp/rulec.db',
+      agent_id_hints: [AGENT_C],
+    }],
+  };
+  const stubEnsureC = (_p) => ({ db: dbC, tables: tablesC });
+  // Speed up: 0-ms throttle so two ticks in a row both fire helper.
+  const fastPolicyConfig = { offGoalThrottleMs: 0 };
+
+  // tick 1 → strike (no nudge)
+  const tc1 = tick.runOnce({
+    reg: regC, ensureDbHandle: stubEnsureC, projectQueries, mentorPolicy, registry,
+    mentorProfile: fakeMentorProfile, mentorAgentBrief: fakeAgentBrief,
+    llmHelpers: fakeHelpers, policyConfig: fastPolicyConfig,
+  });
+  ok(Array.isArray(tc1.rule_c_pending) && tc1.rule_c_pending.length === 1, '1 Rule C call queued on tick 1');
+  const d1 = await tc1.rule_c_pending[0];
+  ok(d1 && d1.action === 'strike' && d1.strikes === 1, `tick 1 → strike (got ${d1 && d1.action})`);
+  const nudgesAfter1 = dbC.prepare("SELECT COUNT(*) AS c FROM scratchpad WHERE key LIKE 'mentor/%/nudge/%'").get().c;
+  ok(nudgesAfter1 === 0, 'no nudge after tick 1 (under cap)');
+
+  // tick 2 → second strike → nudge
+  const tc2 = tick.runOnce({
+    reg: regC, ensureDbHandle: stubEnsureC, projectQueries, mentorPolicy, registry,
+    mentorProfile: fakeMentorProfile, mentorAgentBrief: fakeAgentBrief,
+    llmHelpers: fakeHelpers, policyConfig: fastPolicyConfig,
+  });
+  const d2 = await tc2.rule_c_pending[0];
+  ok(d2 && d2.action === 'nudge', `tick 2 → nudge (got ${d2 && d2.action})`);
+  const nudgesAfter2 = dbC.prepare("SELECT COUNT(*) AS c FROM scratchpad WHERE key LIKE 'mentor/p_rulec_tick/nudge/%'").get().c;
+  ok(nudgesAfter2 === 1, '1 nudge row written after tick 2');
+
+  // ruleCEnabled=false → no Rule C calls even with helper
+  const tc3 = tick.runOnce({
+    reg: regC, ensureDbHandle: stubEnsureC, projectQueries, mentorPolicy, registry,
+    mentorProfile: fakeMentorProfile, mentorAgentBrief: fakeAgentBrief,
+    llmHelpers: fakeHelpers, policyConfig: fastPolicyConfig, ruleCEnabled: false,
+  });
+  ok(tc3.rule_c_pending.length === 0, 'ruleCEnabled=false → no Rule C calls');
+
+  // gatherRecentActivity: pulls transitions from db when hints provided
+  const gatherOut = tick.gatherRecentActivity({
+    db: dbC, project: regC.projects[0], hints: [AGENT_C],
+    transitionCap: 5, commitCap: 3,
+    spawnSync: () => ({ status: 1, stdout: '' }),
+  });
+  ok(Array.isArray(gatherOut.transitions) && gatherOut.transitions.length === 1, 'gatherRecentActivity pulled 1 transition');
+  ok(Array.isArray(gatherOut.commits) && gatherOut.commits.length === 0, 'commits empty when spawn fails');
+
+  dbC.close();
+}
+
+// ---------------------------------------------------------------------------
 // 6 — start() is idempotent; stop() halts
 // ---------------------------------------------------------------------------
 section('6 start/stop lifecycle');

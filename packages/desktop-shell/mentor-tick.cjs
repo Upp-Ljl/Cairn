@@ -32,10 +32,68 @@ const TICK_INTERVAL_MS = 30 * 1000;
  *  by updated_at DESC — most-recent first; deeper backlog evaluated on
  *  subsequent ticks. */
 const TASKS_PER_PROJECT_CAP = 10;
+/** Cap on tasks per tick that get a Rule C (off-goal LLM judge) call.
+ *  Each call burns a cheap-model token budget; we don't want a 10-task
+ *  project to burn 10 LLM calls per tick. Sorted by updated_at DESC so
+ *  the most-recently-active task is judged first. */
+const RULE_C_CALLS_PER_TICK = 2;
+/** Recent task transitions feed for Rule C off-goal judge. */
+const RECENT_ACTIVITY_TRANSITION_CAP = 5;
+/** Recent commits feed for Rule C off-goal judge. */
+const RECENT_ACTIVITY_COMMIT_CAP = 3;
 
 let _timer = null;
 let _tickCount = 0;
 let _lastTickError = null;
+
+function safeRequire(spec) {
+  try { return require(spec); } catch (_e) { return null; }
+}
+
+/**
+ * Gather recent agent activity for a project — feeds Rule C off-goal judge.
+ *
+ * Reads:
+ *   - last N task transitions (updated_at DESC) across all hint agents
+ *   - last N commit subject lines from git log (project.path), via spawnSync
+ *
+ * Both are best-effort: missing tables or missing git binary degrade to
+ * empty arrays. Safe to call every tick.
+ *
+ * @returns {{ transitions: Array, commits: Array }}
+ */
+function gatherRecentActivity(input) {
+  const { db, project, hints, transitionCap = 5, commitCap = 3, spawnSync } = input;
+  const out = { transitions: [], commits: [] };
+  try {
+    if (db && Array.isArray(hints) && hints.length > 0) {
+      const placeholders = '(' + hints.map(() => '?').join(',') + ')';
+      out.transitions = db.prepare(`
+        SELECT task_id, intent, state, updated_at
+        FROM tasks
+        WHERE created_by_agent_id IN ${placeholders}
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `).all(...hints, transitionCap);
+    }
+  } catch (_e) { /* missing tasks table or bad hints — leave empty */ }
+  try {
+    const path = project && (project.path || project.root || project.project_root);
+    if (path) {
+      const spawn = spawnSync || require('node:child_process').spawnSync;
+      const res = spawn('git', ['-C', path, 'log', `-n${commitCap}`, '--pretty=format:%H\t%s\t%ct'], {
+        encoding: 'utf8', timeout: 5000,
+      });
+      if (res && res.status === 0 && res.stdout) {
+        out.commits = res.stdout.split('\n').filter(Boolean).map(line => {
+          const [hash, subject, ct] = line.split('\t');
+          return { hash, subject: subject || '', ts: Number(ct) * 1000 || 0 };
+        });
+      }
+    }
+  } catch (_e) { /* git not on PATH or non-repo — empty commits */ }
+  return out;
+}
 
 /**
  * Run one tick.
@@ -58,7 +116,14 @@ function runOnce(deps) {
   const now = (deps.nowFn || Date.now)();
   const mentorProfile = deps.mentorProfile || require('./mentor-project-profile.cjs');
   const mentorAgentBrief = deps.mentorAgentBrief || require('./mentor-agent-brief.cjs');
-  const out = { ticks_run: 1, decisions: 0, projects_scanned: 0, errors: [] };
+  // Rule C off-goal helper is optional — when omitted, the tick simply
+  // doesn't fire Rule C. Pass `deps.ruleCEnabled === false` to disable
+  // even when a helper is available (per-project gate).
+  const llmHelpers = deps.llmHelpers === undefined
+    ? safeRequire('./cockpit-llm-helpers.cjs')
+    : deps.llmHelpers;
+  const ruleCEnabled = deps.ruleCEnabled !== false && !!llmHelpers && typeof llmHelpers.judgeOffGoal === 'function';
+  const out = { ticks_run: 1, decisions: 0, projects_scanned: 0, errors: [], rule_c_pending: [] };
   if (!deps.reg || !Array.isArray(deps.reg.projects)) return out;
   for (const project of deps.reg.projects) {
     try {
@@ -130,13 +195,59 @@ function runOnce(deps) {
         });
 
         for (const decision of result.decisions) {
-          // 'no_action_phase_5' decisions for rules A/C are placeholders;
-          // skip them in metrics. Real-fire decisions land in scratchpad
-          // via emit.* inside evaluatePolicy.
+          // 'no_action_phase_5' decisions for rule A is a placeholder;
+          // 'deferred_to_async_caller' is rule C's async marker (we fire
+          // it below in a separate await chain). Skip both in metrics.
           if (decision.action === 'no_action_phase_5') continue;
+          if (decision.action === 'deferred_to_async_caller') continue;
           out.decisions++;
           if (typeof deps.onDecision === 'function') {
             try { deps.onDecision(project.id, decision); } catch (_e) {}
+          }
+        }
+      }
+
+      // ----- Rule C (off-goal drift) — async, fire-and-track per tick.
+      // Only fires when: helper available + profile.whole_sentence + this
+      // project has at least one RUNNING task. Budgeted to N calls per
+      // tick to keep token cost bounded.
+      if (ruleCEnabled && profile && profile.exists && profile.whole_sentence) {
+        const runningTasks = tasks.filter(t => t.state === 'RUNNING').slice(0, RULE_C_CALLS_PER_TICK);
+        if (runningTasks.length > 0) {
+          const recentActivity = gatherRecentActivity({
+            db: entry.db, project, hints,
+            transitionCap: RECENT_ACTIVITY_TRANSITION_CAP,
+            commitCap: RECENT_ACTIVITY_COMMIT_CAP,
+            spawnSync: deps.spawnSync,
+          });
+          for (const task of runningTasks) {
+            const p = (async () => {
+              try {
+                const decision = await deps.mentorPolicy.evaluateRuleC_offGoal({
+                  db: entry.db,
+                  project, task, profile,
+                  recentActivity,
+                  config: Object.assign({}, deps.mentorPolicy.DEFAULTS, deps.policyConfig || {}),
+                  emit: {
+                    nudge: (payload) => deps.mentorPolicy.emitNudge(entry.db, project.id, payload),
+                    escalation: (payload) => deps.mentorPolicy.emitEscalation(entry.db, project.id, payload),
+                  },
+                  llmJudgeOffGoal: (input) => llmHelpers.judgeOffGoal(input, deps.llmOpts || {}),
+                  nowFn: deps.nowFn,
+                });
+                if (decision && decision.action && decision.action !== 'on_path'
+                    && decision.action !== 'strike' && decision.action !== 'helper_skipped') {
+                  out.decisions++;
+                  if (typeof deps.onDecision === 'function') {
+                    try { deps.onDecision(project.id, decision); } catch (_e) {}
+                  }
+                }
+                return decision;
+              } catch (e) {
+                return { rule: 'C', action: 'tick_exception', error: (e && e.message) || String(e) };
+              }
+            })();
+            out.rule_c_pending.push(p);
           }
         }
       }
@@ -179,8 +290,12 @@ function stats() {
 module.exports = {
   TICK_INTERVAL_MS,
   TASKS_PER_PROJECT_CAP,
+  RULE_C_CALLS_PER_TICK,
+  RECENT_ACTIVITY_TRANSITION_CAP,
+  RECENT_ACTIVITY_COMMIT_CAP,
   runOnce,
   start,
   stop,
   stats,
+  gatherRecentActivity,
 };

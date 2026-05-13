@@ -246,7 +246,7 @@ section('7 Phase 6 LLM-rule placeholders');
   const ruleA = r.decisions.find(d => d.rule === 'A');
   const ruleC = r.decisions.find(d => d.rule === 'C');
   ok(ruleA && ruleA.action === 'no_action_phase_5', 'Rule A is Phase-6 placeholder');
-  ok(ruleC && ruleC.action === 'no_action_phase_5', 'Rule C is Phase-6 placeholder');
+  ok(ruleC && ruleC.action === 'deferred_to_async_caller', 'Rule C is async — deferred to caller (mentor-tick)');
   db.close();
 }
 
