@@ -50,7 +50,6 @@ temp/
 
 # Build outputs
 packages/desktop-shell/dist/
-packages/desktop-shell/build/icon.icns
 packages/*/dist/cli/
 packages/daemon/dist/storage/migrations/00*.js
 # (package dist/ as a whole is needed by mcp-server's file: dep — only ignore non-source artifacts)

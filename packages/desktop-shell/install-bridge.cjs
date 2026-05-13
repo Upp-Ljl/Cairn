@@ -52,8 +52,20 @@ function resolveInstallCliPath(override) {
   if (override) {
     return fs.existsSync(override) ? override : null;
   }
-  // packages/desktop-shell/install-bridge.cjs → ../../packages/mcp-server/dist/cli/install.js
-  // __dirname is packages/desktop-shell/
+
+  // 1. Packaged app: electron-builder copies mcp-server dist to
+  //    <app>/resources/mcp-server/  (via extraResources in package.json).
+  //    process.resourcesPath points to that resources/ dir at runtime.
+  //    app.isPackaged is true only when running from the installed .exe/.app.
+  try {
+    const { app } = require('electron');
+    if (app && app.isPackaged && process.resourcesPath) {
+      const bundled = path.join(process.resourcesPath, 'mcp-server', 'dist', 'cli', 'install.js');
+      if (fs.existsSync(bundled)) return bundled;
+    }
+  } catch (_e) { /* not in electron context (unit tests) — fall through */ }
+
+  // 2. Dev / monorepo checkout: packages/desktop-shell/ → ../mcp-server/dist/…
   const candidate = path.resolve(__dirname, '..', 'mcp-server', 'dist', 'cli', 'install.js');
   return fs.existsSync(candidate) ? candidate : null;
 }

@@ -21,7 +21,8 @@
     "dist:win": "electron-builder --win nsis",
     "dist:mac": "electron-builder --mac dmg",
     "dist:dir": "electron-builder --dir",
-    "gen:icon": "node scripts/gen-placeholder-icon.mjs"
+    "gen:icon": "node scripts/gen-placeholder-icon.mjs",
+    "gen:icns": "node scripts/gen-placeholder-icns.mjs"
   },
   "build": {
     "appId": "ai.renlab.cairn",
@@ -80,6 +81,18 @@
     "asar": true,
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../mcp-server",
+        "to": "mcp-server",
+        "filter": [
+          "dist/**/*",
+          "package.json",
+          "!dist/**/*.{test,spec}.js",
+          "!dist/**/{test,tests,__tests__}/**/*"
+        ]
+      }
     ]
   }
 }

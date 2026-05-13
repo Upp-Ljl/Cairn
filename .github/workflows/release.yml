@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-win:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build daemon
+        working-directory: packages/daemon
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build mcp-server
+        working-directory: packages/mcp-server
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build desktop-shell (Windows NSIS)
+        working-directory: packages/desktop-shell
+        run: |
+          npm ci
+          npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cairn-win-x64
+          path: packages/desktop-shell/dist/*.exe
+          retention-days: 30
+
+  build-mac:
+    name: Build macOS DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build daemon
+        working-directory: packages/daemon
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build mcp-server
+        working-directory: packages/mcp-server
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build desktop-shell (macOS DMG)
+        working-directory: packages/desktop-shell
+        run: |
+          npm ci
+          npm run dist:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cairn-mac-x64-arm64
+          path: packages/desktop-shell/dist/*.dmg
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-win, build-mac]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cairn-win-x64
+          path: dist/win
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cairn-mac-x64-arm64
+          path: dist/mac
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/win/*.exe
+            dist/mac/*.dmg
+          generate_release_notes: true
