@@ -36,6 +36,8 @@ const ACTIVITY_LIMIT_DEFAULT = 60;
 const CHECKPOINT_LIMIT_DEFAULT = 10;
 /** Default number of escalations surfaced for Module 5 (PENDING only). */
 const ESCALATION_LIMIT_DEFAULT = 25;
+/** Default number of todolist entries (M2 Todolist). */
+const TODOLIST_LIMIT_DEFAULT = 30;
 
 /** Autopilot status enum — drives Module 1's color + copy. */
 const AUTOPILOT_STATUS = {
@@ -764,6 +766,158 @@ function deriveAutopilotStatus({ goal, agents, escalationsPending }) {
 }
 
 // ---------------------------------------------------------------------------
+// M2 Todolist — merge three scratchpad namespaces, sort ts DESC, limit cap
+// ---------------------------------------------------------------------------
+
+/**
+ * Query M2 Todolist entries from three scratchpad namespaces:
+ *
+ *   agent_proposal/<agent_id>/<ulid>
+ *     value: { ts, label, agent_id, task_id?, why? }
+ *     source label: 🤖 + agent display_name (8-char prefix)
+ *
+ *   mentor_todo/<project_id>/<ulid>
+ *     value: { ts, label, project_id, source: 'mentor' }
+ *     source label: 🧑‍🏫 mentor
+ *
+ *   user_todo/<project_id>/<ulid>
+ *     value: { ts, label, project_id, source: 'user' }
+ *     source label: 🐤 you
+ *
+ * Returns merged array sorted by ts DESC (most recent first), capped at limit.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Set<string>} tables
+ * @param {string|null} projectId
+ * @param {string[]} agentHints  — attributed agent_ids for this project
+ * @param {{ limit?: number }} [opts]
+ * @returns {Array<{
+ *   todo_id: string,
+ *   source: 'agent_proposal'|'mentor_todo'|'user_todo',
+ *   agent_id?: string,
+ *   label: string,
+ *   ts: number,
+ *   project_id?: string,
+ *   task_id?: string,
+ *   why?: string,
+ *   raw: object
+ * }>}
+ */
+function queryTodoList(db, tables, projectId, agentHints, opts) {
+  if (!db || !tables || !tables.has('scratchpad')) return [];
+  const limit = (opts && opts.limit) || TODOLIST_LIMIT_DEFAULT;
+  const hints = Array.isArray(agentHints) ? agentHints : [];
+  const todos = [];
+
+  // 1. agent_proposal — one per attributed agent_id
+  if (hints.length > 0) {
+    for (const agentId of hints) {
+      try {
+        const rows = db.prepare(`
+          SELECT key, value_json, updated_at
+          FROM scratchpad
+          WHERE key LIKE 'agent_proposal/' || ? || '/%'
+          ORDER BY key DESC
+          LIMIT ?
+        `).all(agentId, limit);
+        for (const r of rows) {
+          const ulid = r.key.split('/').pop();
+          let body = null;
+          try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+          if (!body || typeof body !== 'object') continue;
+          const label = typeof body.label === 'string' ? body.label : '';
+          if (!label) continue;
+          todos.push({
+            todo_id: ulid,
+            source: 'agent_proposal',
+            agent_id: body.agent_id || agentId,
+            label,
+            ts: Number(body.ts) || Number(r.updated_at) || 0,
+            project_id: projectId || null,
+            task_id: body.task_id || null,
+            why: body.why || null,
+            raw: body,
+          });
+        }
+      } catch (_e) { /* skip on schema mismatch */ }
+    }
+  }
+
+  // 2. mentor_todo — keyed by project_id
+  if (projectId) {
+    try {
+      const rows = db.prepare(`
+        SELECT key, value_json, updated_at
+        FROM scratchpad
+        WHERE key LIKE 'mentor_todo/' || ? || '/%'
+        ORDER BY key DESC
+        LIMIT ?
+      `).all(projectId, limit);
+      for (const r of rows) {
+        const ulid = r.key.split('/').pop();
+        let body = null;
+        try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+        if (!body || typeof body !== 'object') continue;
+        const label = typeof body.label === 'string' ? body.label : '';
+        if (!label) continue;
+        todos.push({
+          todo_id: ulid,
+          source: 'mentor_todo',
+          agent_id: null,
+          label,
+          ts: Number(body.ts) || Number(r.updated_at) || 0,
+          project_id: body.project_id || projectId,
+          task_id: null,
+          why: null,
+          raw: body,
+        });
+      }
+    } catch (_e) {}
+  }
+
+  // 3. user_todo — keyed by project_id
+  if (projectId) {
+    try {
+      const rows = db.prepare(`
+        SELECT key, value_json, updated_at
+        FROM scratchpad
+        WHERE key LIKE 'user_todo/' || ? || '/%'
+        ORDER BY key DESC
+        LIMIT ?
+      `).all(projectId, limit);
+      for (const r of rows) {
+        const ulid = r.key.split('/').pop();
+        let body = null;
+        try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+        if (!body || typeof body !== 'object') continue;
+        const label = typeof body.label === 'string' ? body.label : '';
+        if (!label) continue;
+        todos.push({
+          todo_id: ulid,
+          source: 'user_todo',
+          agent_id: null,
+          label,
+          ts: Number(body.ts) || Number(r.updated_at) || 0,
+          project_id: body.project_id || projectId,
+          task_id: null,
+          why: null,
+          raw: body,
+        });
+      }
+    } catch (_e) {}
+  }
+
+  // Sort ts DESC (most recent first), break ties by todo_id lexically (ULID
+  // are time-sortable so this preserves insertion order within same ms).
+  todos.sort((a, b) => {
+    if (b.ts !== a.ts) return b.ts - a.ts;
+    return b.todo_id < a.todo_id ? -1 : 1;
+  });
+
+  return todos.slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -804,6 +958,9 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
   });
   const activity = queryActivityFeed(db, tables, hints, project.id, {
     limit: o.activityLimit || ACTIVITY_LIMIT_DEFAULT,
+  });
+  const todolist = queryTodoList(db, tables, project.id, hints, {
+    limit: o.todolistLimit || TODOLIST_LIMIT_DEFAULT,
   });
 
   const autopilot = deriveAutopilotStatus({
@@ -1005,6 +1162,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     activity,
     checkpoints,
     escalations: allEscalations,
+    todolist,
     ts: now,
   };
 }
@@ -1014,6 +1172,7 @@ module.exports = {
   ACTIVITY_LIMIT_DEFAULT,
   CHECKPOINT_LIMIT_DEFAULT,
   ESCALATION_LIMIT_DEFAULT,
+  TODOLIST_LIMIT_DEFAULT,
   SUPPORTED_TABLES,
   buildCockpitState,
   emptyCockpitState,
@@ -1028,5 +1187,6 @@ module.exports = {
   queryEscalations,
   queryCheckpoints,
   queryActivityFeed,
+  queryTodoList,
   deriveAutopilotStatus,
 };

@@ -950,6 +950,51 @@ ipcMain.handle('cockpit-steer', (_e, input) => {
   });
 });
 
+// M2 Todolist (A2.1) — add user_todo entry. Tier-A mutation (writes scratchpad).
+// D9.1 first-class; no env flag gate (same tier as cockpit-steer).
+// Validation: label non-empty, ≤ 200 chars; project must be registered + have DB.
+ipcMain.handle('cockpit-todo-add', (_e, input) => {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, error: 'input_required' };
+  }
+  if (!input.project_id || typeof input.project_id !== 'string') {
+    return { ok: false, error: 'project_id_required' };
+  }
+  const rawLabel = (input.label || '').toString().trim();
+  if (!rawLabel) return { ok: false, error: 'label_empty' };
+  if (rawLabel.length > 200) return { ok: false, error: 'label_too_long' };
+
+  const proj = reg.projects.find(p => p.id === input.project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  const entry = ensureDbHandle(proj.db_path);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  if (!entry.tables || !entry.tables.has('scratchpad')) {
+    return { ok: false, error: 'scratchpad_missing' };
+  }
+
+  // Generate a ULID for the key suffix (reuse steer module's inline generator).
+  const ulid = cockpitSteer.inboxKey('_').split('/').pop();  // borrow ULID; strip prefix
+  const key = `user_todo/${input.project_id}/${ulid}`;
+  const now = Date.now();
+  const value = {
+    ts: now,
+    label: rawLabel,
+    project_id: input.project_id,
+    source: 'user',
+  };
+  try {
+    entry.db.prepare(`
+      INSERT INTO scratchpad
+        (key, value_json, value_path, task_id, expires_at, created_at, updated_at)
+      VALUES
+        (@key, @value_json, NULL, NULL, NULL, @now, @now)
+    `).run({ key, value_json: JSON.stringify(value), now });
+  } catch (e) {
+    return { ok: false, error: 'write_failed: ' + (e && e.message ? e.message : String(e)) };
+  }
+  return { ok: true, key };
+});
+
 // Cockpit redesign Phase 4 — Module 4 REWIND.
 // D9.1 tier-B mutation: caller MUST surface inline confirm dialog
 // before invoking rewindTo. Preview is safe to call unprompted.
