@@ -28,6 +28,7 @@ export interface InstallResult {
   mcpJsonAction: 'created' | 'merged' | 'unchanged';
   hookAction: 'created' | 'replaced' | 'sidecarred' | 'skipped';
   petLauncherAction: 'created' | 'preserved';
+  cairnMdAction: 'created' | 'preserved' | 'skipped';
   warnings: string[];
 }
 
@@ -50,6 +51,104 @@ function err(msg: string) { return `${RED}[err]${RESET}  ${msg}`; }
 
 const HOOK_MARKER = '# cairn-pre-commit-v1';
 
+// CAIRN.md scaffold — written verbatim on first install. After that, edits
+// are the user's. The scaffold is intentionally small (commented-out
+// examples) so the user fills it in. Schema in docs/CAIRN-md-spec.md.
+const CAIRN_MD_TEMPLATE = `# <Project Name>
+
+> Per-project policy file for Cairn Mentor. Edit this — the scaffold is
+> intentionally sparse. Schema reference: docs/CAIRN-md-spec.md inside the
+> Cairn repo, or https://github.com/Upp-Ljl/Cairn.
+
+## Goal
+
+<one sentence describing what success looks like for this project>
+
+## What this project IS / IS NOT
+
+- IS: <what this project is>
+- IS NOT: <what it is not — anti-definitions matter>
+
+## Mentor authority (decision delegation)
+
+Mentor's default behaviour for each runtime event category. Add bullets
+freely; lines starting with the emoji (or the ASCII tag) classify the
+rule. See docs/CAIRN-md-spec.md for the routing semantics.
+
+- ✅ <reversible / low-stakes thing Mentor can decide silently>
+- ⚠️ <reversible but worth knowing; Mentor decides + announces in Activity feed>
+- 🛑 <irreversible / strategic / business — always escalate to user>
+
+Examples (uncomment + edit):
+
+<!--
+- ✅ retry transient test failures up to 2x
+- ✅ pick TypeScript over JavaScript when blocker asks "which language"
+- ⚠️ reduce a task's time budget when 80% elapsed and progress visible
+- 🛑 npm publish
+- 🛑 force-push to main
+- 🛑 LICENSE edit
+- 🛑 adding a new npm dependency
+-->
+
+## Project constraints
+
+- <cross-cutting rule that both Mentor and coding agents must respect>
+
+## Known answers
+
+Cheapest decision path: Mentor matches a blocker's question against these
+substrings (case-insensitive) and returns the answer directly. Format
+"<substring> => <answer>".
+
+<!--
+- which language => prefer TypeScript
+- test framework => vitest with real DB, not mocks
+-->
+
+## Current phase
+
+**Last updated**: YYYY-MM-DD
+- Phase: <phase name>
+- This week: <one line>
+- Next week: <one line>
+
+---
+
+## For Cairn-aware coding agents
+
+If you are a coding agent (Claude Code / Cursor / Codex / Aider) working
+inside this repo with Cairn attached, the following protocol applies:
+
+1. **Read this file** at session start. Treat the IS/IS NOT and Mentor
+   authority sections as policy from the project owner.
+2. **Before raising a blocker** (calling \`cairn.task.block\`), first write
+   a brief to scratchpad key \`agent_brief/<your-agent-id>\`. Format:
+
+   \`\`\`json
+   {
+     "version": 1,
+     "agent_id": "<your-cairn-session-agent-id>",
+     "task_id": "<current task_id if any>",
+     "summary": "what you're trying to do right now (≤ 150 words)",
+     "stuck_on": "what's blocking you (≤ 80 words)",
+     "options_considered": ["option A", "option B"],
+     "lean": "your current preference + why",
+     "written_at": <Date.now()>
+   }
+   \`\`\`
+
+   Cairn Mentor reads this brief as L2 input to its decision and may
+   resolve the blocker without paging the user.
+3. **Subagent results** still write to \`subagent/{agent_id}/result\` per
+   docs/cairn-subagent-protocol.md. The agent_brief is the *self-summary*
+   from the main agent's perspective; it's about *you*, not your
+   subagents.
+4. The scratchpad key \`project_profile/<project_id>\` is Mentor's cache of
+   this file — do not write to it from the agent side.
+`;
+
+
 export function runInstall(opts: InstallOptions): InstallResult {
   const warnings: string[] = [];
 
@@ -63,6 +162,7 @@ export function runInstall(opts: InstallOptions): InstallResult {
       mcpJsonAction: 'unchanged',
       hookAction: 'skipped',
       petLauncherAction: 'preserved',
+      cairnMdAction: 'skipped',
       warnings: [`Not a git repository: ${opts.targetDir}`],
     };
   }
@@ -178,11 +278,29 @@ export function runInstall(opts: InstallOptions): InstallResult {
     petLauncherAction = 'created';
   }
 
+  // ------------------------------------------------------------------
+  // 6. Scaffold CAIRN.md (per-project policy file for Mentor)
+  // ------------------------------------------------------------------
+  const cairnMdPath = path.join(opts.targetDir, 'CAIRN.md');
+  let cairnMdAction: InstallResult['cairnMdAction'];
+  if (fs.existsSync(cairnMdPath)) {
+    cairnMdAction = 'preserved';
+  } else {
+    try {
+      fs.writeFileSync(cairnMdPath, CAIRN_MD_TEMPLATE, 'utf8');
+      cairnMdAction = 'created';
+    } catch (e) {
+      cairnMdAction = 'skipped';
+      warnings.push(`Failed to scaffold CAIRN.md: ${(e as Error).message}`);
+    }
+  }
+
   return {
     ok: true,
     mcpJsonAction,
     hookAction,
     petLauncherAction,
+    cairnMdAction,
     warnings,
   };
 }
@@ -254,6 +372,13 @@ function printReport(result: InstallResult, targetDir: string) {
     ? 'Created start-cairn-pet.bat and start-cairn-pet.sh'
     : 'Preserved existing start-cairn-pet launchers';
   lines.push(ok(petLabel));
+
+  const cairnMdLabel: Record<InstallResult['cairnMdAction'], string> = {
+    created: 'Scaffolded CAIRN.md (edit it to give Mentor authority over this project)',
+    preserved: 'Preserved existing CAIRN.md',
+    skipped: 'Skipped CAIRN.md scaffold',
+  };
+  lines.push(ok(cairnMdLabel[result.cairnMdAction]));
 
   if (result.warnings.length > 0) {
     lines.push('');
@@ -375,7 +500,8 @@ if (isMain || process.env['CAIRN_INSTALL_RUN'] === '1') {
     process.stdout.write(`  - ${path.join(targetDir, '.mcp.json')}\n`);
     process.stdout.write(`  - ${path.join(targetDir, '.git', 'hooks', 'pre-commit')}\n`);
     process.stdout.write(`  - ${path.join(targetDir, 'start-cairn-pet.bat')}\n`);
-    process.stdout.write(`  - ${path.join(targetDir, 'start-cairn-pet.sh')}\n\n`);
+    process.stdout.write(`  - ${path.join(targetDir, 'start-cairn-pet.sh')}\n`);
+    process.stdout.write(`  - ${path.join(targetDir, 'CAIRN.md')} (if absent)\n\n`);
     process.stdout.write('No files were written. Run without --dry-run to apply.\n');
     process.exit(0);
   }
