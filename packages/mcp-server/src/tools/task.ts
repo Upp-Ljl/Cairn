@@ -32,6 +32,11 @@ import type { BlockerRow } from '../../../daemon/dist/storage/repositories/block
 import type { TaskState } from '../../../daemon/dist/storage/tasks-state.js';
 import type { Workspace } from '../workspace.js';
 import { assembleResumePacket, type ResumePacket } from '../resume-packet.js';
+// Phase 2 (sync mentor): CAIRN.md known-answer auto-resolve inside task.block.
+// See docs/superpowers/plans/2026-05-14-phase2-sync-mentor.md.
+import { loadProfile, matchKnownAnswer } from '../../../daemon/dist/cairn-md/index.js';
+import { putScratch } from '../../../daemon/dist/storage/repositories/scratchpad.js';
+import * as crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Arg types
@@ -271,17 +276,65 @@ function blockerAlreadyAnsweredError(blocker_id: string) {
  * atomic transaction. Returns { blocker: BlockerRow; task: TaskRow } on
  * success, or a structured error object on failure.
  *
+ * **Phase 2 (sync mentor, 2026-05-14)**: before recording, this handler
+ * scans `<ws.gitRoot>/CAIRN.md` for a `## Known answers` substring match
+ * against `args.question`. On match the blocker is recorded AND
+ * immediately answered AND a scratchpad event is written, all inside
+ * one outer `db.transaction()`. The response gains `auto_resolved`,
+ * `answer`, `matched_pattern`, `scratchpad_key` fields and the returned
+ * `task.state` is `READY_TO_RESUME` instead of `BLOCKED`. No match (or
+ * no CAIRN.md / no profile.known_answers) → identical behaviour as
+ * pre-Phase-2 with `auto_resolved: false` appended.
+ *
+ * Plan: docs/superpowers/plans/2026-05-14-phase2-sync-mentor.md
+ *
  * SESSION_AGENT_ID injection: raised_by defaults to ws.agentId when omitted.
  */
+export interface BlockTaskResultBase { blocker: BlockerRow; task: TaskRow; auto_resolved: boolean }
+export interface BlockTaskResultAutoResolved extends BlockTaskResultBase {
+  auto_resolved: true;
+  answer: string;
+  matched_pattern: string;
+  scratchpad_key: string;
+}
+export interface BlockTaskResultPassive extends BlockTaskResultBase {
+  auto_resolved: false;
+}
+export type BlockTaskResult = BlockTaskResultAutoResolved | BlockTaskResultPassive;
+
+const _ULID_ENC = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function _newUlid(): string {
+  const ts = Date.now();
+  let t = '';
+  let n = ts;
+  for (let i = 9; i >= 0; i--) { t = _ULID_ENC[n % 32] + t; n = Math.floor(n / 32); }
+  const rand = crypto.randomBytes(10);
+  let r = '';
+  for (let i = 0; i < 16; i++) r += _ULID_ENC[rand[i % 10]! % 32];
+  return t + r;
+}
+
 export function toolBlockTask(
   ws: Workspace,
   args: BlockTaskArgs,
-): { blocker: BlockerRow; task: TaskRow } | { error: { code: string; [k: string]: unknown } } {
+): BlockTaskResult | { error: { code: string; [k: string]: unknown } } {
   // Resolve raised_by — fallback to ws.agentId (SESSION_AGENT_ID)
   const raised_by =
     args.raised_by != null && args.raised_by !== ''
       ? args.raised_by
       : ws.agentId;
+
+  // Phase 2: peek at the project's CAIRN.md for a known_answer match.
+  // Loaded BEFORE the transaction so the scan + cache write don't bloat
+  // the outer txn. matchKnownAnswer is pure; safe to call cold.
+  let autoMatch: { pattern: string; answer: string } | null = null;
+  try {
+    const profile = loadProfile(ws.db, ws.blobRoot, ws.gitRoot);
+    autoMatch = matchKnownAnswer(profile, args.question);
+  } catch (_e) {
+    // CAIRN.md absent / unreadable / parse error → fall through to normal block.
+    autoMatch = null;
+  }
 
   try {
     const recordInput: Parameters<typeof recordBlocker>[1] = {
@@ -292,8 +345,51 @@ export function toolBlockTask(
     if (args.context_keys !== undefined) {
       recordInput.context_keys = args.context_keys;
     }
+
+    if (autoMatch) {
+      // Auto-resolve path: record + answer + scratchpad event in one outer txn.
+      // better-sqlite3 flattens nested transactions to SAVEPOINTs, so the
+      // recordBlocker/markAnswered inner transactions are safe inside this wrap.
+      const ulid = _newUlid();
+      const scratchKey = `mentor/${raised_by}/auto_resolve/${ulid}`;
+      const autoResolvedAt = Date.now();
+      const result = ws.db.transaction(() => {
+        const blockResult = recordBlocker(ws.db, recordInput);
+        const answerResult = markAnswered(ws.db, blockResult.blocker.blocker_id, {
+          answer: autoMatch!.answer,
+          answered_by: raised_by, // self-answered via Cairn known_answer mechanism
+        });
+        putScratch(ws.db, ws.blobRoot, {
+          key: scratchKey,
+          value: {
+            task_id: args.task_id,
+            blocker_id: blockResult.blocker.blocker_id,
+            question: args.question,
+            matched_pattern: autoMatch!.pattern,
+            answer: autoMatch!.answer,
+            source: 'kernel_sync',
+            resolved_at: autoResolvedAt,
+            raised_by,
+          },
+          task_id: args.task_id,
+          expires_at: null,
+        });
+        return { blocker: answerResult.blocker, task: answerResult.task };
+      })();
+
+      return {
+        blocker: result.blocker,
+        task: result.task,
+        auto_resolved: true,
+        answer: autoMatch.answer,
+        matched_pattern: autoMatch.pattern,
+        scratchpad_key: scratchKey,
+      };
+    }
+
+    // No match — fall through to the existing passive-block behaviour.
     const result = recordBlocker(ws.db, recordInput);
-    return result;
+    return { ...result, auto_resolved: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
 
