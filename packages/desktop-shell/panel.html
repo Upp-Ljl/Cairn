@@ -1209,6 +1209,27 @@
   }
   .cockpit-stale-icon { color: #d4a85d; }
   .cockpit-stale-text { color: #e0c8a0; }
+  /* Phase 7 (2026-05-14): "Last 24h" project glance widget */
+  .cockpit-last-24h {
+    font-size: 0.82em;
+    margin-bottom: 6px;
+    padding: 4px 8px;
+    background: #1a1f24;
+    border-left: 2px solid #6ba8d4;
+    border-radius: 2px;
+    color: #c8dde8;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cockpit-last-24h-label {
+    color: #6ba8d4;
+    text-transform: uppercase;
+    font-size: 0.85em;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+  .cockpit-last-24h-text { color: #c8dde8; }
   .cockpit-status-line {
     font-size: 1em;
     display: flex;
@@ -2719,6 +2740,14 @@
       <div class="cockpit-stale-agents" id="cockpit-stale-agents" hidden>
         <span class="cockpit-stale-icon">⚠️</span>
         <span class="cockpit-stale-text" id="cockpit-stale-text"></span>
+      </div>
+      <!-- Phase 7 (2026-05-14): "while you were away" 24h summary
+           (Project Glance per PRODUCT.md §4.1 US-P1). Shows tasks done
+           + Mentor decisions + conflicts touched + checkpoints made in
+           the last 24h. Hidden when all four counters are zero. -->
+      <div class="cockpit-last-24h" id="cockpit-last-24h" hidden>
+        <span class="cockpit-last-24h-label">Last 24h</span>
+        <span class="cockpit-last-24h-text" id="cockpit-last-24h-text"></span>
       </div>
       <div class="cockpit-status-line">
         <span class="cockpit-status-dot" id="cockpit-status-dot">○</span>

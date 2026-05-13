@@ -648,6 +648,46 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     } catch (_e) { /* leave zeros */ }
   }
 
+  // Phase 7 (2026-05-14): "while you were away" 24h summary.
+  let last_24h = { tasks_done: 0, mentor_decisions: 0, conflicts_touched: 0, checkpoints_made: 0 };
+  const ago24h = now - 24 * 60 * 60_000;
+  if (hints.length > 0) {
+    try {
+      const placeholders24 = '(' + hints.map(() => '?').join(',') + ')';
+      if (tables.has('tasks')) {
+        const r = db.prepare(`
+          SELECT COUNT(*) AS c FROM tasks
+          WHERE created_by_agent_id IN ${placeholders24}
+            AND state = 'DONE' AND updated_at >= ?
+        `).get(...hints, ago24h);
+        last_24h.tasks_done = (r && r.c) || 0;
+      }
+      if (tables.has('scratchpad')) {
+        const hintsLike2 = hints.map(h => `mentor/${h}/%`);
+        const phLike = hintsLike2.map(() => 'key LIKE ?').join(' OR ');
+        const r = db.prepare(`
+          SELECT COUNT(*) AS c FROM scratchpad
+          WHERE (${phLike}) AND created_at >= ?
+        `).get(...hintsLike2, ago24h);
+        last_24h.mentor_decisions = (r && r.c) || 0;
+      }
+      if (tables.has('conflicts')) {
+        const r = db.prepare(`
+          SELECT COUNT(*) AS c FROM conflicts
+          WHERE updated_at >= ?
+        `).get(ago24h);
+        last_24h.conflicts_touched = (r && r.c) || 0;
+      }
+      if (tables.has('checkpoints')) {
+        const r = db.prepare(`
+          SELECT COUNT(*) AS c FROM checkpoints
+          WHERE agent_id IN ${placeholders24} AND created_at >= ?
+        `).get(...hints, ago24h);
+        last_24h.checkpoints_made = (r && r.c) || 0;
+      }
+    } catch (_e) { /* leave zeros */ }
+  }
+
   // Phase 6 (2026-05-14): stale-agent detection + orphan task surface.
   //
   // An agent is "stale" when:
@@ -721,6 +761,8 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     mentor_decisions,
     // Phase 6 (2026-05-14): stale-agent + orphan task surface
     stale_agents,
+    // Phase 7 (2026-05-14): "since 24h ago" Project Glance summary
+    last_24h,
     autopilot_status: autopilot,
     autopilot_reason: autopilot === AUTOPILOT_STATUS.NO_GOAL
       ? 'project has no goal — set one to enable Mentor'
