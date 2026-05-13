@@ -4090,16 +4090,40 @@ function renderCockpit(state) {
     }
   }
 
-  // Module 5: needs you
-  const needsContainer = document.getElementById('cockpit-needs');
+  // Module 5: MENTOR (A2.0 upgrade — was 'Needs you').
+  // Status header shows: state · last check · today's decisions count.
+  const mentorModule = document.getElementById('cockpit-mentor-module');
+  const needsContainer = document.getElementById('cockpit-needs');  // legacy id (still works during transition)
   const needsListEl = document.getElementById('cockpit-needs-list');
   const pendingEscs = (state.escalations || []).filter(e => e.status === 'PENDING');
-  if (needsContainer) {
-    needsContainer.classList.toggle('active', pendingEscs.length > 0);
+  const mentorContainer = mentorModule || needsContainer;
+  if (mentorContainer) {
+    mentorContainer.classList.toggle('active', pendingEscs.length > 0);
+  }
+  // Mentor status header (always render — Mentor is primary, not hidden)
+  const stateEl = document.getElementById('cockpit-mentor-state');
+  const lastCheckEl = document.getElementById('cockpit-mentor-last-check');
+  const todayEl = document.getElementById('cockpit-mentor-today');
+  if (stateEl) {
+    let label = 'on path · watching';
+    let cls = '';
+    if (pendingEscs.length > 0) { label = `${pendingEscs.length} escalation${pendingEscs.length > 1 ? 's' : ''} need you`; cls = 'alert'; }
+    else if (state.autopilot_status === 'AGENT_IDLE') { label = 'agent idle · nothing to watch'; cls = ''; }
+    stateEl.textContent = label;
+    stateEl.className = 'cockpit-mentor-state' + (cls ? ' ' + cls : '');
+  }
+  if (lastCheckEl) {
+    const lm = state.latest_mentor_nudge;
+    lastCheckEl.textContent = lm && lm.timestamp ? `last nudge ${fmtAgo(lm.timestamp)}` : '';
+  }
+  if (todayEl) {
+    const md = state.mentor_decisions;
+    const total = md && md.total ? md.total : 0;
+    todayEl.textContent = total > 0 ? `today: ${total} decisions handled` : '';
   }
   if (needsListEl) {
     if (pendingEscs.length === 0) {
-      needsListEl.innerHTML = '<div class="cockpit-needs-empty">Mentor handling — agent on track.</div>';
+      needsListEl.innerHTML = '<div class="cockpit-needs-empty">No escalations — Mentor handling.</div>';
     } else {
       const rows = pendingEscs.map(e => {
         return `<div class="cockpit-needs-row" data-esc-id="${escapeHtml(e.id)}">

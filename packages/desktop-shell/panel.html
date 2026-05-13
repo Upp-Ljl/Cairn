@@ -1605,6 +1605,34 @@
     border-top: 2px solid #ff5555;
   }
   .cockpit-needs.active .cockpit-section-title { color: #ff7070; }
+  /* A2.0 Mentor module — upgrade of Needs You with status header */
+  .cockpit-mentor-module {
+    padding: 8px 12px;
+    flex-shrink: 0;
+    border-top: 1px solid #2a2a2a;
+    background: #1c1c1f;
+  }
+  .cockpit-mentor-module.active {
+    background: #2a1414;
+    border-top: 2px solid #ff5555;
+  }
+  .cockpit-mentor-module.active .cockpit-section-title { color: #ff7070; }
+  .cockpit-mentor-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin: 4px 0 8px 0;
+    font-size: 0.82em;
+    color: #aac;
+  }
+  .cockpit-mentor-state {
+    color: #c6ffd6;
+    font-weight: 500;
+  }
+  .cockpit-mentor-state.alert { color: #ff7070; }
+  .cockpit-mentor-state.warn  { color: #ffc66a; }
+  .cockpit-mentor-last-check { color: #777; }
+  .cockpit-mentor-today      { color: #88a; }
   .cockpit-needs-empty { color: #666; font-style: italic; font-size: 0.85em; }
   .cockpit-needs-list { max-height: 200px; overflow-y: auto; }
   .cockpit-needs-row {
@@ -2972,7 +3000,7 @@
         <strong>② Steer</strong>：不切 session 直接给 agent 发话<br>
         <strong>③ Sessions</strong>：本项目下每个 agent session 的工作脉络 (working / blocked / idle / stale)<br>
         <strong>④ Safety</strong>：一键回退到某个 checkpoint<br>
-        <strong>⑤ Needs You</strong>：Mentor 搞不定才闪红
+        <strong>⑤ Mentor</strong>：状态 + 在管什么 + 搞不定时 Ack 升级
       </p>
       <h3>键盘快捷键</h3>
       <p>
@@ -2988,11 +3016,20 @@
       </p>
     </div>
 
-    <!-- Module 5: NEEDS YOU -->
-    <div class="cockpit-needs" id="cockpit-needs">
-      <div class="cockpit-section-title">Needs you</div>
+    <!-- Module 5: MENTOR (panel-cockpit-redesign A2.0, 2026-05-14).
+         Was "Needs you". Per CEO grill 17 product constraints §7+§11,
+         Mentor is a first-class primary module — always visible, shows
+         status header + escalations + Ack. A4 phase moves this to M2
+         position and folds Todolist into the same module. -->
+    <div class="cockpit-mentor-module" id="cockpit-mentor-module">
+      <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
+      <div class="cockpit-mentor-status" id="cockpit-mentor-status">
+        <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
+        <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
+        <span class="cockpit-mentor-today" id="cockpit-mentor-today"></span>
+      </div>
       <div class="cockpit-needs-list" id="cockpit-needs-list">
-        <div class="cockpit-needs-empty">Mentor handling — agent on track.</div>
+        <div class="cockpit-needs-empty">No escalations — Mentor handling.</div>
       </div>
     </div>
   </div>
