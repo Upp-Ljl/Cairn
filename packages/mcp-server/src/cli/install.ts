@@ -407,15 +407,17 @@ export interface ParsedArgs {
   showHelp: boolean;
   showVersion: boolean;
   dryRun: boolean;
+  json: boolean;
   unknown: string[];
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = { showHelp: false, showVersion: false, dryRun: false, unknown: [] };
+  const out: ParsedArgs = { showHelp: false, showVersion: false, dryRun: false, json: false, unknown: [] };
   for (const a of argv) {
     if (a === '--help' || a === '-h')        out.showHelp = true;
     else if (a === '--version' || a === '-V') out.showVersion = true;
     else if (a === '--dry-run')               out.dryRun = true;
+    else if (a === '--json')                  out.json = true;
     else                                       out.unknown.push(a);
   }
   return out;
@@ -436,6 +438,7 @@ Flags:
   -h, --help      Show this message and exit
   -V, --version   Print version and exit
       --dry-run   Show what would change without writing any file
+      --json      Emit machine-readable JSON result on stdout (for daemon callers)
 
 The installer is idempotent — running it twice produces the same state.
 Run from inside the git repository you want Cairn to manage.
@@ -515,10 +518,24 @@ if (isMain || process.env['CAIRN_INSTALL_RUN'] === '1') {
       petLauncherTarget: shellDir,
     });
   } catch (e) {
-    process.stderr.write(`cairn install failed: ${(e as Error).message}\n`);
+    if (args.json) {
+      process.stdout.write(JSON.stringify({
+        ok: false,
+        error: (e as Error).message,
+        targetDir,
+      }) + '\n');
+    } else {
+      process.stderr.write(`cairn install failed: ${(e as Error).message}\n`);
+    }
     process.exit(1);
   }
 
-  printReport(result, targetDir);
+  if (args.json) {
+    // Machine-readable output for the desktop-shell install-bridge.
+    // Daemon callers parse this; humans get the formatted report below.
+    process.stdout.write(JSON.stringify({ ...result, targetDir }) + '\n');
+  } else {
+    printReport(result, targetDir);
+  }
   process.exit(result.ok ? 0 : 1);
 }
