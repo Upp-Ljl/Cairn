@@ -19,9 +19,9 @@ You write code in **Cursor / Codex / Claude Code / Kiro**. Cairn does **not** re
 - **Cairn does not write code.** It does not decompose tasks. It does not orchestrate a lead-subagent. It is not a Cursor clone, not a Jira/Linear clone, not a "plain MCP service".
 - **Two layers, one product:**
   - **Product layer** — desktop side panel, tray status icon, ambient floating marker, Live Run Log. What the user sees.
-  - **Kernel layer** — host-level multi-agent coordination kernel; 8 host-level state objects (`processes` / `tasks` / `dispatch_requests` / `scratchpad` / `checkpoints` / `conflicts` / `blockers` / `outcomes`); 28 MCP tools; agent-readable / agent-writable. The supporting infrastructure.
-- **Current status:** **v0.2-cockpit (2026-05-13)** — single-project view rebuilt as a 5-module driving cockpit (state strip / steer / activity / safety / needs-you). Mentor supervisor + auto-tick engine: when you walk away, Cairn watches kernel state and nudges/escalates per a 7-rule policy (5 deterministic rules wired today; rules A/C LLM-judged on roadmap). `D9.1 responsible mutation` opens 3 mutation tiers for the panel: visible/revokable inbox actions are first-class (no env flag); destructive ops gated by inline confirm; legacy dev tools keep `CAIRN_DESKTOP_ENABLE_MUTATIONS=1`. Audience: programmers + non-developers (equal weight per §3.1 patch). Kernel underneath unchanged: 28 MCP tools, 10 migrations, 411 daemon + 359 mcp-server tests, **1031 total green**. Plan: `docs/superpowers/plans/2026-05-12-panel-cockpit-redesign.md`.
-- **What's next:** Mentor Rules A/C (LLM-judged ambiguity + off-goal drift); per-project settings UI; onboarding wizard for non-dev users; tail.log scanning for Rules B/F. No version-tier roadmap; see PRODUCT.md §12 D10 (only "Product MVP" + "Later" buckets).
+  - **Kernel layer** — host-level multi-agent coordination kernel; 8 host-level state objects (`processes` / `tasks` / `dispatch_requests` / `scratchpad` / `checkpoints` / `conflicts` / `blockers` / `outcomes`); 29 MCP tools; agent-readable / agent-writable. The supporting infrastructure.
+- **Current status:** **v0.2.0 (2026-05-14)** — 17-constraint cockpit redesign + Mode B Continuous Iteration. Modules (in order): M1 State Strip · M2 **Mentor + Todolist** (3-source todos: 🤖 agent self-propose, 🧑‍🏫 Mentor recs, 🐤 user-typed) · M3 Steer (per-session dropdown) · M4 **Sessions** (working/blocked/idle/stale; click to drill into **L2 timeline** with subagent缩进 tree + checkpoint rewind anchors) · M5 Safety/Rewind. Plus **🛤 Mode B Lanes** module — user authorizes N candidates, Cairn auto-watches each through WAITING_REVIEW, stops at REVIEWED per §1.3 #4a. Mentor Rule C off-goal drift wired (LLM-judged, strict-mode for high-confidence). Kernel auto-instruments task state transitions into `session_timeline/<agent>/<ulid>` so agents without skill adoption still produce timeline data. First-launch onboarding wizard for non-developer users. Kernel: 29 MCP tools, 10 migrations, daemon + mcp-server 424 tests. Plan: `docs/superpowers/plans/2026-05-14-cockpit-redesign-and-ship.md`. Release: `docs/releases/v0.2.0.md`.
+- **What's next:** macOS code-signing/notarization (Apple Developer cert); Linux .AppImage/.deb; Mode B slice 6 (task.create-on-the-fly from user_todo); cross-engine validation (Cursor/Aider/Codex). No version-tier roadmap; see PRODUCT.md §12 D10 (only "Product MVP" + "Later" buckets).
 
 ---
 
@@ -163,7 +163,7 @@ Full walkthrough + code references: [`docs/unattended-pipeline.md`](docs/unatten
 
 ## What is in the box
 
-### 28 MCP tools (v0.1, W1 + W4 + W5, fully shipped)
+### 29 MCP tools (v0.1 + v0.2.0, W1 + W4 + W5 + cockpit-redesign, fully shipped)
 
 Grouped by namespace. The full alphabetical list is asserted in `tests/stdio-smoke.test.ts`; the schemas + dispatch live in `packages/mcp-server/src/index.ts`.
 
@@ -216,7 +216,7 @@ Full reports: [`docs/superpowers/plans/2026-04-29-poc-1-results.md`](docs/superp
   │   │ (Agent A)    │◄────────────┤     cairn  mcp-server        │ │
   │   └──────────────┘             │     (Node.js subprocess)     │ │
   │                                │                              │ │
-  │   ┌──────────────┐  MCP stdio  │   28 tools (W1+W4+W5)        │ │
+  │   ┌──────────────┐  MCP stdio  │   29 tools (W1+W4+W5+v0.2)   │ │
   │   │ Cursor / etc.├────────────►│   all shipped                │ │
   │   │ (Agent B)    │◄────────────┤                              │ │
   │   └──────────────┘             └──────────┬───────────────────┘ │
