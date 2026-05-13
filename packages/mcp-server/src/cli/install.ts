@@ -29,6 +29,16 @@ export interface InstallResult {
   hookAction: 'created' | 'replaced' | 'sidecarred' | 'skipped';
   petLauncherAction: 'created' | 'preserved';
   cairnMdAction: 'created' | 'preserved' | 'skipped';
+  /**
+   * Phase 4 (2026-05-14): writes `.claude/skills/cairn-aware.md` so any
+   * Claude Code session opened in this project auto-loads the
+   * Cairn-aware protocol (read CAIRN.md / write agent_brief before
+   * blocking / poll agent_inbox between turns). Closes the Phase 1
+   * chicken-and-egg (CC needs to be aware to poll inbox; awareness
+   * lived in CAIRN.md which CC didn't read until told). 'preserved'
+   * means a non-cairn skill of the same name was found and left alone.
+   */
+  cairnAwareSkillAction: 'created' | 'replaced' | 'preserved' | 'skipped';
   warnings: string[];
 }
 
@@ -50,6 +60,99 @@ function err(msg: string) { return `${RED}[err]${RESET}  ${msg}`; }
 // ---------------------------------------------------------------------------
 
 const HOOK_MARKER = '# cairn-pre-commit-v1';
+
+// Marker line embedded in the Claude Code skill so we can recognize
+// our own installs on re-run and replace them. A user-edited or third-
+// party skill of the same name is left alone (action='preserved') —
+// we never silently overwrite human or other-tool content.
+const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v1 -->';
+
+// Claude Code project-level skill that makes CC actually Cairn-aware
+// without manual user setup. Loaded by `cairn install` into
+// `<project>/.claude/skills/cairn-aware.md`. Phase 4 (2026-05-14)
+// closes the Phase 1 chicken-and-egg: CC needs to poll agent_inbox to
+// pick up Mentor's nudges, but the polling protocol used to live only
+// inside CAIRN.md which CC didn't read until told.
+const CAIRN_AWARE_SKILL = `---
+name: cairn-aware
+description: This project uses Cairn. At session start read CAIRN.md, write an agent_brief to scratchpad before raising blockers via cairn.task.block, and poll scratchpad agent_inbox/<your-agent-id>/* between turns for Mentor instructions.
+---
+
+${CAIRN_AWARE_SKILL_MARKER}
+
+# Cairn-aware coding agent protocol
+
+This project uses Cairn (https://github.com/Upp-Ljl/Cairn) for host-level
+multi-agent coordination. Cairn's Mentor watches your activity and may
+auto-resolve blockers / nudge / escalate based on the project's CAIRN.md.
+Cooperating with Mentor saves the user round-trips and keeps long-running
+sessions productive.
+
+## On session start
+
+1. **Read CAIRN.md** at the repo root (if present). Treat the IS/IS NOT
+   and Mentor authority sections as policy from the project owner — what
+   you can decide reversibly vs what needs the user.
+2. **Check your inbox**: call \`cairn.scratchpad.list\` (or read keys
+   directly) and look for entries with the prefix \`agent_inbox/<your-
+   cairn-session-agent-id>/\`. Each entry is a steer message from Cairn
+   (or another agent acting through Cairn). Handle items in order, then
+   delete them via \`cairn.scratchpad.delete\` once consumed.
+
+Your \`cairn-session-agent-id\` is set in the env var \`CAIRN_SESSION_AGENT_ID\`
+by the mcp-server process; you can also obtain it via \`cairn.process.status\`.
+
+## Before raising a blocker
+
+\`cairn.task.block\` automatically resolves blockers whose questions match
+the project's \`## Known answers\` section or \`## Mentor authority\` ✅/⚠️
+bullets in CAIRN.md (Phase 2 + Phase 3 sync-mentor paths). So you don't
+need to write a brief for every block — but for non-trivial blocks:
+
+1. Write a \`scratchpad:agent_brief/<your-agent-id>\` entry with shape:
+
+   \`\`\`json
+   {
+     "version": 1,
+     "agent_id": "<your-cairn-session-agent-id>",
+     "task_id": "<current task_id if any>",
+     "summary": "what you're trying to do right now (≤ 150 words)",
+     "stuck_on": "what's blocking you (≤ 80 words)",
+     "options_considered": ["option A", "option B"],
+     "lean": "your current preference + why",
+     "written_at": <Date.now()>
+   }
+   \`\`\`
+
+2. Then call \`cairn.task.block({ task_id, question })\`. The response
+   may include \`auto_resolved: true\` + \`answer\` — if so, use the
+   answer and continue without paging the user. If \`auto_resolved\` is
+   false and a \`mentor_recommendation\` field is present, the kernel
+   flagged your question as irreversible (e.g. \`npm publish\`) — wait
+   for the user OR override per CAIRN.md.
+
+## Subagent results
+
+Subagent runs still write to \`subagent/{agent_id}/result\` per
+\`docs/cairn-subagent-protocol.md\`. The agent_brief above is YOUR
+self-summary, not your subagents'.
+
+## Reserved keys
+
+Do not write to:
+- \`project_profile/<project_id>\` — desktop-shell's CAIRN.md cache
+- \`project_profile_kernel/<sha1>\` — mcp-server's CAIRN.md cache
+- \`mentor/*\` — Mentor's outbound (nudges / auto-resolves / escalates)
+- \`escalation/*\` — Module 5 (Needs you) state
+
+## Why this skill exists
+
+This file is auto-installed by \`cairn install\`. Without it, CC would
+not know to poll \`agent_inbox\` or write agent_briefs, which means
+Mentor's decisions would never reach you and you'd ask the user the
+questions Cairn could already answer.
+`;
+
 
 // CAIRN.md scaffold — written verbatim on first install (schema v2,
 // 2026-05-14, per docs/superpowers/plans/2026-05-14-bootstrap-grill.md
@@ -174,6 +277,7 @@ export function runInstall(opts: InstallOptions): InstallResult {
       hookAction: 'skipped',
       petLauncherAction: 'preserved',
       cairnMdAction: 'skipped',
+      cairnAwareSkillAction: 'skipped',
       warnings: [`Not a git repository: ${opts.targetDir}`],
     };
   }
@@ -306,12 +410,50 @@ export function runInstall(opts: InstallOptions): InstallResult {
     }
   }
 
+  // ------------------------------------------------------------------
+  // 7. Install .claude/skills/cairn-aware.md (Phase 4, 2026-05-14)
+  //
+  // Project-level Claude Code skill that makes CC auto-aware of Cairn
+  // protocol (read CAIRN.md, write agent_brief, poll agent_inbox).
+  // Identified by the CAIRN_AWARE_SKILL_MARKER so re-installs replace
+  // our own skill but never overwrite a foreign (or user-edited) file
+  // of the same name.
+  // ------------------------------------------------------------------
+  const skillDir = path.join(opts.targetDir, '.claude', 'skills');
+  const skillPath = path.join(skillDir, 'cairn-aware.md');
+  let cairnAwareSkillAction: InstallResult['cairnAwareSkillAction'];
+  try {
+    if (!fs.existsSync(skillDir)) {
+      fs.mkdirSync(skillDir, { recursive: true });
+    }
+    if (fs.existsSync(skillPath)) {
+      const cur = fs.readFileSync(skillPath, 'utf8');
+      if (cur.includes(CAIRN_AWARE_SKILL_MARKER)) {
+        fs.writeFileSync(skillPath, CAIRN_AWARE_SKILL, 'utf8');
+        cairnAwareSkillAction = 'replaced';
+      } else {
+        cairnAwareSkillAction = 'preserved';
+        warnings.push(
+          'Existing .claude/skills/cairn-aware.md is NOT cairn-marked — left as-is. ' +
+          'If you want the Cairn-aware protocol active, delete that file and re-run cairn install.'
+        );
+      }
+    } else {
+      fs.writeFileSync(skillPath, CAIRN_AWARE_SKILL, 'utf8');
+      cairnAwareSkillAction = 'created';
+    }
+  } catch (e) {
+    cairnAwareSkillAction = 'skipped';
+    warnings.push(`Failed to install cairn-aware skill: ${(e as Error).message}`);
+  }
+
   return {
     ok: true,
     mcpJsonAction,
     hookAction,
     petLauncherAction,
     cairnMdAction,
+    cairnAwareSkillAction,
     warnings,
   };
 }
@@ -390,6 +532,14 @@ function printReport(result: InstallResult, targetDir: string) {
     skipped: 'Skipped CAIRN.md scaffold',
   };
   lines.push(ok(cairnMdLabel[result.cairnMdAction]));
+
+  const skillLabel: Record<InstallResult['cairnAwareSkillAction'], string> = {
+    created: 'Installed .claude/skills/cairn-aware.md (CC will auto-load Cairn protocol)',
+    replaced: 'Updated existing cairn-aware skill',
+    preserved: 'Preserved existing .claude/skills/cairn-aware.md (not cairn-marked)',
+    skipped: 'Skipped cairn-aware skill install',
+  };
+  lines.push(ok(skillLabel[result.cairnAwareSkillAction]));
 
   if (result.warnings.length > 0) {
     lines.push('');

@@ -76,6 +76,17 @@ describe('fresh repo', () => {
     expect(cairnMd).not.toContain('## Current phase');
     expect(cairnMd).not.toContain('**Last updated**');
 
+    // Phase 4 (2026-05-14): .claude/skills/cairn-aware.md installed
+    expect(result.cairnAwareSkillAction).toBe('created');
+    const skillPath = path.join(tmpDir, '.claude', 'skills', 'cairn-aware.md');
+    expect(fs.existsSync(skillPath)).toBe(true);
+    const skill = fs.readFileSync(skillPath, 'utf8');
+    expect(skill).toContain('name: cairn-aware');
+    expect(skill).toContain('cairn-aware-skill-v1');
+    expect(skill).toContain('agent_inbox/<your-');
+    expect(skill).toContain('agent_brief');
+    expect(skill).toContain('cairn.task.block');
+
     // .mcp.json
     const mcpJson = JSON.parse(fs.readFileSync(path.join(tmpDir, '.mcp.json'), 'utf8'));
     expect(mcpJson).toHaveProperty('mcpServers.cairn-wedge');
@@ -249,6 +260,56 @@ describe('existing CAIRN.md', () => {
 
     const after = fs.readFileSync(path.join(tmpDir, 'CAIRN.md'), 'utf8');
     expect(after).toBe(userContent);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4 — .claude/skills/cairn-aware.md (2026-05-14)
+// ---------------------------------------------------------------------------
+
+describe('cairn-aware skill (Phase 4)', () => {
+  it('on rerun, replaces cairn-marked skill in place', () => {
+    makeFakeRepo();
+
+    // 1st install
+    const r1 = runInstall(baseOpts());
+    expect(r1.cairnAwareSkillAction).toBe('created');
+    const skillPath = path.join(tmpDir, '.claude', 'skills', 'cairn-aware.md');
+    expect(fs.existsSync(skillPath)).toBe(true);
+
+    // 2nd install — should replace (it's our marker)
+    const r2 = runInstall(baseOpts());
+    expect(r2.cairnAwareSkillAction).toBe('replaced');
+    const skill = fs.readFileSync(skillPath, 'utf8');
+    expect(skill).toContain('cairn-aware-skill-v1');
+  });
+
+  it('preserves a non-cairn skill of the same name (no overwrite of foreign content)', () => {
+    makeFakeRepo();
+    const userSkillDir = path.join(tmpDir, '.claude', 'skills');
+    fs.mkdirSync(userSkillDir, { recursive: true });
+    const userSkill = '---\nname: cairn-aware\ndescription: my own thing\n---\nmy content not theirs';
+    const skillPath = path.join(userSkillDir, 'cairn-aware.md');
+    fs.writeFileSync(skillPath, userSkill, 'utf8');
+
+    const result = runInstall(baseOpts());
+
+    expect(result.ok).toBe(true);
+    expect(result.cairnAwareSkillAction).toBe('preserved');
+    expect(result.warnings.some(w => w.includes('NOT cairn-marked'))).toBe(true);
+    const after = fs.readFileSync(skillPath, 'utf8');
+    expect(after).toBe(userSkill); // untouched
+  });
+
+  it('creates the .claude/skills directory when it does not exist', () => {
+    makeFakeRepo();
+    // No .claude dir at all yet
+    expect(fs.existsSync(path.join(tmpDir, '.claude'))).toBe(false);
+
+    const result = runInstall(baseOpts());
+
+    expect(result.cairnAwareSkillAction).toBe('created');
+    expect(fs.existsSync(path.join(tmpDir, '.claude', 'skills', 'cairn-aware.md'))).toBe(true);
   });
 });
 
