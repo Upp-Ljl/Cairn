@@ -305,6 +305,75 @@ section('7 Rule C wiring (stub LLM, fixture profile)');
 }
 
 // ---------------------------------------------------------------------------
+// 8 — Mode B slice 3: lane review detection
+// ---------------------------------------------------------------------------
+section('8 Mode B lane → REVIEW when current candidate is WAITING_REVIEW');
+{
+  const dbB = new Database(':memory:');
+  dbB.exec(`
+    CREATE TABLE tasks (
+      task_id TEXT PRIMARY KEY, intent TEXT NOT NULL, state TEXT NOT NULL,
+      parent_task_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      created_by_agent_id TEXT, metadata_json TEXT
+    );
+    CREATE TABLE blockers (
+      blocker_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, question TEXT,
+      status TEXT NOT NULL, raised_at INTEGER NOT NULL, answered_at INTEGER, answer TEXT
+    );
+    CREATE TABLE outcomes (
+      outcome_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE,
+      criteria_json TEXT, status TEXT NOT NULL,
+      evaluated_at INTEGER, evaluation_summary TEXT, grader_agent_id TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, metadata_json TEXT
+    );
+    CREATE TABLE scratchpad (
+      key TEXT PRIMARY KEY, value_json TEXT, value_path TEXT, task_id TEXT,
+      expires_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+  `);
+  const tablesB = new Set(['tasks', 'blockers', 'outcomes', 'scratchpad']);
+  const AGENT_B = 'cairn-session-ccc33333';
+  const NOW_B = Date.now();
+  // Two tasks: first WAITING_REVIEW (should trigger), second RUNNING
+  dbB.prepare(`INSERT INTO tasks VALUES (?, ?, ?, NULL, ?, ?, ?, NULL)`)
+    .run('t_lane_a', 'auth refactor', 'WAITING_REVIEW', NOW_B - 60000, NOW_B - 1000, AGENT_B);
+  dbB.prepare(`INSERT INTO tasks VALUES (?, ?, ?, NULL, ?, ?, ?, NULL)`)
+    .run('t_lane_b', 'storage refactor', 'RUNNING', NOW_B - 30000, NOW_B - 1000, AGENT_B);
+  // Pre-seed a lane in scratchpad
+  const lane = require(path.join(dsRoot, 'cockpit-lane.cjs'));
+  const r = lane.createLane(dbB, 'p_modeb', ['t_lane_a', 't_lane_b'], AGENT_B);
+  ok(r.ok === true, 'lane created');
+  // Promote to RUNNING so the tick will examine it
+  const laneRow = dbB.prepare('SELECT value_json FROM scratchpad WHERE key = ?').get(r.key);
+  const L = JSON.parse(laneRow.value_json);
+  L.state = 'RUNNING';
+  dbB.prepare('UPDATE scratchpad SET value_json = ? WHERE key = ?').run(JSON.stringify(L), r.key);
+
+  const regB = {
+    projects: [{ id: 'p_modeb', label: 'mode-b test', project_root: '/tmp/modeb', db_path: '/tmp/modeb.db', agent_id_hints: [AGENT_B] }],
+  };
+  const stubEnsureB = (_p) => ({ db: dbB, tables: tablesB });
+  const fakeMentorProfile = { loadProfile: () => ({ exists: false }) };
+  const fakeAgentBrief = { readAgentBriefs: () => [] };
+  const tickResult = tick.runOnce({
+    reg: regB, ensureDbHandle: stubEnsureB, projectQueries, mentorPolicy, registry,
+    mentorProfile: fakeMentorProfile, mentorAgentBrief: fakeAgentBrief,
+    ruleCEnabled: false,  // disable Rule C to isolate Mode B testing
+  });
+  // Lane should now be in REVIEW state
+  const updated = lane.getLane(dbB, 'p_modeb', r.id);
+  ok(updated.state === 'REVIEW', `lane transitioned to REVIEW (got ${updated.state})`);
+  // A Mentor nudge should have been emitted for the lane
+  const nudges = dbB.prepare("SELECT key, value_json FROM scratchpad WHERE key LIKE 'mentor/p_modeb/nudge/%'").all();
+  ok(nudges.length === 1, `1 lane-review nudge written (got ${nudges.length})`);
+  const body = JSON.parse(nudges[0].value_json);
+  ok(body.rule === 'B-mode' && body.lane_id === r.id, 'nudge tagged rule=B-mode + lane_id');
+  ok(body.message && body.message.includes('ready for your review'), 'nudge body mentions review');
+  ok(tickResult.decisions >= 1, 'decisions counter incremented');
+  dbB.close();
+}
+
+// ---------------------------------------------------------------------------
 // 6 — start() is idempotent; stop() halts
 // ---------------------------------------------------------------------------
 section('6 start/stop lifecycle');

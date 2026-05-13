@@ -251,6 +251,47 @@ function runOnce(deps) {
           }
         }
       }
+
+      // ----- Mode B slice 3: lane review detection.
+      // For each PENDING/RUNNING lane, check if current candidate task
+      // is WAITING_REVIEW. If so, transition lane state to REVIEW + emit
+      // a Mentor nudge so the user sees "Lane X ready for your review".
+      // Lane NEVER auto-advances past REVIEW (§1.3 #4a) — user must click.
+      try {
+        const cockpitLane = deps.cockpitLane || require('./cockpit-lane.cjs');
+        const lanes = cockpitLane.queryLanes(entry.db, project.id, { limit: 20 });
+        for (const L of lanes) {
+          if (L.state !== 'PENDING' && L.state !== 'RUNNING') continue;
+          if (!Array.isArray(L.candidates) || L.candidates.length === 0) continue;
+          const currentTaskId = L.candidates[L.current_idx];
+          if (!currentTaskId) continue;
+          let taskRow = null;
+          try {
+            taskRow = entry.db.prepare('SELECT task_id, state FROM tasks WHERE task_id = ?').get(currentTaskId);
+          } catch (_e) { /* tasks table missing — skip */ }
+          if (!taskRow) continue;
+          if (taskRow.state !== 'WAITING_REVIEW') continue;
+          // Transition lane → REVIEW + emit mentor nudge once.
+          const updated = Object.assign({}, L, { state: 'REVIEW', updated_at: Date.now() });
+          try {
+            entry.db.prepare(`UPDATE scratchpad SET value_json = ?, updated_at = ? WHERE key = ?`)
+              .run(JSON.stringify(updated), Date.now(), cockpitLane.laneKey(project.id, L.id));
+            deps.mentorPolicy.emitNudge(entry.db, project.id, {
+              message: `Lane ${L.id.slice(0, 10)}… candidate ${currentTaskId} ready for your review (${L.current_idx + 1}/${L.candidates.length})`,
+              to_agent_id: null,
+              task_id: currentTaskId,
+              rule: 'B-mode',
+              layer: 'lane',
+              source: 'mode-b-tick',
+              lane_id: L.id,
+            });
+            out.decisions++;
+            if (typeof deps.onDecision === 'function') {
+              try { deps.onDecision(project.id, { rule: 'B-mode', action: 'lane_to_review', lane_id: L.id, task_id: currentTaskId }); } catch (_e) {}
+            }
+          } catch (_e) { /* skip — non-fatal */ }
+        }
+      } catch (_e) { /* lane module missing or other transient — ignore */ }
     } catch (e) {
       out.errors.push({ project_id: project && project.id, error: e && e.message ? e.message : String(e) });
     }
