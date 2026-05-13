@@ -42,6 +42,11 @@ const api = {
   // (tier-B mutation per PRODUCT.md §12 D9.1).
   cockpitRewindPreview: (input) => ipcRenderer.invoke('cockpit-rewind-preview', input || {}),
   cockpitRewindTo:      (input) => ipcRenderer.invoke('cockpit-rewind-to', input || {}),
+  // A2.2 Dispatch Wire: wire a Mentor todo item to Cairn's dispatch_requests
+  // primitive (tier-A first-class, D9.1). Panel calls this when the user
+  // presses "派给 ▾" and confirms a target agent. UI integration (dropdown
+  // + toast + badge rendering) is wired in A4 phase.
+  cockpitTodoDispatch: (input) => ipcRenderer.invoke('cockpit-todo-dispatch', input || {}),
   // Cockpit redesign (Phase 5): acknowledge an escalation (Module 5).
   cockpitAckEscalation: (input) => ipcRenderer.invoke('cockpit-ack-escalation', input || {}),
   // Cockpit redesign (Phase 6): per-project cockpit settings + LLM helpers.

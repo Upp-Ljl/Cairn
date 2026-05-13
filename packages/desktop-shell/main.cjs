@@ -52,6 +52,7 @@ const projectQueries = require('./project-queries.cjs');
 const cockpitState = require('./cockpit-state.cjs');
 const cockpitSteer = require('./cockpit-steer.cjs');
 const cockpitRewind = require('./cockpit-rewind.cjs');
+const cockpitDispatch = require('./cockpit-dispatch.cjs');
 const mentorPolicy = require('./mentor-policy.cjs');
 const llmHelpers = require('./cockpit-llm-helpers.cjs');
 const mentorTick = require('./mentor-tick.cjs');
@@ -993,6 +994,32 @@ ipcMain.handle('cockpit-todo-add', (_e, input) => {
     return { ok: false, error: 'write_failed: ' + (e && e.message ? e.message : String(e)) };
   }
   return { ok: true, key };
+});
+
+// A2.2 — Dispatch Wire. Panel "派给 ▾" button wires into Cairn's
+// dispatch_requests kernel primitive (D9.1 tier-A, no env flag gate).
+// Writes one PENDING dispatch row + marks the scratchpad todo entry as
+// 'dispatched'. Kernel R1–R6 fallback rules run on their own cadence.
+ipcMain.handle('cockpit-todo-dispatch', (_e, input) => {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, error: 'input_required' };
+  }
+  const { project_id, todo_id, source, target_agent_id, label, why } = input;
+  if (!project_id) return { ok: false, error: 'project_id_required' };
+  const proj = reg.projects.find(p => p.id === project_id);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  // Use a write handle (dispatch_requests is a mutation).
+  const wdb = openWriteDb(proj.db_path);
+  const entry = ensureDbHandle(proj.db_path);
+  const tables = entry ? entry.tables : new Set();
+  return cockpitDispatch.dispatchTodo(wdb, tables, {
+    project_id,
+    todo_id,
+    source,
+    target_agent_id,
+    label,
+    why,
+  });
 });
 
 // Cockpit redesign Phase 4 — Module 4 REWIND.
