@@ -3297,6 +3297,7 @@ let lastTasks = [];
  *  paint the L1 grid synchronously instead of waiting up to 1s for the
  *  next poll, which created a "half-return" blank flash on ESC. */
 let lastProjectsPayload = null;
+let lastCockpitState = null;
 
 function setupTabs() {
   const tabs = document.querySelectorAll('.tab');
@@ -3639,6 +3640,7 @@ async function poll() {
         ? await window.cairn.getCockpitState(selectedProject.id, {})
         : null;
       renderHeaderForView();
+      lastCockpitState = state;
       renderCockpit(state);
       renderCockpitTabs(lastProjectsPayload, selectedProject);
     } else if (currentView === 'timeline') {
@@ -4187,23 +4189,57 @@ function renderTodolist(todos) {
   });
   listEl.innerHTML = rows.join('');
 
-  // Wire up action buttons — stub for A2.1; A2.2 will hook dispatch_requests.
+  // Wire up action buttons — A2.2 dispatch_requests integration.
+  // Approve/派给 → pick target session → cockpit-todo-dispatch IPC.
   listEl.querySelectorAll('.cockpit-todo-action-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const row = btn.closest('.cockpit-todo-row');
-      if (row) {
-        // Highlight clicked row temporarily
-        document.querySelectorAll('.cockpit-todo-row.highlighted').forEach(r => r.classList.remove('highlighted'));
-        row.classList.add('highlighted');
-        setTimeout(() => row.classList.remove('highlighted'), 1200);
+      const todoId = btn.getAttribute('data-todo-id');
+      const source = btn.getAttribute('data-todo-source');
+      // Find the matching todo from latest state for label/why context.
+      const todo = (lastCockpitState && lastCockpitState.todolist || [])
+        .find(t => t.todo_id === todoId);
+      if (!todo || !selectedProject) return;
+      // Build target-session candidate list. For agent_proposal default
+      // back to the proposing agent; otherwise let user pick from active
+      // sessions or type an id.
+      const sessions = (lastCockpitState && lastCockpitState.sessions || [])
+        .filter(s => s.state === 'working' || s.state === 'idle' || s.state === 'blocked');
+      let target = todo.agent_id || (sessions[0] && sessions[0].agent_id) || null;
+      if (sessions.length > 1 || !target) {
+        const choices = sessions.map(s => `${s.display_name || s.agent_id} [${s.state}]`).join('\n');
+        const promptMsg = `Dispatch to which agent_id?\n\nActive sessions:\n${choices || '(none)'}`;
+        target = window.prompt(promptMsg, target || '');
+        if (!target) return;
       }
-      // A2.1 stub: log intent; A2.2 wires dispatch_requests.
-      console.log('[cairn todo] action stub', {
-        todo_id: btn.getAttribute('data-todo-id'),
-        source: btn.getAttribute('data-todo-source'),
-        action: btn.textContent.trim(),
+      if (row) row.classList.add('highlighted');
+      const res = await window.cairn.cockpitTodoDispatch({
+        project_id: selectedProject.id,
+        todo_id: todoId,
+        source,
+        target_agent_id: target,
+        label: todo.label,
+        why: todo.why || null,
       });
+      if (res && res.ok) {
+        if (row) {
+          row.classList.add('dispatched');
+          row.querySelector('.cockpit-todo-action-btn').textContent = '✓ dispatched';
+          row.querySelector('.cockpit-todo-action-btn').disabled = true;
+        }
+      } else {
+        const err = (res && res.error) || 'dispatch_failed';
+        if (row) {
+          const lbl = row.querySelector('.cockpit-todo-action-btn');
+          if (lbl) lbl.textContent = '✗ ' + err;
+          setTimeout(() => {
+            const original = source === 'agent_proposal' ? '派给 ▾' : 'Approve →';
+            if (lbl) { lbl.textContent = original; }
+            row.classList.remove('highlighted');
+          }, 2500);
+        }
+      }
     });
   });
 }
