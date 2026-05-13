@@ -94,6 +94,18 @@ timeline events.
 
 ---
 
+## 4.5 Gotcha — pass plain object, NOT pre-stringified JSON
+
+`cairn.scratchpad.write` accepts `content: any` and serializes it once.
+If you pass a pre-stringified JSON string, the result is double-encoded
+(stored as `"\"{\\\"ts\\\":...}\""`), and the renderer parses it once
+back to a string, not an object. **Always pass a plain object** as
+`content`. Real-agent dogfood 2026-05-14 caught this.
+
+The `desktop-shell::querySessionTimeline` renderer is defensively
+double-parse aware (handles both cases) — but writing correctly avoids
+the cost of the second parse and surfaces a smaller value_json row.
+
 ## 5. Agent-side pseudocode
 
 ```javascript
@@ -104,14 +116,14 @@ const agentId = process.env.CAIRN_SESSION_AGENT_ID;
 // 2. Write a "start" event before the work begins
 await cairn.scratchpad.write({
   key: `session_timeline/${agentId}/${startUlid}`,
-  value: JSON.stringify({
+  content: {
     ts: Date.now(),
     kind: "start",
     label: "refactor auth tests — extract shared setup",
     agent_id: agentId,
     task_id: currentTaskId,   // omit if no task scope
     source: "agent"
-  })
+  }
 });
 
 // ... do the work ...
@@ -120,7 +132,7 @@ await cairn.scratchpad.write({
 const doneUlid = newUlid();
 await cairn.scratchpad.write({
   key: `session_timeline/${agentId}/${doneUlid}`,
-  value: JSON.stringify({
+  content: {
     ts: Date.now(),
     kind: "done",
     label: "auth tests refactored — 51/51 passing",
@@ -128,7 +140,7 @@ await cairn.scratchpad.write({
     task_id: currentTaskId,
     parent_event_id: startUlid,
     source: "agent"
-  })
+  }
 });
 ```
 
@@ -147,13 +159,13 @@ notes the resulting ULID:
 const spawnUlid = newUlid();
 await cairn.scratchpad.write({
   key: `session_timeline/${parentAgentId}/${spawnUlid}`,
-  value: JSON.stringify({
+  content: {
     ts: Date.now(),
     kind: "spawn",
     label: "spawn subagent: investigate test failures in auth module",
     agent_id: parentAgentId,
     source: "agent"
-  })
+  }
 });
 ```
 
@@ -176,14 +188,14 @@ The subagent writes its first `kind: "start"` event with `parent_event_id = <spa
 const subStartUlid = newUlid();
 await cairn.scratchpad.write({
   key: `session_timeline/${subAgentId}/${subStartUlid}`,
-  value: JSON.stringify({
+  content: {
     ts: Date.now(),
     kind: "start",
     label: "investigate auth test failures",
     agent_id: subAgentId,
     parent_event_id: spawnUlid,   // <-- links to parent's spawn event
     source: "agent"
-  })
+  }
 });
 ```
 
@@ -195,14 +207,14 @@ After the subagent's result is available (e.g. from `subagent/{agent_id}/result`
 const returnUlid = newUlid();
 await cairn.scratchpad.write({
   key: `session_timeline/${parentAgentId}/${returnUlid}`,
-  value: JSON.stringify({
+  content: {
     ts: Date.now(),
     kind: "subagent_return",
     label: "subagent returned: 3 root causes found in auth setup",
     agent_id: parentAgentId,
     parent_event_id: spawnUlid,   // closes the spawn branch
     source: "agent"
-  })
+  }
 });
 ```
 

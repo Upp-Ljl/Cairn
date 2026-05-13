@@ -169,17 +169,22 @@ The panel reconstructs your work history from scratchpad keys under
 - Pure reads: \`Read\`, \`Grep\`, \`Glob\`, \`cairn.scratchpad.read\`, \`cairn.task.get\`
 - Status / heartbeat queries
 
+**IMPORTANT: pass a plain object as \`content\`, NOT a pre-stringified
+JSON string** — the tool serializes once for you. Double-stringifying
+creates a JSON-string-of-JSON-string that the panel renderer has to
+double-parse (it does, defensively, but the raw payload bloats).
+
 **start event** (before work):
 \`\`\`
 cairn.scratchpad.write({
   key: "session_timeline/<your-agent-id>/<startUlid>",
-  value: JSON.stringify({
+  content: {
     ts: Date.now(), kind: "start",
     label: "refactor auth tests setup",
     agent_id: "<your-agent-id>",
     task_id: "<task_id if any>",
     source: "agent"
-  })
+  }
 })
 \`\`\`
 
@@ -187,14 +192,14 @@ cairn.scratchpad.write({
 \`\`\`
 cairn.scratchpad.write({
   key: "session_timeline/<your-agent-id>/<doneUlid>",
-  value: JSON.stringify({
+  content: {
     ts: Date.now(), kind: "done",
     label: "auth tests refactored — 51/51 passing",
     agent_id: "<your-agent-id>",
     task_id: "<task_id if any>",
     parent_event_id: "<startUlid>",
     source: "agent"
-  })
+  }
 })
 \`\`\`
 
@@ -231,14 +236,14 @@ to you (or a target session) via \`dispatch_requests\`.
 \`\`\`
 cairn.scratchpad.write({
   key: "agent_proposal/<your-agent-id>/<ulid>",
-  value: JSON.stringify({
+  content: {
     ts: Date.now(),
     label: "<≤200 char: what you suggest doing next>",
     agent_id: "<your-cairn-session-agent-id>",
     task_id: "<current task_id if any, or omit>",
     why: "<why this matters — optional, ≤120 chars>",
     source: "agent"
-  })
+  }
 })
 \`\`\`
 

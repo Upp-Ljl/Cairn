@@ -345,6 +345,14 @@ function querySessionTimeline(db, tables, agentId, opts) {
     const ulid = r.key.slice(prefix.length);
     let body = null;
     try { body = JSON.parse(r.value_json || '{}'); } catch (_e) { continue; }
+    // A1.1 protocol allows agent to pass plain object OR pre-stringified JSON.
+    // cairn.scratchpad.write stringifies whatever it receives, so a
+    // pre-stringified payload comes back as a JSON string after one parse —
+    // attempt a second parse to recover. Real-agent dogfood 2026-05-14
+    // discovered this; defensive handling beats educating every caller.
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (_e) { /* leave as string → skip below */ }
+    }
     if (!body || typeof body !== 'object') continue;
     events.push({
       event_id: ulid,

@@ -177,6 +177,25 @@ section('6 limit cap');
 }
 
 // ---------------------------------------------------------------------------
+section('6b defensive double-encoded value_json (caller pre-stringified)');
+{
+  const db = freshDb(false);
+  const TABLES = new Set(['scratchpad']);
+  const now = Date.now();
+  // Simulate the cairn.scratchpad.write double-encoding bug discovered by
+  // real-agent dogfood 2026-05-14: a JSON string wrapped again by tool serialization.
+  const inner = JSON.stringify({ ts: now, kind: 'start', label: 'double-encoded test', agent_id: AGENT, source: 'agent' });
+  const doubleEncoded = JSON.stringify(inner);  // → "\"{\\\"ts\\\":...}\""
+  db.prepare('INSERT INTO scratchpad (key, value_json, created_at, updated_at) VALUES (?, ?, ?, ?)')
+    .run(`session_timeline/${AGENT}/01JBB1`, doubleEncoded, now, now);
+  const events = cockpit.querySessionTimeline(db, TABLES, AGENT);
+  ok(events.length === 1, 'double-encoded row recovered (1 event)');
+  ok(events[0].kind === 'start', 'kind survives double-parse');
+  ok(events[0].label === 'double-encoded test', 'label survives');
+  db.close();
+}
+
+// ---------------------------------------------------------------------------
 section('7 mentor-sourced events tagged');
 {
   const db = freshDb(false);
