@@ -35,6 +35,8 @@ const api = {
   // Cockpit redesign (Phase 3): inject steer message into agent inbox +
   // copy to clipboard. Tier-A first-class mutation (D9.1 PRODUCT.md §12).
   cockpitSteer:       (input) => ipcRenderer.invoke('cockpit-steer', input || {}),
+  // M2 Todolist (A2.1): add a user_todo scratchpad entry. Tier-A mutation.
+  cockpitTodoAdd:     (input) => ipcRenderer.invoke('cockpit-todo-add', input || {}),
   // Cockpit redesign (Phase 4): rewind preview + rewind action. Caller
   // surfaces an inline confirm dialog before invoking rewindTo
   // (tier-B mutation per PRODUCT.md §12 D9.1).

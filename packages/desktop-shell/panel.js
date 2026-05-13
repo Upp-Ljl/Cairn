@@ -4030,6 +4030,9 @@ function renderCockpit(state) {
       : '没有活跃 agent 可发话';
   }
 
+  // M2 Todolist (A2.1) — render three-source todo entries.
+  renderTodolist(state.todolist || []);
+
   // Module 3 → now Sessions (panel-cockpit-redesign 2026-05-14 A3-part2).
   // Renders per-session cards from state.sessions (querySessions output).
   // State pills: working / blocked / idle / stale. idle is first-class.
@@ -4113,6 +4116,72 @@ function renderCockpit(state) {
       needsListEl.innerHTML = rows.join('');
     }
   }
+}
+
+/**
+ * Render the M2 Todolist from state.todolist entries.
+ * Source labels:
+ *   agent_proposal → 🤖 <8-char agent prefix>   [派给 ▾]
+ *   mentor_todo    → 🧑‍🏫 mentor               [Approve →]
+ *   user_todo      → 🐤 you                     [Approve →]
+ * Buttons are stub — A2.2 wires dispatch_requests.
+ */
+function renderTodolist(todos) {
+  const listEl = document.getElementById('cockpit-todolist-list');
+  if (!listEl) return;
+  if (!todos || todos.length === 0) {
+    listEl.innerHTML =
+      '<div class="cockpit-todolist-empty">No todos yet — agent self-suggestions and Mentor recommendations appear here</div>';
+    return;
+  }
+  const rows = todos.map(t => {
+    const src = t.source || 'user_todo';
+    let pillText, pillClass, btnText, btnClass;
+    if (src === 'agent_proposal') {
+      const shortId = (t.agent_id || '').replace(/^cairn-session-/i, '').slice(0, 8) || 'agent';
+      pillText = `🤖 ${escapeHtml(shortId)}`;
+      pillClass = 'agent_proposal';
+      btnText = '派给 ▾';
+      btnClass = 'dispatch';
+    } else if (src === 'mentor_todo') {
+      pillText = '🧑‍🏫 mentor';
+      pillClass = 'mentor_todo';
+      btnText = 'Approve →';
+      btnClass = 'approve';
+    } else {
+      pillText = '🐤 you';
+      pillClass = 'user_todo';
+      btnText = 'Approve →';
+      btnClass = 'approve';
+    }
+    const todoId = escapeHtml(t.todo_id || '');
+    return `<div class="cockpit-todo-row" data-todo-id="${todoId}" data-todo-source="${escapeHtml(src)}">
+      <span class="cockpit-todo-source-pill ${pillClass}">${pillText}</span>
+      <span class="cockpit-todo-label" title="${escapeHtml(t.label || '')}">${escapeHtml(t.label || '(no label)')}</span>
+      <button class="cockpit-todo-action-btn ${btnClass}" data-todo-id="${todoId}" data-todo-source="${escapeHtml(src)}" type="button">${btnText}</button>
+    </div>`;
+  });
+  listEl.innerHTML = rows.join('');
+
+  // Wire up action buttons — stub for A2.1; A2.2 will hook dispatch_requests.
+  listEl.querySelectorAll('.cockpit-todo-action-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = btn.closest('.cockpit-todo-row');
+      if (row) {
+        // Highlight clicked row temporarily
+        document.querySelectorAll('.cockpit-todo-row.highlighted').forEach(r => r.classList.remove('highlighted'));
+        row.classList.add('highlighted');
+        setTimeout(() => row.classList.remove('highlighted'), 1200);
+      }
+      // A2.1 stub: log intent; A2.2 wires dispatch_requests.
+      console.log('[cairn todo] action stub', {
+        todo_id: btn.getAttribute('data-todo-id'),
+        source: btn.getAttribute('data-todo-source'),
+        action: btn.textContent.trim(),
+      });
+    });
+  });
 }
 
 function renderCockpitTabs(payload, sel) {
@@ -4216,6 +4285,56 @@ function setupCockpit() {
         }
       } finally {
         steerSend.disabled = false;
+      }
+    });
+  }
+
+  // M2 Todolist add-input wiring (A2.1). Writes user_todo/<project_id>/<ulid>
+  // via IPC cockpit-todo-add. Tier-A mutation (writes scratchpad only).
+  const todoAddInput = document.getElementById('cockpit-todo-add-input');
+  const todoAddSend = document.getElementById('cockpit-todo-add-send');
+  const todoAddStatus = document.getElementById('cockpit-todo-add-status');
+  if (todoAddInput) {
+    todoAddInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && todoAddSend && !todoAddSend.disabled) {
+        todoAddSend.click();
+      }
+    });
+  }
+  if (todoAddSend) {
+    todoAddSend.addEventListener('click', async () => {
+      const label = (todoAddInput && todoAddInput.value || '').trim();
+      if (!label) {
+        if (todoAddStatus) { todoAddStatus.textContent = '请输入 todo 内容'; todoAddStatus.className = 'cockpit-todo-add-status error'; }
+        return;
+      }
+      if (label.length > 200) {
+        if (todoAddStatus) { todoAddStatus.textContent = '最多 200 字'; todoAddStatus.className = 'cockpit-todo-add-status error'; }
+        return;
+      }
+      if (!selectedProject) {
+        if (todoAddStatus) { todoAddStatus.textContent = '没有选中项目'; todoAddStatus.className = 'cockpit-todo-add-status error'; }
+        return;
+      }
+      todoAddSend.disabled = true;
+      if (todoAddStatus) { todoAddStatus.textContent = '添加中…'; todoAddStatus.className = 'cockpit-todo-add-status info'; }
+      try {
+        const res = await window.cairn.cockpitTodoAdd({
+          project_id: selectedProject.id,
+          label,
+        });
+        if (res && res.ok) {
+          if (todoAddStatus) { todoAddStatus.textContent = '已添加'; todoAddStatus.className = 'cockpit-todo-add-status'; }
+          if (todoAddInput) todoAddInput.value = '';
+          poll().catch(() => {});
+          setTimeout(() => { if (todoAddStatus) todoAddStatus.textContent = ''; }, 3000);
+        } else {
+          if (todoAddStatus) { todoAddStatus.textContent = `添加失败: ${(res && res.error) || 'unknown'}`; todoAddStatus.className = 'cockpit-todo-add-status error'; }
+        }
+      } catch (e) {
+        if (todoAddStatus) { todoAddStatus.textContent = `error: ${(e && e.message) || e}`; todoAddStatus.className = 'cockpit-todo-add-status error'; }
+      } finally {
+        todoAddSend.disabled = false;
       }
     });
   }
