@@ -54,6 +54,7 @@ const cockpitSteer = require('./cockpit-steer.cjs');
 const cockpitRewind = require('./cockpit-rewind.cjs');
 const mentorPolicy = require('./mentor-policy.cjs');
 const llmHelpers = require('./cockpit-llm-helpers.cjs');
+const mentorTick = require('./mentor-tick.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -2422,6 +2423,24 @@ app.whenReady().then(() => {
     `mutations=${MUTATIONS_ENABLED ? 'on(dev)' : 'off'} ` +
     `tray=on projects=${reg.projects.length} dbs=${dbHandles.size}`
   );
+
+  // Start Mentor auto-tick (Phase 8 — the engine behind "agent 在执行 ·
+  // Mentor 在引导 · 你可以走开"). Disabled in BOOT_TEST mode because the
+  // smoke harness quits in ~3s and the tick adds noise. Disabled in
+  // LEGACY mode because the legacy Inspector predates the cockpit
+  // policy. Both gates are conservative — flip if needed.
+  if (!LEGACY_MODE && !process.env.CAIRN_DESKTOP_BOOT_TEST) {
+    mentorTick.start({
+      // reg is reassigned by addProject/setGoal/etc handlers, so use a
+      // getter that always returns the latest binding. Other deps
+      // (ensureDbHandle, projectQueries, mentorPolicy, registry) are
+      // module-level immutable.
+      get reg() { return reg; },
+      ensureDbHandle, projectQueries, mentorPolicy, registry,
+    });
+    // eslint-disable-next-line no-console
+    console.log(`cairn mentor auto-tick — started (every ${mentorTick.TICK_INTERVAL_MS / 1000}s)`);
+  }
 
   // Boot smoke: when CAIRN_DESKTOP_BOOT_TEST=1 is set, run a few poll
   // ticks to exercise tray + getProjectsList + IPC handlers, then quit

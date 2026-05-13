@@ -4,6 +4,46 @@ All notable changes to Cairn are documented here. Format roughly follows [Keep a
 
 ---
 
+## [0.2.0-cockpit] — 2026-05-13 (Unreleased)
+
+**Panel cockpit redesign — single-project mission-control surface.**
+
+The L2 (single project) view is rebuilt from the v0.1 "5-tab feature museum" into a **driving-cockpit** layout: agent is the engine, Cairn is the dashboard + wheel + emergency brake + radio. The user can walk away; Cairn's Mentor keeps the agent on goal and only escalates when stuck.
+
+### What's new
+
+- **5 cockpit modules** in `view-cockpit`: state strip, steer-to-agent input box, time-ordered activity feed, rewind safety list, "needs you" escalation surface
+- **Project tabs** above the modules — multi-project visibility preserved (5+ projects parallel)
+- **Steer module** (Module 2): inject a message into the agent's live session via `scratchpad:agent_inbox/<agent>/<ulid>` + clipboard fallback (D9.1 tier-A first-class mutation)
+- **Rewind module** (Module 4): preview + perform `git checkout <sha>` with safety stash, inline confirm dialog (D9.1 tier-B)
+- **Mentor supervisor** (`mentor-policy.cjs`): 5 deterministic escalation rules (BLOCKED-question, time-budget, abort-keyword, error-repetition, outcomes-fail) — writes nudges to `scratchpad:mentor/<pid>/nudge/<ulid>`, escalations to `scratchpad:escalation/<pid>/<ulid>`
+- **Mentor auto-tick** (`mentor-tick.cjs`): the engine — `setInterval(runOnce, 30s)` iterates projects → RUNNING tasks → fires rules D/E/G; rules B/F deferred until tail.log scanning lands
+- **4 LLM helpers** (`cockpit-llm-helpers.cjs`): tail.log summary (low-cost ON), conflict diff explainer (low-cost ON), inbox smart-sort (high-cost OFF), goal-input assist (high-cost OFF). Per-project cost-posture settings in registry
+- **Onboarding**: empty-state CTAs (Add project · Define goal · What is Cairn?) + in-panel README overlay; goal-required gate (no goal → Mentor doesn't tick)
+- **Keyboard navigation**: `j`/`k` activity scroll, `/` focus steer, `?` open help, `Esc` back to projects
+- **PRODUCT.md patches**: §0 audience expansion (programmer + non-developer equal); §1.3 cockpit architecture clause + PoC-3 boundary precision; §12 D9 rewritten to **D9.1 "responsible mutation"** 3-tier (visible/revokable / inline confirm / env-flag legacy)
+
+### Fixes (live-dogfood discoveries)
+
+- `[hidden]{display:none !important}` so `display:flex` author rules don't beat the `hidden` attribute (the ESC half-return bug, formerly PR #7)
+- `cockpit-state.cjs`: query real `outcomes` columns (`evaluated_at`/`updated_at`/`created_at`); old code referenced non-existent `submitted_at` and threw on every getCockpitState call
+- `cockpit-state.cjs`: filter DEAD agents out of cockpit `agents` list — historical sessions from past months no longer pollute the live count
+- Layout: Module 3 (activity feed) gets the real estate via `flex: 1 1 0 + min-height: 260px`; other modules tightened
+- DB path fallback: `/dev/null` and `(unknown)` registry sentinels resolve to the global default DB rather than rendering empty cockpit
+
+### Tests
+
+411 daemon + 359 mcp-server (pre-existing) — 16 (auto-tick) + 48 (cockpit-state) + 22 (steer) + 25 (rewind) + 23 (mentor-policy) + 30 (LLM helpers) + 53 (e2e dogfood) + 4 (real-LLM dogfood) = **1031 total green**. Real-LLM dogfood verified provider wiring end-to-end (hit http_429 today — infrastructure verified, content verification on next-rate-window).
+
+### Known gaps (next phase)
+
+- Mentor Rules A (LLM-judged ambiguity) and C (off-goal drift) — Phase-6 LLM hooks; current placeholders return `no_action_phase_5`
+- Per-project settings UI — settings persist in `~/.cairn/projects.json` but no panel UI yet; manual JSON edit required
+- Onboarding wizard for non-developer users — basic CTAs in place; guided walkthrough not built
+- Tail.log scanning for Rules B/F (compile errors, abort keywords in raw agent output)
+
+---
+
 ## [0.1.0] — 2026-05-12
 
 **First public release.** The kernel + product surfaces required to manage agent work on a local machine are shipped and verified.
