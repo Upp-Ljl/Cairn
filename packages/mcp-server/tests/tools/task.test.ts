@@ -550,3 +550,221 @@ describe('cairn.task.submit_for_review — Phase 3 acceptance', () => {
     expect(err.errors!.length).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Kernel auto-instrumentation: session_timeline events written by task tools
+// ---------------------------------------------------------------------------
+
+describe('kernel auto-instrumentation — session_timeline events', () => {
+  let cairnRoot: string;
+  let ws: Workspace;
+
+  beforeEach(() => {
+    cairnRoot = mkdtempSync(join(tmpdir(), 'cairn-task-tl-'));
+    ws = openWorkspace({ cairnRoot });
+  });
+
+  afterEach(() => {
+    ws.db.close();
+    rmSync(cairnRoot, { recursive: true, force: true });
+  });
+
+  /** Helper: SELECT all session_timeline rows for a given agentId, sorted by key */
+  function readTimelineRows(agentId: string): Array<{ key: string; value_json: string }> {
+    return ws.db
+      .prepare(`SELECT key, value_json FROM scratchpad WHERE key LIKE 'session_timeline/' || ? || '/%' ORDER BY key ASC`)
+      .all(agentId) as Array<{ key: string; value_json: string }>;
+  }
+
+  function makeRunningTask(intent = 'tl task') {
+    const r = toolCreateTask(ws, { intent });
+    toolStartAttempt(ws, { task_id: r.task.task_id });
+    return r.task.task_id;
+  }
+
+  // 1. task.create writes a 'start' timeline event
+  it('task.create writes a "start" kernel timeline event', () => {
+    const agentId = ws.agentId;
+    const r = toolCreateTask(ws, { intent: 'build the thing' });
+    const rows = readTimelineRows(agentId);
+    // At minimum 1 row from create (start_attempt not called yet)
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const startRow = rows.find((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.kind === 'start' && p.task_id === r.task.task_id;
+    });
+    expect(startRow).toBeDefined();
+    const evt = JSON.parse(startRow!.value_json);
+    expect(evt.source).toBe('kernel');
+    expect(evt.label).toContain('build the thing');
+    expect(evt.agent_id).toBe(agentId);
+  });
+
+  // 2. task.start_attempt writes a 'progress' timeline event
+  it('task.start_attempt writes a "progress" kernel timeline event', () => {
+    const r = toolCreateTask(ws, { intent: 'start attempt test' });
+    const agentId = ws.agentId;
+    toolStartAttempt(ws, { task_id: r.task.task_id });
+
+    const rows = readTimelineRows(agentId);
+    const progressRow = rows.find((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.kind === 'progress' && p.task_id === r.task.task_id;
+    });
+    expect(progressRow).toBeDefined();
+    const evt = JSON.parse(progressRow!.value_json);
+    expect(evt.label).toBe('started attempt');
+    expect(evt.source).toBe('kernel');
+  });
+
+  // 3. task.cancel writes a 'done' timeline event
+  it('task.cancel writes a "done" kernel timeline event with (cancelled) label', () => {
+    const r = toolCreateTask(ws, { intent: 'to be cancelled' });
+    const agentId = ws.agentId;
+    toolCancelTask(ws, { task_id: r.task.task_id, reason: 'user stopped it' });
+
+    const rows = readTimelineRows(agentId);
+    const doneRow = rows.find((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.kind === 'done' && p.task_id === r.task.task_id;
+    });
+    expect(doneRow).toBeDefined();
+    const evt = JSON.parse(doneRow!.value_json);
+    expect(evt.label).toContain('cancelled');
+    expect(evt.source).toBe('kernel');
+  });
+
+  // 4. task.block writes a 'blocked' timeline event
+  it('task.block writes a "blocked" kernel timeline event', () => {
+    const task_id = makeRunningTask('blocker test');
+    const agentId = ws.agentId;
+    toolBlockTask(ws, { task_id, question: 'Which DB should we use?' });
+
+    const rows = readTimelineRows(agentId);
+    const blockedRow = rows.find((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.kind === 'blocked' && p.task_id === task_id;
+    });
+    expect(blockedRow).toBeDefined();
+    const evt = JSON.parse(blockedRow!.value_json);
+    expect(evt.label).toContain('Which DB should we use?');
+    expect(evt.source).toBe('kernel');
+  });
+
+  // 5. task.answer writes an 'unblocked' timeline event
+  it('task.answer writes an "unblocked" kernel timeline event', () => {
+    const task_id = makeRunningTask('answer test');
+    const agentId = ws.agentId;
+    const bResult = toolBlockTask(ws, { task_id, question: 'Use Postgres?' }) as {
+      blocker: { blocker_id: string };
+    };
+    toolAnswerBlocker(ws, { blocker_id: bResult.blocker.blocker_id, answer: 'Yes, Postgres' });
+
+    const rows = readTimelineRows(agentId);
+    const unblockedRow = rows.find((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.kind === 'unblocked' && p.task_id === task_id;
+    });
+    expect(unblockedRow).toBeDefined();
+    const evt = JSON.parse(unblockedRow!.value_json);
+    expect(evt.label).toContain('Yes, Postgres');
+    expect(evt.source).toBe('kernel');
+  });
+
+  // 6. task.submit_for_review writes a 'progress' timeline event
+  it('task.submit_for_review writes a "progress" kernel timeline event', () => {
+    const task_id = makeRunningTask('review test');
+    const agentId = ws.agentId;
+    toolSubmitForReview(ws, {
+      task_id,
+      criteria: [{ primitive: 'file_exists', args: { path: 'README.md' } }],
+    });
+
+    const rows = readTimelineRows(agentId);
+    const progressRows = rows.filter((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.kind === 'progress' && p.task_id === task_id;
+    });
+    // Both start_attempt and submit_for_review write 'progress'
+    expect(progressRows.length).toBeGreaterThanOrEqual(1);
+    const submitRow = progressRows.find((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.label === 'submitted for review';
+    });
+    expect(submitRow).toBeDefined();
+    const evt = JSON.parse(submitRow!.value_json);
+    expect(evt.source).toBe('kernel');
+  });
+
+  // 7. full lifecycle (create → start → block → answer) produces timeline rows in order
+  it('full create→start→block→answer lifecycle produces timeline rows in ascending key order', () => {
+    const r = toolCreateTask(ws, { intent: 'lifecycle test' });
+    const task_id = r.task.task_id;
+    const agentId = ws.agentId;
+
+    toolStartAttempt(ws, { task_id });
+    const bResult = toolBlockTask(ws, { task_id, question: 'Go or Rust?' }) as {
+      blocker: { blocker_id: string };
+    };
+    toolAnswerBlocker(ws, { blocker_id: bResult.blocker.blocker_id, answer: 'Go' });
+
+    const rows = readTimelineRows(agentId);
+    // Expect at least 4 rows: start, progress, blocked, unblocked
+    expect(rows.length).toBeGreaterThanOrEqual(4);
+
+    // Verify ascending key order (keys are session_timeline/<agentId>/<ulid>, ulid is monotonic)
+    for (let i = 0; i < rows.length - 1; i++) {
+      expect(rows[i]!.key < rows[i + 1]!.key).toBe(true);
+    }
+
+    const kinds = rows.map((row) => JSON.parse(row.value_json).kind as string);
+    expect(kinds).toContain('start');
+    expect(kinds).toContain('progress');
+    expect(kinds).toContain('blocked');
+    expect(kinds).toContain('unblocked');
+  });
+
+  // 8. all timeline events have source='kernel'
+  it('all kernel-written timeline events have source="kernel"', () => {
+    const r = toolCreateTask(ws, { intent: 'source check task' });
+    const task_id = r.task.task_id;
+    const agentId = ws.agentId;
+    toolStartAttempt(ws, { task_id });
+    toolCancelTask(ws, { task_id });
+
+    const rows = readTimelineRows(agentId);
+    for (const row of rows) {
+      const evt = JSON.parse(row.value_json);
+      expect(evt.source).toBe('kernel');
+    }
+  });
+
+  // 9. timeline events have ts as a number
+  it('all kernel timeline events have ts as a positive integer', () => {
+    const r = toolCreateTask(ws, { intent: 'ts check' });
+    const agentId = ws.agentId;
+    toolStartAttempt(ws, { task_id: r.task.task_id });
+
+    const rows = readTimelineRows(agentId);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      const evt = JSON.parse(row.value_json);
+      expect(typeof evt.ts).toBe('number');
+      expect(evt.ts).toBeGreaterThan(0);
+    }
+  });
+
+  // 10. timeline events have task_id matching the task
+  it('timeline events have task_id matching the created task', () => {
+    const r = toolCreateTask(ws, { intent: 'task_id check' });
+    const task_id = r.task.task_id;
+    const agentId = ws.agentId;
+
+    const rows = readTimelineRows(agentId);
+    const withTaskId = rows.filter((row) => {
+      const p = JSON.parse(row.value_json);
+      return p.task_id === task_id;
+    });
+    expect(withTaskId.length).toBeGreaterThanOrEqual(1);
+  });
+});

@@ -18,6 +18,7 @@ import type { Workspace } from '../workspace.js';
 import { parseCriteriaJSON } from '../dsl/parser.js';
 import { evaluateCriteria } from '../dsl/evaluator.js';
 import type { EvaluationResult } from '../dsl/types.js';
+import { appendKernelTimelineEvent } from '../util/session-timeline.js';
 
 // ---------------------------------------------------------------------------
 // Internal raw row type for direct SELECT
@@ -97,6 +98,19 @@ export async function toolEvaluateOutcome(
       status: result.status,
       summary: result.summary,
     });
+
+    // Kernel auto-instrument: 'done' event only for PASS (FAIL → caller resubmits)
+    if (result.status === 'PASS') {
+      const agentId = ws.agentId;
+      const label = `outcomes PASS — ${(result.summary ?? '').slice(0, 90)}`;
+      const tlResult = appendKernelTimelineEvent(ws.db, agentId, 'done', label, {
+        task_id: task.task_id,
+      });
+      if (!tlResult.ok) {
+        process.stderr.write(`[cairn] kernel timeline append failed (outcomes.evaluate/PASS): ${tlResult.error}\n`);
+      }
+    }
+
     return { outcome, task, evaluation: result };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -126,7 +140,19 @@ export function toolTerminalFailOutcome(
 
   // 2. Call daemon markTerminalFail
   try {
-    return markTerminalFail(ws.db, args.outcome_id, args.reason);
+    const tfResult = markTerminalFail(ws.db, args.outcome_id, args.reason);
+
+    // Kernel auto-instrument: 'done' event with terminal-fail label
+    const agentId = ws.agentId;
+    const label = `TERMINAL_FAIL — ${args.reason.slice(0, 100)}`;
+    const tlResult = appendKernelTimelineEvent(ws.db, agentId, 'done', label, {
+      task_id: tfResult.task.task_id,
+    });
+    if (!tlResult.ok) {
+      process.stderr.write(`[cairn] kernel timeline append failed (outcomes.terminal_fail): ${tlResult.error}\n`);
+    }
+
+    return tfResult;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/OUTCOME_NOT_PENDING/.test(msg)) {
