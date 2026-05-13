@@ -104,6 +104,42 @@
 - 主 agent trust-but-verify subagent 报告（不直接转述）
 - 不打 v0.2.0 release tag 不发 GitHub Release（destructive，鸭总点头）
 
+## 2026-05-14 EOD progress (live)
+
+**Shipped today (local main, 27+ commits queued for push)**:
+
+| Phase | Status | Commits |
+|---|---|---|
+| A1.1 Timeline data convention + cairn-aware skill v3 | ✅ | `c68ea67` |
+| A1.2 L2 Session Timeline drill-down view | ✅ | `9705094` + integration |
+| A3-part1 Session 人话命名 + cairn.session.name | ✅ | `876a334` |
+| A3-part2 M4 Sessions module + querySessions | ✅ | `2d2a388` |
+| A2.0 Module 5 → Mentor module upgrade | ✅ | `559709a` |
+| A2.1 Todolist UI shell + queryTodoList | ✅ | `e237a56` |
+| A2.2 cockpit-todo-dispatch IPC + cockpit-dispatch.cjs | ✅ | `16706d8` |
+| A2.x wiring panel buttons → dispatch IPC | ✅ | `273bd9d` |
+| A4 module reorder + Steer dropdown | ✅ | `8cf7b4f` |
+| B1+B2+B3 icon + GH Actions + extraResources bundle | ✅ | `26c3b7d` |
+| B4 first-launch onboarding wizard | ✅ | `e52f6be` |
+| Rule C prompt tune (domain-mismatch) | ✅ | `b4dd1bf` |
+| Rule C strict-mode (high-confidence) | ✅ | `500f246` |
+| Defensive double-encoded parse + protocol fix | ✅ | `e31f4e3`, `d0b7f4e` |
+| Workflow rules field 13/14/14-stricter | ✅ | `2040176`, `be05230` |
+| Module DOM order structural smoke | ✅ | — |
+| Real-agent dogfood (9 timeline + 3 agent_proposals via live MCP) | ✅ | — |
+| Auto-instrument task transitions (sonnet subagent) | ⏳ | in flight |
+
+**17 product constraints**: 17/17 ✅ (約定 17 closed via real-agent dogfood; kernel auto-instrument will guarantee it works for non-cairn-aware agents too)
+
+**Hard blocker**: push 撞 PAT scope `workflow`. 27 local commits waiting on either: (a) 鸭总 adds `workflow` scope to PAT at https://github.com/settings/tokens, or (b) 鸭总 runs `! git push origin main` from their terminal (GCM cached creds).
+
+**Smoke regression**: 410+ assertions across 11 smokes + 75 dogfood assertions zero regression.
+
+**Next session queue (live agent_proposals in `~/.cairn/cairn.db`)**:
+- Mode B Continuous Iteration — 3-5 session, biggest lever
+- 打 v0.2.0 release tag — triggers CI win/mac matrix
+- 真实 Electron GUI dogfood — visual verification
+
 ## 反定义守卫线
 
 - A2 Mentor todolist 派活 = 写 `dispatch_requests` 表，走 Cairn kernel R1-R6 → 不撞 §1.3 D9 read-only（D9 守的是 panel 绕过 kernel 直接 mutate task 状态）
