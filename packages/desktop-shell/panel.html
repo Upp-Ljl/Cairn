@@ -2343,6 +2343,52 @@
   .filter-chip a { color: #7af; cursor: pointer; }
   .filter-chip a:hover { color: #aef; }
 
+  /* Mode B Lane module (slice 2, 2026-05-14) */
+  .cockpit-lane {
+    padding: 8px 12px;
+    border-bottom: 1px solid #2a2a2a;
+    background: #1c1c1f;
+    flex-shrink: 0;
+  }
+  .cockpit-lane-list { display: flex; flex-direction: column; gap: 6px; }
+  .cockpit-lane-row {
+    padding: 6px 8px;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    background: #181818;
+    font-size: 0.85em;
+  }
+  .cockpit-lane-row.PENDING { border-left: 3px solid #888; }
+  .cockpit-lane-row.RUNNING { border-left: 3px solid #4a8a4a; }
+  .cockpit-lane-row.REVIEW  { border-left: 3px solid #c08040; }
+  .cockpit-lane-row.PAUSED  { border-left: 3px solid #555; opacity: 0.7; }
+  .cockpit-lane-row.DONE    { border-left: 3px solid #2a5a3a; opacity: 0.6; }
+  .cockpit-lane-head { display: flex; align-items: center; gap: 8px; }
+  .cockpit-lane-state {
+    padding: 1px 7px;
+    border-radius: 9px;
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+    background: #2a2a2a;
+    color: #ccc;
+  }
+  .cockpit-lane-progress { color: #aaa; font-variant-numeric: tabular-nums; flex: 1; }
+  .cockpit-lane-actions { display: flex; gap: 4px; }
+  .cockpit-lane-actions button {
+    background: transparent;
+    color: #8ac;
+    border: 1px solid #2a3a4a;
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 0.78em;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cockpit-lane-actions button:hover { color: #eef; border-color: #4a6a8a; }
+  .cockpit-lane-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
   /* L2 Session Timeline (A1.2) — drill-down from M4 Sessions row click */
   #view-timeline {
     flex: 1 1 auto;
@@ -3263,6 +3309,17 @@
         <button id="cockpit-todo-add-send" type="button">＋ Add</button>
       </div>
       <div class="cockpit-todo-add-status" id="cockpit-todo-add-status"></div>
+    </div>
+
+    <!-- Mode B Continuous Iteration — lane chain status (slice 2, 2026-05-14).
+         Compact list of authorized lane chains for this project. Per
+         PRODUCT.md §1.3 #4a: lane stops at REVIEWED — user must explicitly
+         advance. Hidden when no lanes (state.lanes empty). -->
+    <div class="cockpit-lane" id="cockpit-lane" hidden>
+      <div class="cockpit-section-title">🛤 Mode B · Lanes</div>
+      <div class="cockpit-lane-list" id="cockpit-lane-list">
+        <div class="placeholder">no authorized lanes</div>
+      </div>
     </div>
 
     <!-- M3 STEER (A4 reorder — was M2). Single-line radio to a session. -->

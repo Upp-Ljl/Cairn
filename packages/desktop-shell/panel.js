@@ -4054,6 +4054,9 @@ function renderCockpit(state) {
   // M2 Todolist (A2.1) — render three-source todo entries.
   renderTodolist(state.todolist || []);
 
+  // Mode B Lane (slice 2, 2026-05-14) — render authorized lane chains.
+  renderLanes(state.lanes || []);
+
   // Module 3 → now Sessions (panel-cockpit-redesign 2026-05-14 A3-part2).
   // Renders per-session cards from state.sessions (querySessions output).
   // State pills: working / blocked / idle / stale. idle is first-class.
@@ -4258,6 +4261,69 @@ function renderTodolist(todos) {
             row.classList.remove('highlighted');
           }, 2500);
         }
+      }
+    });
+  });
+}
+
+/**
+ * Render Mode B lanes module (slice 2, 2026-05-14).
+ * Each row: state pill + progress (idx/total) + advance/pause/resume.
+ * Module hidden when state.lanes empty (CEO 17 约定: don't show noise).
+ */
+function renderLanes(lanes) {
+  const container = document.getElementById('cockpit-lane');
+  const listEl = document.getElementById('cockpit-lane-list');
+  if (!container || !listEl) return;
+  if (!Array.isArray(lanes) || lanes.length === 0) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  const rows = lanes.map(L => {
+    const total = (L.candidates || []).length;
+    const idx = Math.min(L.current_idx || 0, total);
+    const state = L.state || 'PENDING';
+    const isDone = state === 'DONE';
+    const isPaused = state === 'PAUSED';
+    const advanceBtn = isDone
+      ? ''
+      : `<button data-act="advance" data-lane-id="${escapeHtml(L.id)}" ${isPaused ? 'disabled' : ''} title="user-approve → advance to next candidate">Advance →</button>`;
+    const pauseResumeBtn = isDone
+      ? ''
+      : isPaused
+        ? `<button data-act="resume" data-lane-id="${escapeHtml(L.id)}">Resume</button>`
+        : `<button data-act="pause" data-lane-id="${escapeHtml(L.id)}">Pause</button>`;
+    return `<div class="cockpit-lane-row ${state}" data-lane-id="${escapeHtml(L.id)}">
+      <div class="cockpit-lane-head">
+        <span class="cockpit-lane-state">${escapeHtml(state)}</span>
+        <span class="cockpit-lane-progress">${idx} / ${total}${idx < total ? ` · current: ${escapeHtml(L.candidates[idx] || '')}` : ''}</span>
+        <span class="cockpit-lane-actions">${advanceBtn}${pauseResumeBtn}</span>
+      </div>
+    </div>`;
+  });
+  listEl.innerHTML = rows.join('');
+  listEl.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const act = btn.getAttribute('data-act');
+      const laneId = btn.getAttribute('data-lane-id');
+      if (!laneId || !selectedProject) return;
+      let res = null;
+      try {
+        if (act === 'advance') res = await window.cairn.cockpitLaneAdvance(selectedProject.id, laneId);
+        else if (act === 'pause') res = await window.cairn.cockpitLanePause(selectedProject.id, laneId);
+        else if (act === 'resume') res = await window.cairn.cockpitLaneResume(selectedProject.id, laneId);
+      } catch (e) {
+        res = { ok: false, error: (e && e.message) || String(e) };
+      }
+      if (res && res.ok) {
+        // Force next poll to re-render with fresh state.
+        poll().catch(() => {});
+      } else {
+        const err = (res && res.error) || 'lane_action_failed';
+        btn.textContent = '✗ ' + err;
+        setTimeout(() => poll().catch(() => {}), 1500);
       }
     });
   });

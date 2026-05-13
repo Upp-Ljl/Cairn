@@ -81,6 +81,7 @@ function emptyCockpitState(project, dbPath, reason) {
     autopilot_reason: reason || 'no_data',
     agents: [],
     sessions: [],
+    lanes: [],
     progress: {
       tasks_total: 0, tasks_done: 0, tasks_running: 0,
       tasks_blocked: 0, tasks_waiting_review: 0, percent: 0,
@@ -975,6 +976,10 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
 
   const agents = queryAgents(db, tables, hints, now);
   const sessions = querySessions(db, tables, hints, now);
+  // Mode B Continuous Iteration (slice 2): lanes for this project.
+  const cockpitLane = require('./cockpit-lane.cjs');
+  let lanes = [];
+  try { lanes = cockpitLane.queryLanes(db, project.id, { limit: 10 }); } catch (_e) { lanes = []; }
   const progress = queryProgress(db, tables, hints);
   const currentTask = queryCurrentTask(db, tables, hints);
   const latestMentor = queryLatestMentorNudge(db, tables, project.id);
@@ -1185,6 +1190,8 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     // `agents` — includes idle + stale entries (within 24h), per-session
     // display name, current task context.
     sessions,
+    // Mode B (slice 2): authorized lane chains for this project.
+    lanes,
     progress,
     current_task: currentTask,
     latest_mentor_nudge: latestMentor,
