@@ -480,22 +480,65 @@ function loadProfile(db, project) {
 // Match helpers — used by mentor-policy
 // ---------------------------------------------------------------------------
 
+// Stopwords for token-overlap fallback in matchBucket. Kept short on
+// purpose — extending the list shifts semantics for every CAIRN.md
+// in the world. Lowercase, length-2-or-more only matters here.
+const _STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'to', 'for', 'in', 'on', 'at', 'by',
+  'and', 'or', 'but', 'is', 'are', 'be', 'been', 'have', 'has', 'do',
+  'does', 'did', 'i', 'we', 'you', 'it', 'this', 'that', 'with', 'from',
+  'should', 'would', 'could', 'when', 'where', 'how', 'why', 'what', 'which',
+  'over', 'up', 'as', 'so', 'if', 'then', 'than', 'too', 'about',
+]);
+
+function _tokenize(s) {
+  return String(s || '')
+    .toLowerCase()
+    .split(/[^a-z0-9_\-]+/i)
+    .filter(t => t.length >= 3 && !_STOPWORDS.has(t));
+}
+
 /**
- * Lowercase substring match across all bullets in a bucket.
+ * Match a bullet list against a free-form corpus.
+ *
+ * Two-stage matcher:
+ *   1. Whole-bullet substring (lowercased) — wins immediately when the
+ *      author wrote a short, pithy rule (e.g. "npm publish").
+ *   2. Token-overlap fallback — at least 2 content tokens of the bullet
+ *      (length ≥ 3, not in the small stopword set) appear in the
+ *      corpus. Handles longer descriptive bullets like
+ *        "retry transient test failures up to 2x"
+ *      matching a question like
+ *        "Should we retry transient test failures here?"
+ *
+ * The substring path is canonical; the token-overlap fallback is the
+ * graceful degradation for verbose authors. Both lowercase.
  *
  * @param {string[]} bullets
- * @param {string} text  — corpus to search (already lowercased OK)
- * @returns {string|null} the matched bullet, or null
+ * @param {string} text
+ * @returns {string|null} the matched bullet text, or null
  */
 function matchBucket(bullets, text) {
   if (!Array.isArray(bullets) || !text) return null;
   const corpus = String(text).toLowerCase();
+  // Stage 1 — substring
   for (const b of bullets) {
     if (!b) continue;
-    // Bullet keywords: split on spaces, require ALL whole-word-ish tokens
-    // to appear? No — substring of the WHOLE bullet (lowercased) suffices.
-    // Authors are expected to write short pithy rules.
     if (corpus.includes(b.toLowerCase())) return b;
+  }
+  // Stage 2 — token overlap (≥ 2 shared content tokens, contiguous order
+  // not required)
+  const corpusTokens = new Set(_tokenize(corpus));
+  if (corpusTokens.size === 0) return null;
+  for (const b of bullets) {
+    if (!b) continue;
+    const bTokens = _tokenize(b);
+    if (bTokens.length === 0) continue;
+    let hits = 0;
+    for (const t of bTokens) {
+      if (corpusTokens.has(t)) hits++;
+      if (hits >= 2) return b;
+    }
   }
   return null;
 }
