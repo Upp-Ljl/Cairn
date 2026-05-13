@@ -1194,6 +1194,21 @@
   }
   .cockpit-mentor-saved-icon { color: #5dd45d; }
   .cockpit-mentor-saved-text { color: #b0d8b0; }
+  /* Phase 6 (2026-05-14): stale-agent warning */
+  .cockpit-stale-agents {
+    font-size: 0.82em;
+    margin-bottom: 6px;
+    padding: 4px 8px;
+    background: #2a1f1f;
+    border-left: 2px solid #d4a85d;
+    border-radius: 2px;
+    color: #e0c8a0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cockpit-stale-icon { color: #d4a85d; }
+  .cockpit-stale-text { color: #e0c8a0; }
   .cockpit-status-line {
     font-size: 1em;
     display: flex;
@@ -2696,6 +2711,14 @@
       <div class="cockpit-mentor-saved" id="cockpit-mentor-saved" hidden>
         <span class="cockpit-mentor-saved-icon">⚡</span>
         <span class="cockpit-mentor-saved-text" id="cockpit-mentor-saved-text"></span>
+      </div>
+      <!-- Phase 6 (2026-05-14): stale-agent + orphan task warning.
+           Surfaces when a process said status=active but its heartbeat
+           is stale by ≥ 5×ttl (or 5 min floor). Lists orphaned tasks
+           the silent agent left behind. Hidden when no stale agents. -->
+      <div class="cockpit-stale-agents" id="cockpit-stale-agents" hidden>
+        <span class="cockpit-stale-icon">⚠️</span>
+        <span class="cockpit-stale-text" id="cockpit-stale-text"></span>
       </div>
       <div class="cockpit-status-line">
         <span class="cockpit-status-dot" id="cockpit-status-dot">○</span>

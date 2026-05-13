@@ -194,6 +194,32 @@ ok(s1.mentor_decisions.escalate === 0, 'fresh DB → escalate counter zero');
   ok(sCount.mentor_decisions.total === 4, 'mentor_decisions.total = sum of 4 routes');
 }
 
+// Phase 6 (2026-05-14): stale-agent + orphan task surface
+{
+  const hasProcesses = tables.has('processes');
+  if (!hasProcesses) {
+    ok(true, 'SKIP: processes table absent in fixture');
+  } else {
+    const stale_hb = NOW - 30 * 60_000;
+    const fresh_hb = NOW - 5_000;
+    db.prepare(`UPDATE processes SET status = 'active', last_heartbeat = ?, heartbeat_ttl = 30000 WHERE agent_id = ?`)
+      .run(stale_hb, AGENT_A);
+    db.prepare(`UPDATE processes SET status = 'active', last_heartbeat = ?, heartbeat_ttl = 30000 WHERE agent_id = ?`)
+      .run(fresh_hb, AGENT_B);
+    const sStale = cockpit.buildCockpitState(db, tables, PROJ, 'build the cockpit', PROJ.agent_id_hints, {});
+    ok(Array.isArray(sStale.stale_agents), 'stale_agents is an array');
+    ok(sStale.stale_agents.length === 1, `one stale agent detected (got ${sStale.stale_agents.length})`);
+    if (sStale.stale_agents.length === 1) {
+      const s = sStale.stale_agents[0];
+      ok(s.agent_id === AGENT_A, 'stale agent_id = AGENT_A');
+      ok(s.last_seen_ago_ms >= 30 * 60_000 - 10_000, 'last_seen_ago_ms reflects ~30 min');
+      ok(typeof s.orphan_count === 'number', 'orphan_count is numeric');
+      ok(s.orphan_count >= 1, 'AGENT_A has ≥1 orphan (t_001 RUNNING)');
+      ok(Array.isArray(s.orphans), 'orphans is array');
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Test 3 — seed scratchpad mentor + escalation
 // ---------------------------------------------------------------------------
