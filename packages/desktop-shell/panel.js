@@ -4275,11 +4275,11 @@ function renderLanes(lanes) {
   const container = document.getElementById('cockpit-lane');
   const listEl = document.getElementById('cockpit-lane-list');
   if (!container || !listEl) return;
+  // Slice 4: module always visible. Empty list still renders + New lane button.
   if (!Array.isArray(lanes) || lanes.length === 0) {
-    container.hidden = true;
+    listEl.innerHTML = '<div class="placeholder">no authorized lanes — click "+ New lane" to chain tasks</div>';
     return;
   }
-  container.hidden = false;
   const rows = lanes.map(L => {
     const total = (L.candidates || []).length;
     const idx = Math.min(L.current_idx || 0, total);
@@ -4864,6 +4864,63 @@ function renderTimelineView(payload) {
   });
 }
 
+function setupLaneCreate() {
+  const newBtn = document.getElementById('cockpit-lane-new-btn');
+  const form = document.getElementById('cockpit-lane-create');
+  const submit = document.getElementById('cockpit-lane-create-submit');
+  const cancel = document.getElementById('cockpit-lane-create-cancel');
+  const textarea = document.getElementById('cockpit-lane-textarea');
+  const statusEl = document.getElementById('cockpit-lane-create-status');
+  if (!newBtn || !form || !submit || !cancel || !textarea) return;
+
+  newBtn.addEventListener('click', () => {
+    form.hidden = !form.hidden;
+    if (!form.hidden) {
+      textarea.value = '';
+      if (statusEl) { statusEl.textContent = ''; statusEl.className = 'cockpit-lane-create-status'; }
+      textarea.focus();
+    }
+  });
+  cancel.addEventListener('click', () => {
+    form.hidden = true;
+    textarea.value = '';
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'cockpit-lane-create-status'; }
+  });
+  submit.addEventListener('click', async () => {
+    const raw = textarea.value || '';
+    const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (lines.length === 0) {
+      if (statusEl) { statusEl.textContent = '请至少输入一个 task_id'; statusEl.className = 'cockpit-lane-create-status error'; }
+      return;
+    }
+    if (!selectedProject) {
+      if (statusEl) { statusEl.textContent = '没有选中项目'; statusEl.className = 'cockpit-lane-create-status error'; }
+      return;
+    }
+    submit.disabled = true;
+    if (statusEl) statusEl.textContent = `creating lane with ${lines.length} candidates…`;
+    let res = null;
+    try {
+      res = await window.cairn.cockpitLaneCreate({
+        project_id: selectedProject.id,
+        candidates: lines,
+        authorized_by: 'user',
+      });
+    } catch (e) {
+      res = { ok: false, error: (e && e.message) || String(e) };
+    }
+    submit.disabled = false;
+    if (res && res.ok) {
+      if (statusEl) { statusEl.textContent = `lane ${res.id.slice(0, 10)}… created`; statusEl.className = 'cockpit-lane-create-status'; }
+      textarea.value = '';
+      setTimeout(() => { form.hidden = true; poll().catch(() => {}); }, 800);
+    } else {
+      const err = (res && res.error) || 'create_failed';
+      if (statusEl) { statusEl.textContent = `failed: ${err}`; statusEl.className = 'cockpit-lane-create-status error'; }
+    }
+  });
+}
+
 function setupTimelineView() {
   const back = document.getElementById('tl-back');
   if (back) {
@@ -4880,6 +4937,7 @@ function setupTimelineView() {
 }
 
 // Wire everything at boot.
+setupLaneCreate();
 setupCockpit();
 setupCockpitOnboarding();
 setupCockpitKeyboard();
