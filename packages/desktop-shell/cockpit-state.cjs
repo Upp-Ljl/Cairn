@@ -324,6 +324,28 @@ function querySessions(db, tables, hints, now, opts) {
  * @returns Array<{ event_id, ts, kind, label, agent_id, task_id?,
  *   parent_event_id?, source, checkpoint_id?, raw }>
  */
+/**
+ * Defensive JSON parse for scratchpad value_json. Handles:
+ *   - normal: `{"k":"v"}` → { k: 'v' }
+ *   - double-encoded (caller pre-stringified before passing to
+ *     cairn.scratchpad.write): `"\"{\\\"k\\\":\\\"v\\\"}\""` → first
+ *     parse yields the inner string, second parse yields the object.
+ * Real-agent dogfood 2026-05-14 exposed this — fix once here vs at
+ * every caller.
+ *
+ * Returns the parsed object, or null on any failure or non-object result.
+ */
+function parseScratchpadValue(raw) {
+  if (!raw) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (_e) { return null; }
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch (_e) { return null; }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  return parsed;
+}
+
 function querySessionTimeline(db, tables, agentId, opts) {
   const o = opts || {};
   const limit = o.limit || 200;
@@ -830,9 +852,8 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
         `).all(agentId, limit);
         for (const r of rows) {
           const ulid = r.key.split('/').pop();
-          let body = null;
-          try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
-          if (!body || typeof body !== 'object') continue;
+          const body = parseScratchpadValue(r.value_json);
+          if (!body) continue;
           const label = typeof body.label === 'string' ? body.label : '';
           if (!label) continue;
           todos.push({
