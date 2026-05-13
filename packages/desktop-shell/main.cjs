@@ -180,9 +180,24 @@ function ensureWalMode(p) {
 /**
  * Make sure a read handle exists for `p`. Returns the handle entry, or
  * null if the file is missing / unreadable.
+ *
+ * **Sentinel fallback** (2026-05-14): Some legacy registry entries carry
+ * `db_path = '/dev/null'` or `'(unknown)'` from earlier dogfood scripts.
+ * On Windows, `/dev/null` is not a real path, so `fs.existsSync` returns
+ * false and the handle was previously null. That caused panel L0 cards
+ * to render with `summary: null` (no status light, no session count)
+ * for legacy projects even when the host-level cairn.db had real data.
+ *
+ * Two callers (`get-cockpit-state`, `get-project-summary`) inlined this
+ * fallback; the rest (incl. `getProjectsList`) did not — producing the
+ * exact "panel doesn't see new session in 试验场" bug 鸭总 reported.
+ * Centralizing the fallback HERE makes all 15 callers benefit at once.
  */
+const DB_PATH_SENTINELS = new Set(['/dev/null', '(unknown)']);
 function ensureDbHandle(p) {
-  if (!p) return null;
+  if (!p || DB_PATH_SENTINELS.has(p)) {
+    p = registry.DEFAULT_DB_PATH;
+  }
   if (dbHandles.has(p)) return dbHandles.get(p);
   if (!fs.existsSync(p)) {
     // eslint-disable-next-line no-console
