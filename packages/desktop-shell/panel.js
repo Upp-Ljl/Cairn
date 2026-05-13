@@ -4146,7 +4146,18 @@ function renderCockpit(state) {
   if (todayEl) {
     const md = state.mentor_decisions;
     const total = md && md.total ? md.total : 0;
-    todayEl.textContent = total > 0 ? `today: ${total} decisions handled` : '';
+    const todayBits = [];
+    if (total > 0) todayBits.push(`today: ${total} decisions`);
+    // Mode B slice 4: surface lane activity inline.
+    const lanes = Array.isArray(state.lanes) ? state.lanes : [];
+    const activeLanes = lanes.filter(L => L.state === 'PENDING' || L.state === 'RUNNING' || L.state === 'REVIEW').length;
+    const reviewLanes = lanes.filter(L => L.state === 'REVIEW').length;
+    if (activeLanes > 0) {
+      todayBits.push(reviewLanes > 0
+        ? `🛤 ${activeLanes} lane${activeLanes>1?'s':''} (${reviewLanes} need review)`
+        : `🛤 ${activeLanes} lane${activeLanes>1?'s':''} running`);
+    }
+    todayEl.textContent = todayBits.join(' · ');
   }
   if (needsListEl) {
     if (pendingEscs.length === 0) {
