@@ -648,6 +648,62 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     } catch (_e) { /* leave zeros */ }
   }
 
+  // Phase 6 (2026-05-14): stale-agent detection + orphan task surface.
+  //
+  // An agent is "stale" when:
+  //   - its processes row has status='active' (CC believed it was running)
+  //   - but last_heartbeat is older than max(STALE_GRACE_FACTOR ×
+  //     heartbeat_ttl, 5 min absolute floor)
+  //
+  // For each stale agent we also list its orphaned tasks — tasks where
+  //   created_by_agent_id == agent_id AND state ∈ RUNNING / BLOCKED /
+  //   READY_TO_RESUME. These are the in-flight items that nobody is
+  //   pushing forward because the owning process went silent.
+  //
+  // Surface ONLY in cockpit state (read field). Panel renders. No
+  // kernel state mutation here — per D9 + the AUTOMATION.md autonomy
+  // contract, recovery primitives are agent-callable MCP tools
+  // (cairn.task.cancel / cairn.task.start_attempt by another agent).
+  // The user's action is "see + decide" not "see + auto-clean."
+  const STALE_GRACE_FACTOR = 5;
+  const STALE_ABSOLUTE_FLOOR_MS = 5 * 60_000;
+  let stale_agents = [];
+  if (tables.has('processes') && tables.has('tasks') && hints.length > 0) {
+    try {
+      const placeholders = hints.map(() => '?').join(',');
+      const procRows = db.prepare(`
+        SELECT agent_id, status, last_heartbeat, heartbeat_ttl
+        FROM processes
+        WHERE agent_id IN (${placeholders}) AND status = 'active'
+      `).all(...hints);
+      for (const p of procRows) {
+        const ttl = Number(p.heartbeat_ttl) > 0 ? Number(p.heartbeat_ttl) : 30_000;
+        const threshold = Math.max(ttl * STALE_GRACE_FACTOR, STALE_ABSOLUTE_FLOOR_MS);
+        const lastSeenAgo = now - Number(p.last_heartbeat || 0);
+        if (lastSeenAgo < threshold) continue;
+        // Orphaned tasks
+        let orphans = [];
+        try {
+          orphans = db.prepare(`
+            SELECT task_id, intent, state, updated_at
+            FROM tasks
+            WHERE created_by_agent_id = ?
+              AND state IN ('RUNNING', 'BLOCKED', 'READY_TO_RESUME')
+            ORDER BY updated_at DESC
+            LIMIT 20
+          `).all(p.agent_id);
+        } catch (_e) { orphans = []; }
+        stale_agents.push({
+          agent_id: p.agent_id,
+          last_seen_ago_ms: lastSeenAgo,
+          last_heartbeat: Number(p.last_heartbeat || 0),
+          orphan_count: orphans.length,
+          orphans, // first 20
+        });
+      }
+    } catch (_e) { /* leave empty */ }
+  }
+
   return {
     project: {
       id: project.id,
@@ -663,6 +719,8 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     in_flight,
     // Phase 5 (2026-05-14): "Mentor saved you N" productivity-feedback counter
     mentor_decisions,
+    // Phase 6 (2026-05-14): stale-agent + orphan task surface
+    stale_agents,
     autopilot_status: autopilot,
     autopilot_reason: autopilot === AUTOPILOT_STATUS.NO_GOAL
       ? 'project has no goal — set one to enable Mentor'

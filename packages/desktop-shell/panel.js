@@ -3923,6 +3923,27 @@ function renderCockpit(state) {
     }
   }
 
+  // Phase 6 (2026-05-14): stale-agent + orphan task warning.
+  // Surfaces when a process row says status=active but heartbeat is
+  // stale. Renders agent count + total orphan task count. Hidden when
+  // no stale agents. The user's next action is "look at orphan tasks
+  // + cancel or re-assign" — but the panel does not auto-clean (read-
+  // only D9 lock).
+  const staleEl = document.getElementById('cockpit-stale-agents');
+  const staleTextEl = document.getElementById('cockpit-stale-text');
+  if (staleEl && staleTextEl) {
+    const sa = Array.isArray(state.stale_agents) ? state.stale_agents : [];
+    if (sa.length > 0) {
+      const totalOrphans = sa.reduce((sum, s) => sum + (s.orphan_count || 0), 0);
+      const parts = [`${sa.length} agent${sa.length === 1 ? '' : 's'} went silent`];
+      if (totalOrphans > 0) parts.push(`${totalOrphans} task${totalOrphans === 1 ? '' : 's'} orphaned`);
+      staleTextEl.textContent = parts.join(' · ');
+      staleEl.hidden = false;
+    } else {
+      staleEl.hidden = true;
+    }
+  }
+
   const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
   const liveAgentCount = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE').length;
   const agentSuffix = liveAgentCount > 0 ? `  ·  ⚡ ${liveAgentCount} agent${liveAgentCount === 1 ? '' : 's'}` : '';
