@@ -240,9 +240,12 @@ section('7 Rule C wiring (stub LLM, fixture profile)');
   const fakeMentorProfile = { loadProfile: () => stubProfile };
   const fakeAgentBrief = { readAgentBriefs: () => [] };
 
-  // Stub LLM helper that always returns off-path so strikes accumulate.
+  // Stub LLM helper that always returns off-path with confidence=low so
+  // the 2-strike rate-limiter still applies (this test continues to
+  // exercise across-tick state). The strict-mode high-confidence path
+  // is covered in smoke-mentor-rule-c §3.
   const fakeHelpers = {
-    judgeOffGoal: async () => ({ ok: true, on_path: false, redirect: 'refocus on the kernel layer', confidence: 'high' }),
+    judgeOffGoal: async () => ({ ok: true, on_path: false, redirect: 'refocus on the kernel layer', confidence: 'low' }),
   };
 
   const regC = {

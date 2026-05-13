@@ -509,8 +509,15 @@ async function evaluateRuleC_offGoal(ctx) {
   }
 
   // Off-path: increment strike counter.
+  // 2026-05-14 Rule C strict-mode: high-confidence verdicts skip the
+  // 2-strike wait. Real-LLM dogfood (post prompt-tune) showed Case B
+  // game-dev-vs-Cairn-kernel correctly identified with confidence=high.
+  // Waiting another tick to nudge wastes user time when the model is
+  // already certain. confidence=low keeps the 2-strike rate-limiter
+  // (defends against single-shot LLM hiccups).
   const newStrikes = state.offgoal_strikes + 1;
-  if (newStrikes < config.offGoalStrikeCap) {
+  const isHighConfidence = r.confidence === 'high';
+  if (!isHighConfidence && newStrikes < config.offGoalStrikeCap) {
     writeMentorState(db, task.task_id, {
       ...state, offgoal_strikes: newStrikes, last_offgoal_check_at: now,
     });

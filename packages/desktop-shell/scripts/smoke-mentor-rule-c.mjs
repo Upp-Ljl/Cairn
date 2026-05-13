@@ -135,7 +135,7 @@ section('2 single on_path=false → strike (no nudge yet)');
 }
 
 // ---------------------------------------------------------------------------
-section('3 second consecutive on_path=false → nudge + strikes reset');
+section('3 high-confidence off-path → nudge IMMEDIATELY (1 call, strict-mode)');
 {
   const db = freshDb();
   const ctx = {
@@ -143,20 +143,37 @@ section('3 second consecutive on_path=false → nudge + strikes reset');
     recentActivity: ACTIVITY, config: FAST_CONFIG, emit: emitFactory(db),
     llmJudgeOffGoal: fakeJudge({ ok: true, on_path: false, redirect: 'focus back on kernel', confidence: 'high' }),
   };
-  await policy.evaluateRuleC_offGoal(ctx); // strike 1
-  const r2 = await policy.evaluateRuleC_offGoal(ctx); // strike 2 → nudge
-  ok(r2 && r2.action === 'nudge', `action=nudge (got ${r2 && r2.action})`);
-  ok(r2 && r2.redirect && r2.redirect.includes('kernel'), 'redirect text present');
+  // Strict mode (2026-05-14): one high-confidence verdict → immediate nudge.
+  const r = await policy.evaluateRuleC_offGoal(ctx);
+  ok(r && r.action === 'nudge', `single call → nudge (got ${r && r.action})`);
+  ok(r && r.redirect && r.redirect.includes('kernel'), 'redirect text present');
   const state = policy.readMentorState(db, 't_rulec_001');
   ok(state.offgoal_strikes === 0, 'strikes reset to 0 after nudge');
   ok(state.nudge_count === 1, 'nudge_count incremented');
-  // Inspect the actual nudge row in scratchpad
   const nudges = db.prepare("SELECT key, value_json FROM scratchpad WHERE key LIKE 'mentor/%/nudge/%'").all();
   ok(nudges.length === 1, '1 nudge row written');
   const body = JSON.parse(nudges[0].value_json);
   ok(body.rule === 'C' && body.layer === 'L3', 'nudge tagged rule=C layer=L3');
   ok(body.redirect && body.redirect.includes('kernel'), 'redirect survived to scratchpad payload');
   ok(body.message && body.message.includes('off-goal drift'), 'nudge body mentions off-goal drift');
+  db.close();
+}
+
+// ---------------------------------------------------------------------------
+section('3b low-confidence off-path → STILL requires 2 strikes (rate-limiter)');
+{
+  const db = freshDb();
+  const ctx = {
+    db, project: PROJ, task: TASK(), profile: profileWithWhole(),
+    recentActivity: ACTIVITY, config: FAST_CONFIG, emit: emitFactory(db),
+    llmJudgeOffGoal: fakeJudge({ ok: true, on_path: false, redirect: 'rethink', confidence: 'low' }),
+  };
+  const r1 = await policy.evaluateRuleC_offGoal(ctx);
+  ok(r1 && r1.action === 'strike', `call 1 (low) → strike (got ${r1 && r1.action})`);
+  const r2 = await policy.evaluateRuleC_offGoal(ctx);
+  ok(r2 && r2.action === 'nudge', `call 2 (low) → nudge (got ${r2 && r2.action})`);
+  const state = policy.readMentorState(db, 't_rulec_001');
+  ok(state.nudge_count === 1, '1 nudge after 2-strike trigger');
   db.close();
 }
 
