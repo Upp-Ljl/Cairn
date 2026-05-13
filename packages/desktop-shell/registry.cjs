@@ -709,9 +709,26 @@ function touchProject(reg, id) {
 // Aggregation helpers (used by main.cjs to plan DB connections)
 // ---------------------------------------------------------------------------
 
+// Sentinel db_path values that mean "use the host-level default DB".
+// Kept in sync with main.cjs::DB_PATH_SENTINELS. Defined here too so
+// uniqueDbPaths can normalize before returning — otherwise gcDbHandles
+// (which uses uniqueDbPaths to compute the keep-set) would evict the
+// DEFAULT_DB_PATH handle while sentinel projects still need it through
+// ensureDbHandle's own normalization. Subagent审查 2026-05-14 flagged.
+const DB_PATH_SENTINELS_REG = new Set(['/dev/null', '(unknown)']);
+
 function uniqueDbPaths(reg) {
   const set = new Set();
-  for (const p of reg.projects) set.add(p.db_path);
+  for (const p of reg.projects) {
+    let dbPath = p.db_path;
+    // Normalize sentinels to DEFAULT_DB_PATH so the returned set matches
+    // what ensureDbHandle actually opens. Empty / falsy db_path is
+    // treated the same way (orphaned legacy entries).
+    if (!dbPath || DB_PATH_SENTINELS_REG.has(dbPath)) {
+      dbPath = DEFAULT_DB_PATH;
+    }
+    set.add(dbPath);
+  }
   return [...set];
 }
 

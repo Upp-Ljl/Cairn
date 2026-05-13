@@ -878,10 +878,11 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   if (!proj) {
     return cockpitState.emptyCockpitState(null, null, 'project_not_found');
   }
-  // Some legacy registry entries carry db_path = '/dev/null' or '(unknown)'
-  // as a "use the global DB" sentinel from earlier dogfood scripts. Fall back
-  // to the default DB rather than rendering an empty cockpit — the project's
-  // agent_id_hints + capability matching are the real attribution boundary.
+  // Defense-in-depth fallback. DB_PATH_SENTINELS check in ensureDbHandle
+  // is the canonical handler; this inline copy is kept because dbPathForLookup
+  // is also used directly in the emptyCockpitState() error path below.
+  // If a NEW sentinel is added, update both DB_PATH_SENTINELS (canonical) AND
+  // this check.
   let dbPathForLookup = proj.db_path;
   if (!dbPathForLookup || dbPathForLookup === '/dev/null' || dbPathForLookup === '(unknown)') {
     dbPathForLookup = registry.DEFAULT_DB_PATH;

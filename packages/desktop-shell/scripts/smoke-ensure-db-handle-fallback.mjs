@@ -25,9 +25,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAIN_CJS = path.resolve(__dirname, '..', 'main.cjs');
+const require = createRequire(import.meta.url);
+const registry = require(path.resolve(__dirname, '..', 'registry.cjs'));
 
 let asserts = 0, fails = 0;
 const failures = [];
@@ -92,6 +95,29 @@ section('5 documentation block explains the fix');
 ok(/Sentinel fallback/i.test(src), 'docstring mentions Sentinel fallback');
 ok(/getProjectsList/i.test(src), 'docstring explains which caller caused the bug');
 ok(/2026-05-14/.test(src), 'docstring dates the fix');
+
+// ---------------------------------------------------------------------------
+section('6 RUNTIME: registry.uniqueDbPaths normalizes sentinels (subagent review fix)');
+{
+  const fakeReg = {
+    version: 2,
+    projects: [
+      { id: 'p_a', db_path: '/dev/null', label: 'sentinel /dev/null' },
+      { id: 'p_b', db_path: '(unknown)', label: 'sentinel (unknown)' },
+      { id: 'p_c', db_path: '', label: 'empty' },
+      { id: 'p_d', db_path: registry.DEFAULT_DB_PATH, label: 'real default' },
+      { id: 'p_e', db_path: 'D:\\some\\custom.db', label: 'custom' },
+    ],
+  };
+  const paths = registry.uniqueDbPaths(fakeReg);
+  ok(!paths.includes('/dev/null'), 'uniqueDbPaths drops /dev/null sentinel');
+  ok(!paths.includes('(unknown)'), 'uniqueDbPaths drops (unknown) sentinel');
+  ok(!paths.includes(''), 'uniqueDbPaths drops empty db_path');
+  ok(paths.includes(registry.DEFAULT_DB_PATH), 'uniqueDbPaths includes DEFAULT_DB_PATH (4 sentinel/empty/real all map here)');
+  ok(paths.includes('D:\\some\\custom.db'), 'uniqueDbPaths preserves real custom path');
+  // Deduplication: 4 entries collapsed to 2 unique paths
+  ok(paths.length === 2, `2 unique paths (got ${paths.length})`);
+}
 
 // ---------------------------------------------------------------------------
 header(`${asserts - fails}/${asserts} assertions passed (${fails} failed)`);
