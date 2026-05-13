@@ -56,6 +56,11 @@ const api = {
   cockpitExplainConflict: (input) => ipcRenderer.invoke('cockpit-explain-conflict', input || {}),
   cockpitSortInbox:     (input) => ipcRenderer.invoke('cockpit-sort-inbox', input || {}),
   cockpitAssistGoal:    (input) => ipcRenderer.invoke('cockpit-assist-goal', input || {}),
+  // B4 Onboarding wizard
+  getOnboardedAt:     () => ipcRenderer.invoke('get-onboarded-at'),
+  markOnboarded:      () => ipcRenderer.invoke('mark-onboarded'),
+  chooseProjectFolder:() => ipcRenderer.invoke('choose-project-folder'),
+
   selectProject:      (id) => ipcRenderer.invoke('select-project', id),
   getSelectedProject: () => ipcRenderer.invoke('get-selected-project'),
   addProject:         (input) => ipcRenderer.invoke('add-project', input || {}),

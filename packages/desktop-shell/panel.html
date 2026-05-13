@@ -1726,6 +1726,114 @@
   }
   .cockpit-help-overlay .cockpit-help-close:hover { color: #eee; }
 
+  /* B4 First-launch wizard overlay */
+  #first-launch-wizard {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: #1a1a1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 24px 16px;
+  }
+  #first-launch-wizard[hidden] { display: none !important; }
+  .flw-card {
+    max-width: 480px;
+    width: 100%;
+    background: #232323;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 28px 28px 24px;
+  }
+  .flw-screen { display: none; }
+  .flw-screen.active { display: block; }
+  .flw-title {
+    font-size: 1.25em;
+    font-weight: 600;
+    color: #eee;
+    margin: 0 0 14px;
+  }
+  .flw-bullets {
+    list-style: disc;
+    padding-left: 20px;
+    margin: 0 0 18px;
+    color: #bbb;
+    font-size: 0.9em;
+    line-height: 1.6;
+  }
+  .flw-description {
+    color: #999;
+    font-size: 0.88em;
+    margin: 0 0 16px;
+    line-height: 1.5;
+  }
+  .flw-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .flw-btn-primary {
+    background: #2a4a7a;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 9px 20px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.95em;
+    text-align: center;
+  }
+  .flw-btn-primary:hover { background: #355a90; }
+  .flw-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .flw-btn-secondary {
+    background: transparent;
+    color: #777;
+    border: 1px solid #444;
+    border-radius: 5px;
+    padding: 7px 20px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.88em;
+    text-align: center;
+  }
+  .flw-btn-secondary:hover { color: #aaa; border-color: #666; }
+  .flw-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  #flw-folder-chosen {
+    color: #88bbff;
+    font-size: 0.82em;
+    word-break: break-all;
+    flex: 1;
+    min-width: 0;
+  }
+  .flw-error {
+    color: #ff7070;
+    font-size: 0.82em;
+    margin-top: 8px;
+    min-height: 1.2em;
+  }
+  .flw-success-check {
+    font-size: 2.2em;
+    margin-bottom: 10px;
+  }
+  .flw-next-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 18px;
+    color: #bbb;
+    font-size: 0.9em;
+    line-height: 1.7;
+  }
+  .flw-next-steps li::before { content: '→ '; color: #5d8dd4; }
+
   /* Module 5: NEEDS YOU — small by default, expands when escalations present */
   .cockpit-needs {
     padding: 8px 12px;
@@ -2650,6 +2758,55 @@
 </style>
 </head>
 <body>
+<!-- B4 First-launch wizard — shown on first run only (hidden after markOnboarded) -->
+<div id="first-launch-wizard" hidden>
+  <div class="flw-card">
+    <!-- Screen 1: Welcome -->
+    <div class="flw-screen active" id="flw-screen-1">
+      <div class="flw-title">Welcome to Cairn</div>
+      <ul class="flw-bullets">
+        <li>Your AI coding workers' co-pilot dashboard</li>
+        <li>Watches Claude Code / Cursor / Codex sessions</li>
+        <li>One panel to see them all, steer them, undo their mistakes</li>
+      </ul>
+      <div class="flw-actions">
+        <button class="flw-btn-primary" id="flw-btn-ready" type="button">Let's add a project →</button>
+        <button class="flw-btn-secondary" id="flw-btn-skip" type="button">Skip for now (advanced)</button>
+      </div>
+    </div>
+    <!-- Screen 2: Add your first project -->
+    <div class="flw-screen" id="flw-screen-2">
+      <div class="flw-title">Add your first project</div>
+      <div class="flw-description">
+        Pick a folder containing your code.<br>
+        Cairn will register it and install the MCP server so Claude Code sees Cairn automatically.
+      </div>
+      <div class="flw-folder-row">
+        <button class="flw-btn-secondary" id="flw-btn-choose" type="button">Choose folder…</button>
+        <span id="flw-folder-chosen">No folder selected</span>
+      </div>
+      <div class="flw-error" id="flw-error-2"></div>
+      <div class="flw-actions">
+        <button class="flw-btn-primary" id="flw-btn-continue" type="button" disabled>Continue →</button>
+        <button class="flw-btn-secondary" id="flw-btn-back" type="button">← Back</button>
+      </div>
+    </div>
+    <!-- Screen 3: All set -->
+    <div class="flw-screen" id="flw-screen-3">
+      <div class="flw-success-check">✅</div>
+      <div class="flw-title">Done!</div>
+      <ul class="flw-next-steps" id="flw-next-steps">
+        <li>Open Claude Code in your project folder</li>
+        <li>It will automatically register with Cairn</li>
+        <li>Come back here to see it light up</li>
+      </ul>
+      <div class="flw-actions">
+        <button class="flw-btn-primary" id="flw-btn-close" type="button">Close wizard</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="app">
   <!--
     The panel has two top-level views:

@@ -4819,3 +4819,149 @@ setupCockpitOnboarding();
 setupCockpitKeyboard();
 setupTimelineView();
 
+// ---------------------------------------------------------------------------
+// B4 First-launch wizard (boot check + state machine)
+// ---------------------------------------------------------------------------
+
+/**
+ * Hide the wizard, mark onboarded, then navigate to the projects list.
+ * Called from every "exit" path (close / skip / finish).
+ */
+async function dismissWizard() {
+  const overlay = document.getElementById('first-launch-wizard');
+  if (overlay) overlay.hidden = true;
+  try { await window.cairn.markOnboarded(); } catch (_e) {}
+  setView('projects', null);
+}
+
+/**
+ * Show screen `n` (1/2/3), hide others.
+ * @param {number} n
+ */
+function showWizardScreen(n) {
+  for (let i = 1; i <= 3; i++) {
+    const el = document.getElementById('flw-screen-' + i);
+    if (el) el.classList.toggle('active', i === n);
+  }
+}
+
+/**
+ * Wire wizard buttons and run the boot check.
+ */
+async function setupFirstLaunchWizard() {
+  // Boot check: show wizard only if never onboarded AND no projects yet.
+  let onboardedAt = null;
+  let projectsList = [];
+  try {
+    onboardedAt = await window.cairn.getOnboardedAt();
+  } catch (_e) {}
+  try {
+    const pl = await window.cairn.getProjectsList();
+    projectsList = (pl && Array.isArray(pl.projects)) ? pl.projects : [];
+  } catch (_e) {}
+
+  const overlay = document.getElementById('first-launch-wizard');
+  if (!overlay) return;
+
+  if (onboardedAt !== null || projectsList.length > 0) {
+    // Already onboarded or has projects — wizard not needed.
+    overlay.hidden = true;
+    return;
+  }
+
+  // First launch — show the wizard.
+  overlay.hidden = false;
+  showWizardScreen(1);
+
+  // --- Screen 1 wiring ---
+  const btnReady = document.getElementById('flw-btn-ready');
+  const btnSkip  = document.getElementById('flw-btn-skip');
+  if (btnReady) {
+    btnReady.addEventListener('click', () => showWizardScreen(2));
+  }
+  if (btnSkip) {
+    btnSkip.addEventListener('click', async () => {
+      await dismissWizard();
+    });
+  }
+
+  // --- Screen 2 wiring ---
+  let chosenFolder = null;
+  const btnChoose   = document.getElementById('flw-btn-choose');
+  const btnContinue = document.getElementById('flw-btn-continue');
+  const btnBack     = document.getElementById('flw-btn-back');
+  const folderLabel = document.getElementById('flw-folder-chosen');
+  const errorEl     = document.getElementById('flw-error-2');
+  const nextStepsList = document.getElementById('flw-next-steps');
+
+  if (btnChoose) {
+    btnChoose.addEventListener('click', async () => {
+      if (errorEl) errorEl.textContent = '';
+      try {
+        const res = await window.cairn.chooseProjectFolder();
+        if (res && res.ok && res.path) {
+          chosenFolder = res.path;
+          if (folderLabel) folderLabel.textContent = res.path;
+          if (btnContinue) btnContinue.disabled = false;
+        }
+        // cancelled → no-op
+      } catch (e) {
+        if (errorEl) errorEl.textContent = 'Failed to open folder picker.';
+      }
+    });
+  }
+
+  if (btnBack) {
+    btnBack.addEventListener('click', () => {
+      chosenFolder = null;
+      if (folderLabel) folderLabel.textContent = 'No folder selected';
+      if (btnContinue) btnContinue.disabled = true;
+      if (errorEl) errorEl.textContent = '';
+      showWizardScreen(1);
+    });
+  }
+
+  if (btnContinue) {
+    btnContinue.addEventListener('click', async () => {
+      if (!chosenFolder) return;
+      if (errorEl) errorEl.textContent = '';
+      btnContinue.disabled = true;
+      btnContinue.textContent = 'Installing…';
+      try {
+        // add-project already calls installBridge + draftCairnMd internally.
+        const res = await window.cairn.addProject({ project_root: chosenFolder });
+        if (!res || !res.ok) {
+          const detail = (res && res.error) ? res.error : 'unknown error';
+          if (errorEl) errorEl.textContent = 'Add project failed: ' + detail + '. Try again.';
+          btnContinue.disabled = false;
+          btnContinue.textContent = 'Continue →';
+          return;
+        }
+        // Success — update next-steps list with the actual folder name.
+        if (nextStepsList && chosenFolder) {
+          const li0 = nextStepsList.children[0];
+          if (li0) li0.textContent = 'Open Claude Code in ' + chosenFolder;
+        }
+        showWizardScreen(3);
+      } catch (e) {
+        const msg = (e && e.message) ? e.message : String(e);
+        if (errorEl) errorEl.textContent = 'Error: ' + msg;
+        btnContinue.disabled = false;
+        btnContinue.textContent = 'Continue →';
+      }
+    });
+  }
+
+  // --- Screen 3 wiring ---
+  const btnClose = document.getElementById('flw-btn-close');
+  if (btnClose) {
+    btnClose.addEventListener('click', async () => {
+      await dismissWizard();
+      poll().catch(() => {});
+    });
+  }
+}
+
+// Run wizard boot check (async — panel renders normally underneath).
+setupFirstLaunchWizard().catch(() => {});
+

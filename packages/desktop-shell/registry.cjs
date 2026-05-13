@@ -295,6 +295,10 @@ function saveRegistry(reg) {
     version: REGISTRY_VERSION,
     projects: Array.isArray(reg.projects) ? reg.projects : [],
   };
+  // Preserve optional meta block (e.g. onboarded_at from B4 wizard).
+  if (reg.meta && typeof reg.meta === 'object') {
+    out.meta = reg.meta;
+  }
   atomicWriteJson(REGISTRY_PATH, out);
 }
 
@@ -839,3 +843,42 @@ function setCockpitSettings(reg, projectId, input) {
 module.exports.getCockpitSettings = getCockpitSettings;
 module.exports.setCockpitSettings = setCockpitSettings;
 module.exports.COCKPIT_SETTINGS_DEFAULT = COCKPIT_SETTINGS_DEFAULT;
+
+// ---------------------------------------------------------------------------
+// B4 Onboarding wizard — first-launch flag
+// ---------------------------------------------------------------------------
+//
+// `meta.onboarded_at` (unix ms) is written once, on first project add or
+// explicit "Skip". The panel reads it at boot to decide whether to show the
+// first-launch wizard overlay. It lives in the registry file (projects.json)
+// under a top-level `meta` key so it doesn't pollute individual project
+// entries and doesn't require a schema migration.
+//
+// Intentionally kept separate from individual project entries: "has the user
+// done onboarding at all?" is a per-installation question, not per-project.
+
+/**
+ * Read the onboarded_at timestamp from the registry, or null when absent.
+ * @param {{ meta?: { onboarded_at?: number } }} reg
+ * @returns {number|null}
+ */
+function getOnboardedAt(reg) {
+  if (!reg || !reg.meta || typeof reg.meta.onboarded_at !== 'number') return null;
+  return reg.meta.onboarded_at;
+}
+
+/**
+ * Stamp the registry with onboarded_at = now if not already set.
+ * Returns the next registry shape (caller must persist via saveRegistry).
+ * @param {{ meta?: object, version: number, projects: object[] }} reg
+ * @returns {{ meta: { onboarded_at: number }, version: number, projects: object[] }}
+ */
+function markOnboarded(reg) {
+  const already = getOnboardedAt(reg);
+  if (already) return reg; // idempotent
+  const meta = Object.assign({}, reg.meta || {}, { onboarded_at: Date.now() });
+  return Object.assign({}, reg, { meta });
+}
+
+module.exports.getOnboardedAt = getOnboardedAt;
+module.exports.markOnboarded  = markOnboarded;
