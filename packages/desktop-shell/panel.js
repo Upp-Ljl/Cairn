@@ -3944,6 +3944,27 @@ function renderCockpit(state) {
     }
   }
 
+  // Phase 7 (2026-05-14): "while you were away" 24h summary.
+  // Project Glance per PRODUCT.md §4.1 US-P1. Hidden when all four
+  // counters are zero (no clutter on fresh projects).
+  const last24hEl = document.getElementById('cockpit-last-24h');
+  const last24hTextEl = document.getElementById('cockpit-last-24h-text');
+  if (last24hEl && last24hTextEl) {
+    const l = state.last_24h;
+    const any = l && (l.tasks_done || l.mentor_decisions || l.conflicts_touched || l.checkpoints_made);
+    if (any) {
+      const parts = [];
+      if (l.tasks_done > 0)        parts.push(`${l.tasks_done} done`);
+      if (l.mentor_decisions > 0)  parts.push(`Mentor handled ${l.mentor_decisions}`);
+      if (l.conflicts_touched > 0) parts.push(`${l.conflicts_touched} conflict${l.conflicts_touched === 1 ? '' : 's'}`);
+      if (l.checkpoints_made > 0)  parts.push(`${l.checkpoints_made} checkpoint${l.checkpoints_made === 1 ? '' : 's'}`);
+      last24hTextEl.textContent = parts.join(' · ');
+      last24hEl.hidden = false;
+    } else {
+      last24hEl.hidden = true;
+    }
+  }
+
   const copy = AUTOPILOT_COPY[state.autopilot_status] || AUTOPILOT_COPY.AGENT_IDLE;
   const liveAgentCount = (state.agents || []).filter(a => a.status === 'ACTIVE' || a.status === 'IDLE').length;
   const agentSuffix = liveAgentCount > 0 ? `  ·  ⚡ ${liveAgentCount} agent${liveAgentCount === 1 ? '' : 's'}` : '';

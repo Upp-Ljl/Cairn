@@ -194,6 +194,21 @@ ok(s1.mentor_decisions.escalate === 0, 'fresh DB → escalate counter zero');
   ok(sCount.mentor_decisions.total === 4, 'mentor_decisions.total = sum of 4 routes');
 }
 
+// Phase 7 (2026-05-14): "last 24h" Project Glance surface
+{
+  const s = cockpit.buildCockpitState(db, tables, PROJ, 'build the cockpit', PROJ.agent_id_hints, {});
+  ok('last_24h' in s, 'cockpit state exposes last_24h field');
+  ok(s.last_24h && typeof s.last_24h === 'object', 'last_24h is object');
+  ok(typeof s.last_24h.tasks_done === 'number', 'last_24h.tasks_done is numeric');
+  ok(typeof s.last_24h.mentor_decisions === 'number', 'last_24h.mentor_decisions is numeric');
+  ok(typeof s.last_24h.conflicts_touched === 'number', 'last_24h.conflicts_touched is numeric');
+  ok(typeof s.last_24h.checkpoints_made === 'number', 'last_24h.checkpoints_made is numeric');
+  // fixture seeded t_002 to DONE earlier → expect ≥1 in last 24h
+  ok(s.last_24h.tasks_done >= 1, `last_24h.tasks_done ≥1 (got ${s.last_24h.tasks_done})`);
+  // fixture seeded 4 mentor scratchpad rows for AGENT_A → expect ≥4
+  ok(s.last_24h.mentor_decisions >= 4, `last_24h.mentor_decisions ≥4 (got ${s.last_24h.mentor_decisions})`);
+}
+
 // Phase 6 (2026-05-14): stale-agent + orphan task surface
 {
   const hasProcesses = tables.has('processes');
