@@ -82,10 +82,12 @@ describe('fresh repo', () => {
     expect(fs.existsSync(skillPath)).toBe(true);
     const skill = fs.readFileSync(skillPath, 'utf8');
     expect(skill).toContain('name: cairn-aware');
-    expect(skill).toContain('cairn-aware-skill-v1');
+    expect(skill).toContain('cairn-aware-skill-v2');
     expect(skill).toContain('agent_inbox/<your-');
     expect(skill).toContain('agent_brief');
     expect(skill).toContain('cairn.task.block');
+    // A3 session-naming: v2 adds cairn.session.name instruction
+    expect(skill).toContain('cairn.session.name');
 
     // .mcp.json
     const mcpJson = JSON.parse(fs.readFileSync(path.join(tmpDir, '.mcp.json'), 'utf8'));
@@ -281,7 +283,7 @@ describe('cairn-aware skill (Phase 4)', () => {
     const r2 = runInstall(baseOpts());
     expect(r2.cairnAwareSkillAction).toBe('replaced');
     const skill = fs.readFileSync(skillPath, 'utf8');
-    expect(skill).toContain('cairn-aware-skill-v1');
+    expect(skill).toContain('cairn-aware-skill-v2');
   });
 
   it('preserves a non-cairn skill of the same name (no overwrite of foreign content)', () => {
