@@ -29,6 +29,9 @@ const api = {
   // Cockpit redesign (Phase 1): single-project read-only payload.
   getCockpitState:    (projectId, opts) =>
     ipcRenderer.invoke('get-cockpit-state', projectId, opts || {}),
+  // A1.2 L2 Session Timeline — drill-down events for a single session.
+  getSessionTimeline: (projectId, agentId, opts) =>
+    ipcRenderer.invoke('get-session-timeline', projectId, agentId, opts || {}),
   // Cockpit redesign (Phase 3): inject steer message into agent inbox +
   // copy to clipboard. Tier-A first-class mutation (D9.1 PRODUCT.md §12).
   cockpitSteer:       (input) => ipcRenderer.invoke('cockpit-steer', input || {}),

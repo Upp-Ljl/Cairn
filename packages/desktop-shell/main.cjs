@@ -886,6 +886,46 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   );
 });
 
+// A1.2 L2 Session Timeline — drill-down view (panel-cockpit-redesign 2026-05-14).
+// Returns chronological agent execution events for one session, joined with
+// kernel checkpoints as synthetic events (rewind anchors).
+ipcMain.handle('get-session-timeline', (_e, projectId, agentId, opts) => {
+  if (!projectId || typeof projectId !== 'string' || !agentId || typeof agentId !== 'string') {
+    return { ok: false, error: 'project_id_and_agent_id_required' };
+  }
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj) return { ok: false, error: 'project_not_found' };
+  let dbPathForLookup = proj.db_path;
+  if (!dbPathForLookup || dbPathForLookup === '/dev/null' || dbPathForLookup === '(unknown)') {
+    dbPathForLookup = registry.DEFAULT_DB_PATH;
+  }
+  const entry = ensureDbHandle(dbPathForLookup);
+  if (!entry) return { ok: false, error: 'db_unavailable' };
+  const events = cockpitState.querySessionTimeline(entry.db, entry.tables, agentId, opts || {});
+  const displayName = cockpitState.deriveSessionDisplayName(agentId);
+  // Also read scratchpad session_name override (forward-compat with A3-part1).
+  let nameOverride = null;
+  if (entry.tables.has('scratchpad')) {
+    try {
+      const row = entry.db.prepare('SELECT value_json FROM scratchpad WHERE key = ?')
+        .get(`session_name/${agentId}`);
+      if (row && row.value_json) {
+        try {
+          const body = JSON.parse(row.value_json);
+          if (body && typeof body.name === 'string' && body.name.trim()) nameOverride = body.name.trim();
+        } catch (_e) { /* ignore */ }
+      }
+    } catch (_e) { /* ignore */ }
+  }
+  return {
+    ok: true,
+    agent_id: agentId,
+    display_name: nameOverride || displayName,
+    events,
+    ts: Date.now(),
+  };
+});
+
 // Cockpit redesign Phase 3 — Module 2 STEER. D9.1 tier-A first-class
 // (panel-cockpit-redesign §2.E #12); no env flag gate.
 ipcMain.handle('cockpit-steer', (_e, input) => {
