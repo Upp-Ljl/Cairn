@@ -97,10 +97,17 @@ const got = registry.getProjectGoal(reg, projId);
 ok(got && got.id === setRes.goal.id, 'getProjectGoal returns the persisted goal');
 
 // ---------------------------------------------------------------------------
-// Part B — edit preserves id + created_at
+// Part B — edit rotates id when content changes (Mode A supersede trigger);
+//         preserves id when content is identical (idempotent re-save).
+//         created_at is preserved across edits regardless.
+//
+// Contract (鸭总 2026-05-14 fix): the goal_id is the supersede signal that
+// mode-a-loop.ensurePlan watches. Any visible field change MUST rotate it
+// so a stale COMPLETE plan supersedes; an identical re-save MUST NOT
+// rotate it (e.g. panel double-clicks save).
 // ---------------------------------------------------------------------------
 
-console.log('\n==> Part B: edit preserves id + created_at');
+console.log('\n==> Part B: edit rotates id on content change, preserves on no-op');
 
 const originalId = setRes.goal.id;
 const originalCreated = setRes.goal.created_at;
@@ -113,12 +120,95 @@ const editRes = registry.setProjectGoal(reg, projId, {
   non_goals: [],
 });
 reg = editRes.reg;
-eq(editRes.goal.id, originalId, 'edit: goal id preserved');
-eq(editRes.goal.created_at, originalCreated, 'edit: created_at preserved');
-ok(editRes.goal.updated_at >= originalCreated, 'edit: updated_at preserved or bumped');
+ok(editRes.goal.id !== originalId, 'edit (content changed): goal id ROTATED (supersede trigger)');
+eq(editRes.goal.created_at, originalCreated, 'edit: created_at preserved across id rotation');
+ok(editRes.goal.updated_at >= originalCreated, 'edit: updated_at bumped');
 eq(editRes.goal.title, 'Ship Goal Mode v1 (edited)', 'edit: title updated');
 eq(editRes.goal.success_criteria.length, 1, 'edit: criteria replaced (not appended)');
 eq(editRes.goal.non_goals.length, 0, 'edit: non_goals cleared when empty list given');
+
+// Idempotent re-save: same fields → same id (panel double-click save shouldn't supersede)
+const editedId = editRes.goal.id;
+const editedCreated = editRes.goal.created_at;
+await new Promise(r => setTimeout(r, 5));
+const idem = registry.setProjectGoal(reg, projId, {
+  title: 'Ship Goal Mode v1 (edited)',
+  desired_outcome: 'Refined.',
+  success_criteria: ['edited criterion'],
+  non_goals: [],
+});
+reg = idem.reg;
+eq(idem.goal.id, editedId, 're-save (no content change): id PRESERVED (no supersede)');
+eq(idem.goal.created_at, editedCreated, 're-save: created_at preserved');
+ok(idem.goal.updated_at >= editedCreated, 're-save: updated_at refreshed');
+
+// Whitespace / list-normalization differences are not content changes
+await new Promise(r => setTimeout(r, 5));
+const idemNorm = registry.setProjectGoal(reg, projId, {
+  title: '  Ship Goal Mode v1 (edited)  ',         // extra whitespace
+  desired_outcome: 'Refined.',
+  success_criteria: ['edited criterion', '', '  ', null], // trim/filter
+  non_goals: [],
+});
+reg = idemNorm.reg;
+eq(idemNorm.goal.id, editedId, 're-save with whitespace/empties: id PRESERVED (normalized identical)');
+
+// Field-by-field change → id rotates
+await new Promise(r => setTimeout(r, 5));
+const changeTitle = registry.setProjectGoal(reg, projId, {
+  title: 'A different title',
+  desired_outcome: 'Refined.',
+  success_criteria: ['edited criterion'],
+  non_goals: [],
+});
+reg = changeTitle.reg;
+ok(changeTitle.goal.id !== editedId, 'title change → id rotated');
+
+const tId = changeTitle.goal.id;
+await new Promise(r => setTimeout(r, 5));
+const changeOutcome = registry.setProjectGoal(reg, projId, {
+  title: 'A different title',
+  desired_outcome: 'Different outcome',
+  success_criteria: ['edited criterion'],
+  non_goals: [],
+});
+reg = changeOutcome.reg;
+ok(changeOutcome.goal.id !== tId, 'desired_outcome change → id rotated');
+
+const oId = changeOutcome.goal.id;
+await new Promise(r => setTimeout(r, 5));
+const changeCriteria = registry.setProjectGoal(reg, projId, {
+  title: 'A different title',
+  desired_outcome: 'Different outcome',
+  success_criteria: ['edited criterion', 'an added one'], // ADD
+  non_goals: [],
+});
+reg = changeCriteria.reg;
+ok(changeCriteria.goal.id !== oId, 'success_criteria add → id rotated');
+
+const cId = changeCriteria.goal.id;
+await new Promise(r => setTimeout(r, 5));
+const changeNonGoals = registry.setProjectGoal(reg, projId, {
+  title: 'A different title',
+  desired_outcome: 'Different outcome',
+  success_criteria: ['edited criterion', 'an added one'],
+  non_goals: ['a non-goal'],
+});
+reg = changeNonGoals.reg;
+ok(changeNonGoals.goal.id !== cId, 'non_goals add → id rotated');
+
+// Symmetric: removing fields also rotates id (鸭总 2026-05-14 scenario:
+// went from 4 success_criteria to 2 — must rotate)
+const ngId = changeNonGoals.goal.id;
+await new Promise(r => setTimeout(r, 5));
+const removeCriterion = registry.setProjectGoal(reg, projId, {
+  title: 'A different title',
+  desired_outcome: 'Different outcome',
+  success_criteria: ['edited criterion'], // REMOVED 'an added one'
+  non_goals: ['a non-goal'],
+});
+reg = removeCriterion.reg;
+ok(removeCriterion.goal.id !== ngId, 'success_criteria REMOVE → id rotated (CEO scenario)');
 
 // ---------------------------------------------------------------------------
 // Part C — required-field validation

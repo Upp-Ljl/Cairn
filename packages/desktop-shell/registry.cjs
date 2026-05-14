@@ -468,11 +468,41 @@ function getProjectGoal(reg, projectId) {
 }
 
 /**
+ * Content fingerprint for goal-equality comparison. Returns a stable
+ * JSON string covering every user-visible field. If the fingerprint
+ * matches a prior goal, the edit was a no-op (e.g. panel re-saved the
+ * same form) and we preserve the prior goal_id. If the fingerprint
+ * differs, we rotate the goal_id so downstream consumers (notably
+ * mode-a-loop.ensurePlan, which compares goal_id) know to supersede.
+ *
+ * 鸭总 2026-05-14: 改 success_criteria 之后 Mode A 没反应 — root cause
+ * was that setProjectGoal was preserving prior.id unconditionally,
+ * so ensurePlan saw `goal_id` unchanged and short-circuited to
+ * 'unchanged'. The fingerprint check turns "edit means change" back
+ * into the truth: any visible field change = new id = supersede.
+ */
+function _goalContentFingerprint(g) {
+  if (!g) return null;
+  return JSON.stringify({
+    title:            g.title || '',
+    desired_outcome:  g.desired_outcome || '',
+    success_criteria: Array.isArray(g.success_criteria) ? g.success_criteria : [],
+    non_goals:        Array.isArray(g.non_goals)        ? g.non_goals        : [],
+  });
+}
+
+/**
  * Replace (or create) the active goal on a project. Returns the next
  * registry shape and the persisted goal. Required fields: title.
- * Other fields default to empty strings / arrays. The goal id is
- * preserved across edits when one already exists; created_at is
- * preserved; updated_at is bumped.
+ * Other fields default to empty strings / arrays.
+ *
+ * Goal id is preserved ONLY when the edit is content-identical to the
+ * prior goal (idempotent re-save). Any change to title /
+ * desired_outcome / success_criteria / non_goals rotates the id —
+ * this is the trigger ensurePlan watches to decide "supersede vs
+ * unchanged". `created_at` is preserved across edits even when id
+ * rotates (the entry is still "this project's goal", not a new
+ * conceptual object).
  *
  * @param {{ projects: ProjectRegistryEntry[] }} reg
  * @param {string} projectId
@@ -489,15 +519,22 @@ function setProjectGoal(reg, projectId, input) {
   if (!title) return { reg, goal: null, error: 'title_required' };
   const now = Date.now();
   const prior = reg.projects[idx].active_goal || null;
-  const goal = {
-    id:               (prior && prior.id) || newGoalId(),
+
+  // Build a candidate goal shape (sans id) so we can fingerprint it
+  // against the prior with identical trim/list-normalization.
+  const candidate = {
     title,
     desired_outcome:  _trimStr(input && input.desired_outcome, GOAL_MAX_OUTCOME_LEN),
     success_criteria: _trimList(input && input.success_criteria, GOAL_MAX_CRITERIA, GOAL_MAX_CRITERION_LEN),
     non_goals:        _trimList(input && input.non_goals,        GOAL_MAX_CRITERIA, GOAL_MAX_CRITERION_LEN),
-    created_at:       (prior && prior.created_at) || now,
-    updated_at:       now,
   };
+  const sameContent = prior && _goalContentFingerprint(candidate) === _goalContentFingerprint(prior);
+
+  const goal = Object.assign({}, candidate, {
+    id:         sameContent ? prior.id         : newGoalId(),
+    created_at: (prior && prior.created_at) || now,
+    updated_at: now,
+  });
   const nextProjects = reg.projects.slice();
   nextProjects[idx] = Object.assign({}, reg.projects[idx], { active_goal: goal });
   const next = { version: REGISTRY_VERSION, projects: nextProjects };
