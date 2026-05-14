@@ -1873,6 +1873,41 @@
     border-top: 2px solid #ff5555;
   }
   .cockpit-mentor-module.active .cockpit-section-title { color: #ff7070; }
+  /* Mode A/B header row + toggle pills (CEO 2026-05-14). */
+  .cockpit-mentor-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .cockpit-mode-toggle {
+    display: inline-flex;
+    border: 1px solid #444;
+    border-radius: 4px;
+    overflow: hidden;
+    font-size: 0.78em;
+  }
+  .cockpit-mode-toggle .mode-pill {
+    background: #222;
+    color: #aaa;
+    border: 0;
+    padding: 2px 10px;
+    cursor: pointer;
+    font-weight: 600;
+    line-height: 1.6;
+    font-family: inherit;
+  }
+  .cockpit-mode-toggle .mode-pill + .mode-pill { border-left: 1px solid #444; }
+  .cockpit-mode-toggle .mode-pill:hover { background: #2a2a2e; color: #ddd; }
+  .cockpit-mode-toggle .mode-pill.active {
+    background: #2d3e50;
+    color: #cfe6ff;
+  }
+  .cockpit-mode-toggle .mode-pill[data-mode="A"].active {
+    background: #4a2d20;
+    color: #ffd6c0;
+  }
+  .cockpit-mode-toggle .mode-pill[disabled] { opacity: 0.5; cursor: not-allowed; }
   .cockpit-mentor-status {
     display: flex;
     flex-wrap: wrap;
@@ -3358,7 +3393,20 @@
          bottom. Status header (always visible) + escalations + Ack.
          CEO grill约定 3+7+11: Mentor 上移到 M2 位置. -->
     <div class="cockpit-mentor-module" id="cockpit-mentor-module">
-      <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
+      <div class="cockpit-mentor-header-row">
+        <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
+        <!-- Mode A/B toggle (CEO 2026-05-14 命题).
+             A = 长程 mentor-driven loop (小白模式) — opt-in per project.
+             B = 短期模块化 / 用户主导 — default, current behavior.
+             Default 'B' guarantees existing projects don't get auto-mentor
+             behavior they didn't ask for. -->
+        <div class="cockpit-mode-toggle" id="cockpit-mode-toggle" role="group" aria-label="Mode A / B">
+          <button type="button" class="mode-pill" data-mode="A" id="cockpit-mode-A"
+                  title="Mode A — Mentor drives long-running tasks (opt-in)">A</button>
+          <button type="button" class="mode-pill active" data-mode="B" id="cockpit-mode-B"
+                  title="Mode B — Mentor suggests, you dispatch (default)">B</button>
+        </div>
+      </div>
       <div class="cockpit-mentor-status" id="cockpit-mentor-status">
         <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
         <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>

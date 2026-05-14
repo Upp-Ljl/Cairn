@@ -77,6 +77,7 @@ function emptyCockpitState(project, dbPath, reason) {
     } : null,
     goal: null,
     leader: (project && project.leader) || null,
+    mode: (project && project.mode) || 'B',
     autopilot_status: AUTOPILOT_STATUS.AGENT_IDLE,
     autopilot_reason: reason || 'no_data',
     agents: [],
@@ -1176,6 +1177,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     },
     goal: goal || null,
     leader: project.leader || null,
+    mode: project.mode || 'B',
     // schema-v2 surface (2026-05-14): Mentor north-star + computed in-flight
     whole_sentence,
     cairn_md_present,

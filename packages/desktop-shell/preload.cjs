@@ -64,6 +64,9 @@ const api = {
   // Cockpit redesign (Phase 6): per-project cockpit settings + LLM helpers.
   getCockpitSettings:   (projectId) => ipcRenderer.invoke('get-cockpit-settings', projectId),
   setCockpitSettings:   (projectId, input) => ipcRenderer.invoke('set-cockpit-settings', projectId, input || {}),
+  // Mode A/B (CEO 2026-05-14): thin wrapper over setCockpitSettings({mode}).
+  // Server validates against ['A','B'] in registry.setCockpitSettings.
+  cockpitSetMode:       (projectId, mode) => ipcRenderer.invoke('set-cockpit-settings', projectId, { mode }),
   cockpitSummarizeTail: (input) => ipcRenderer.invoke('cockpit-summarize-tail', input || {}),
   cockpitExplainConflict: (input) => ipcRenderer.invoke('cockpit-explain-conflict', input || {}),
   cockpitSortInbox:     (input) => ipcRenderer.invoke('cockpit-sort-inbox', input || {}),
