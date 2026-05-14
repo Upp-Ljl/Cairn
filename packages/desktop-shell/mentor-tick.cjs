@@ -379,6 +379,32 @@ function runOnce(deps) {
               message: (e && e.message) || String(e),
             });
           }
+          // 2026-05-14 stale-dispatch recovery: if a step has been
+          // DISPATCHED for >3min without the assigned agent picking
+          // it up (no task_id on the dispatch row), reset it to
+          // PENDING + bump retry_count. The next decideNextDispatch
+          // will re-dispatch (or no_agent → spawn). After 2 retries
+          // we force a spawn regardless of how many ACTIVE agents
+          // claim to be alive — the idle ones aren't actually
+          // working, so we need a fresh worker process.
+          let forceSpawn = false;
+          try {
+            const staleRes = modeALoop.detectStaleAndReset(entry.db, project, { nowFn: deps.nowFn });
+            if (staleRes.reset > 0) {
+              out.decisions += staleRes.reset;
+              const maxRetry = Math.max(0, ...Object.values(staleRes.retry_counts));
+              // First stale (retry_count >= 1) → already enough to
+              // conclude the assigned agent isn't actually working;
+              // re-dispatching to the same idle agent is pointless.
+              // Force spawn immediately on the first stale-reset.
+              if (maxRetry >= 1) forceSpawn = true;
+            }
+          } catch (e) {
+            cairnLog.error('mode-a-loop', 'stale_detect_threw', {
+              project_id: project.id,
+              message: (e && e.message) || String(e),
+            });
+          }
           const decision = modeALoop.runOnceForProject({
             db: entry.db,
             project,
@@ -391,8 +417,11 @@ function runOnce(deps) {
           // MA-2c: execute the dispatch decision (if any). The pure
           // module decided WHAT to dispatch; the tick is responsible
           // for WRITING the dispatch_requests row + bookkeeping back
-          // to the plan.
-          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'dispatch') {
+          // to the plan. When forceSpawn is set (retry_count ≥ 2), we
+          // skip the normal dispatch path so the spawn block below
+          // creates a fresh worker instead of re-dispatching to the
+          // same idle agent that's been failing to pick up.
+          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'dispatch' && !forceSpawn) {
             const dr = decision.dispatch_request;
             try {
               // Defensive re-read (subagent verdict 2026-05-14 C): if a
@@ -453,12 +482,13 @@ function runOnce(deps) {
             out.decisions++;
           }
           // 2026-05-14 CEO escalation: when decideNextDispatch returns
-          // no_agent, auto-spawn a CC subprocess in the project root.
-          // Without this, Mode A silently sits on PENDING steps forever
-          // any time the user doesn't happen to have a CC terminal open.
-          // The spawner is cooldown-bounded (60s) + alive-run-aware so
-          // we don't fork an army.
-          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'no_agent') {
+          // no_agent OR when retry_count ≥ 2 (existing ACTIVE agents
+          // keep failing to pick up), auto-spawn a CC subprocess in the
+          // project root. Without this, Mode A silently sits on PENDING
+          // steps forever any time the user doesn't happen to have a
+          // working CC session in the project. Cooldown-bounded (60s).
+          if (decision && decision.dispatch_request &&
+              (decision.dispatch_request.action === 'no_agent' || forceSpawn)) {
             try {
               const modeASpawner = deps.modeASpawner || require('./mode-a-spawner.cjs');
               const freshPlan = modeALoop.getPlan(entry.db, project.id);

@@ -511,6 +511,75 @@ function runOnceForProject(deps) {
   }
 }
 
+/**
+ * Reset stale DISPATCHED steps back to PENDING so the next tick can
+ * re-decide (dispatch again or spawn a fresh worker).
+ *
+ * "Stale" = step.state==='DISPATCHED' AND step.dispatched_at older
+ * than `staleMs` AND the linked dispatch_requests row has no task_id
+ * (= no agent has actually picked it up via cairn.task.create yet).
+ *
+ * Increments step.retry_count. Callers (mentor-tick) can read
+ * retry_count to escalate after N attempts (e.g. force-spawn a fresh
+ * worker rather than re-dispatching to the same idle agent).
+ *
+ * Why this matters: subagent verdict 2026-05-14 caught the bug where
+ * Mode A step 0 went DISPATCHED → forever-waiting → CC never picks
+ * up → no outcomes → advanceOnComplete returns no_change → plan
+ * frozen. Without this reset, the loop has no recovery path.
+ *
+ * Returns { reset: number, retry_counts: { step_idx: count } }.
+ */
+function detectStaleAndReset(db, project, opts) {
+  const out = { reset: 0, retry_counts: {} };
+  if (!db || !project) return out;
+  const plan = getPlan(db, project.id);
+  if (!plan || !Array.isArray(plan.steps)) return out;
+  const staleMs = (opts && typeof opts.staleMs === 'number') ? opts.staleMs : (3 * 60 * 1000);
+  const now = (opts && opts.nowFn ? opts.nowFn() : Date.now());
+  let dirty = false;
+  for (let i = 0; i < plan.steps.length; i++) {
+    const step = plan.steps[i];
+    if (!step || step.state !== 'DISPATCHED') continue;
+    if (!step.dispatched_at || (now - step.dispatched_at) < staleMs) continue;
+    // Check the dispatch_requests row for task_id linkage.
+    let dr = null;
+    if (step.dispatch_id) {
+      try {
+        dr = db.prepare('SELECT task_id, status FROM dispatch_requests WHERE id = ?').get(step.dispatch_id);
+      } catch (_e) { /* skip */ }
+    }
+    if (dr && dr.task_id) continue; // agent picked up; not stale
+    // Reset.
+    const retryCount = (step.retry_count || 0) + 1;
+    step.state = 'PENDING';
+    step.retry_count = retryCount;
+    step.last_stale_reset_at = now;
+    // Clear dispatch tracking so a fresh decideNextDispatch round
+    // can write new linkage on its next attempt.
+    delete step.dispatch_id;
+    delete step.dispatched_at;
+    delete step.inbox_injected_at;
+    dirty = true;
+    out.reset++;
+    out.retry_counts[i] = retryCount;
+    cairnLog.warn('mode-a-loop', 'stale_dispatch_reset', {
+      project_id: project.id,
+      plan_id: plan.plan_id,
+      step_idx: i,
+      retry_count: retryCount,
+      stale_age_ms: now - (step.dispatched_at || now),
+    });
+  }
+  if (dirty) {
+    try {
+      plan.updated_at = now;
+      writePlan(db, project.id, plan, now);
+    } catch (_e) { /* logged above */ }
+  }
+  return out;
+}
+
 module.exports = {
   planKey,
   planStepsFromGoal,
@@ -522,5 +591,6 @@ module.exports = {
   markStepDispatched,
   advanceOnComplete,
   reconcileInbox,
+  detectStaleAndReset,
   runOnceForProject,
 };
