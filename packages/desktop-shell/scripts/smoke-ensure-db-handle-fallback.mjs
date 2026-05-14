@@ -23,9 +23,29 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+
+// Sandbox HOME defensively (2026-05-14 incident pattern). uniqueDbPaths
+// is pure read but if registry.cjs gains a load-time side effect later,
+// or someone adds a write call to this smoke, the sandbox prevents
+// pollution of ~/.cairn/projects.json.
+const _realHome = os.homedir();
+const _realProjectsJson = path.join(_realHome, '.cairn', 'projects.json');
+const _tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cairn-edh-smoke-'));
+fs.mkdirSync(path.join(_tmpDir, '.cairn'), { recursive: true });
+process.env.HOME = _tmpDir;
+process.env.USERPROFILE = _tmpDir;
+const _mtimeBefore = fs.existsSync(_realProjectsJson) ? fs.statSync(_realProjectsJson).mtimeMs : null;
+process.on('exit', () => {
+  const _mtimeAfter = fs.existsSync(_realProjectsJson) ? fs.statSync(_realProjectsJson).mtimeMs : null;
+  if (_mtimeBefore !== _mtimeAfter) {
+    console.error('FATAL: smoke wrote to REAL ~/.cairn/projects.json — sandbox failed');
+    process.exit(3);
+  }
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAIN_CJS = path.resolve(__dirname, '..', 'main.cjs');
