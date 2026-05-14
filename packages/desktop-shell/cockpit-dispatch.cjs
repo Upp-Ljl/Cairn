@@ -60,9 +60,11 @@ function validateInput(input) {
   if (!input.todo_id || typeof input.todo_id !== 'string' || !input.todo_id.trim()) {
     return 'todo_id_required';
   }
-  const validSources = ['agent_proposal', 'mentor_todo', 'user_todo'];
+  // MA-2c (2026-05-14): added 'mode-a-loop' so Mode A auto-dispatch can
+  // declare its provenance without masquerading as a user / mentor todo.
+  const validSources = ['agent_proposal', 'mentor_todo', 'user_todo', 'mode-a-loop'];
   if (!input.source || !validSources.includes(input.source)) {
-    return 'source_must_be_agent_proposal_or_mentor_todo_or_user_todo';
+    return 'source_must_be_one_of_' + validSources.join('|');
   }
   if (!input.target_agent_id || typeof input.target_agent_id !== 'string' || !input.target_agent_id.trim()) {
     return 'target_agent_id_required';
