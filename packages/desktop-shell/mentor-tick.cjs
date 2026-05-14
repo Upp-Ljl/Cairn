@@ -29,6 +29,7 @@
 
 const cairnLog = require('./cairn-log.cjs');
 const modeALoop = require('./mode-a-loop.cjs');
+const modeAAutoAnswer = require('./mode-a-auto-answer.cjs');
 const modeBSuggester = require('./mode-b-suggester.cjs');
 
 const TICK_INTERVAL_MS = 30 * 1000;
@@ -311,6 +312,31 @@ function runOnce(deps) {
         const cockpitSettings = deps.registry.getCockpitSettings(deps.reg, project.id);
         if (cockpitSettings && cockpitSettings.mode === 'A') {
           const goal = deps.registry.getProjectGoal(deps.reg, project.id);
+          // MA-2d: aggressive Rule D auto-answer for Mode A — before
+          // the plan loop runs, sweep any OPEN blockers and answer them
+          // so CC doesn't sit indefinitely waiting for a human.
+          // (Plan §2.3 / CEO 命题: "确保 cc 在任务完成前能够不断")
+          try {
+            const goalTitle = deps.mentorPolicy ? deps.mentorPolicy.extractGoalTitle(goal, { component: 'mode-a-auto-answer' })
+              : (typeof goal === 'string' ? goal : (goal && goal.title) || null);
+            const answerResult = modeAAutoAnswer.runOnceForProject({
+              db: entry.db,
+              tables: entry.tables,
+              project,
+              agentIds: hints,
+              profile,
+              goalTitle,
+              nowFn: deps.nowFn,
+            });
+            if (answerResult && answerResult.answered > 0) {
+              out.decisions += answerResult.answered;
+            }
+          } catch (e) {
+            cairnLog.error('mode-a-auto-answer', 'tick_threw', {
+              project_id: project.id,
+              message: (e && e.message) || String(e),
+            });
+          }
           const decision = modeALoop.runOnceForProject({
             db: entry.db,
             project,
