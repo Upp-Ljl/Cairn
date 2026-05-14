@@ -73,34 +73,64 @@ function autoShip(projectRoot, message, opts) {
   const safeMessage = message.length > 8000 ? message.slice(0, 8000) + '\n\n[truncated]' : message;
 
   // ------------------------------------------------------------------
-  // Phase 1: detect changes
+  // Phase 1: detect what to ship
+  //
+  // Three legitimate cases:
+  //   (a) working tree dirty           → add + commit + push
+  //   (b) working tree clean, ahead    → push existing commit(s)
+  //                                        (CC may have committed itself —
+  //                                         observed 2026-05-14 with
+  //                                         `claude --print` in Mode A)
+  //   (c) working tree clean, in sync  → nothing to do, no_changes
   // ------------------------------------------------------------------
   const statusRes = _git(projectRoot, ['status', '--porcelain'], COMMIT_TIMEOUT_MS);
   if (statusRes.status !== 0) {
     return { ok: false, reason: 'git_status_failed', error: statusRes.stderr || statusRes.error };
   }
-  if (!statusRes.stdout || !statusRes.stdout.trim()) {
-    return { ok: false, reason: 'no_changes' };
-  }
+  const isDirty = !!(statusRes.stdout && statusRes.stdout.trim());
 
-  // ------------------------------------------------------------------
-  // Phase 2: stage + commit
-  // ------------------------------------------------------------------
-  const addRes = _git(projectRoot, ['add', '-A'], COMMIT_TIMEOUT_MS);
-  if (addRes.status !== 0) {
-    return { ok: false, reason: 'git_add_failed', error: addRes.stderr };
-  }
+  let commitSha = null;
+  let didCommit = false;
 
-  const commitRes = _git(
-    projectRoot,
-    ['commit', '-m', safeMessage],
-    COMMIT_TIMEOUT_MS,
-  );
-  if (commitRes.status !== 0) {
-    // Don't include the message body in the error log — it can be huge.
-    return { ok: false, reason: 'git_commit_failed', error: (commitRes.stderr || '').slice(0, 500) };
+  if (isDirty) {
+    // Case (a): stage + commit.
+    const addRes = _git(projectRoot, ['add', '-A'], COMMIT_TIMEOUT_MS);
+    if (addRes.status !== 0) {
+      return { ok: false, reason: 'git_add_failed', error: addRes.stderr };
+    }
+    const commitRes = _git(
+      projectRoot,
+      ['commit', '-m', safeMessage],
+      COMMIT_TIMEOUT_MS,
+    );
+    if (commitRes.status !== 0) {
+      return { ok: false, reason: 'git_commit_failed', error: (commitRes.stderr || '').slice(0, 500) };
+    }
+    commitSha = _parseCommitSha(commitRes.stdout) || 'unknown';
+    didCommit = true;
+  } else {
+    // Case (b) or (c): check if there are unpushed local commits.
+    // Use `git rev-list --count <branch>..HEAD` style — but we need the
+    // remote-tracking ref. Use `git log @{u}..HEAD --oneline` count.
+    const aheadRes = _git(
+      projectRoot,
+      ['rev-list', '--count', '@{u}..HEAD'],
+      COMMIT_TIMEOUT_MS,
+    );
+    if (aheadRes.status !== 0) {
+      // @{u} not configured — branch has no upstream. Treat as no_changes
+      // since we don't know where to push.
+      return { ok: false, reason: 'no_changes' };
+    }
+    const ahead = parseInt((aheadRes.stdout || '0').trim(), 10) || 0;
+    if (ahead === 0) {
+      return { ok: false, reason: 'no_changes' };
+    }
+    // Case (b): there are local commits to push. No commit needed.
+    const headSha = _git(projectRoot, ['rev-parse', '--short', 'HEAD'], COMMIT_TIMEOUT_MS);
+    commitSha = (headSha.stdout || 'HEAD').trim();
+    didCommit = false;
   }
-  const commitSha = _parseCommitSha(commitRes.stdout) || 'unknown';
 
   // ------------------------------------------------------------------
   // Phase 3: push
@@ -172,6 +202,7 @@ function autoShip(projectRoot, message, opts) {
     ok: true,
     commit_sha: commitSha,
     push_backend: usedBackend,
+    committed: didCommit,
   };
 }
 
