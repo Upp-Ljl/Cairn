@@ -1244,6 +1244,29 @@
   .cockpit-status-dot.green { color: #5dd45d; }
   .cockpit-status-dot.red   { color: #ff5555; }
   .cockpit-status-dot.grey  { color: #777; }
+  .cockpit-status-dot.blue  { color: #7bc3ff; }
+  /* Mode A v2 transient: pulsing amber dot for SCOUT_PLANNING /
+     AGENT_STARTING. Tells user "something is happening" during the
+     spawn-to-CC-task-create gap (CEO 2026-05-14 feedback). */
+  .cockpit-status-dot.amber-pulse {
+    color: #ffb84d;
+    animation: cockpit-amber-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes cockpit-amber-pulse {
+    0%, 100% { opacity: 1.0; text-shadow: 0 0 4px #ffb84d; }
+    50%      { opacity: 0.5; text-shadow: 0 0 8px #ffb84d; }
+  }
+  /* Phase pill on the plan widget — same pulse animation for the
+     `planning` / `running` phase classes so the user sees the same
+     "activity" signal regardless of which UI they're looking at. */
+  .cockpit-mode-a-plan-phase-pill.planning,
+  .cockpit-mode-a-plan-phase-pill.running {
+    animation: cockpit-pill-pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes cockpit-pill-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 184, 77, 0.5); }
+    50%      { box-shadow: 0 0 0 4px rgba(255, 184, 77, 0.0); }
+  }
   .cockpit-status-text {
     color: #ddd;
     font-weight: 500;

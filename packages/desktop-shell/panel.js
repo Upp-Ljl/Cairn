@@ -3905,6 +3905,21 @@ const AUTOPILOT_COPY = {
     dot: 'red', text: 'Mentor 处理不了 — 需要你的决定',
     headlineClass: 'red',
   },
+  // Mode A v2 transient states (CEO 2026-05-14 UX fix). `dot: 'amber-pulse'`
+  // triggers a CSS keyframe pulse so the user sees something is happening
+  // during the spawn-to-task-create gap.
+  SCOUT_PLANNING: {
+    dot: 'amber-pulse', text: '🔍 Scout 正在起 plan… (~30-60秒)',
+    headlineClass: '',
+  },
+  AGENT_STARTING: {
+    dot: 'amber-pulse', text: '⚡ 已发起执行 · CC 正在启动…',
+    headlineClass: '',
+  },
+  PLAN_PENDING_REVIEW: {
+    dot: 'blue', text: '📋 plan 已起草 · 点 ▶ 开始执行',
+    headlineClass: '',
+  },
 };
 
 function fmtAgo(ts) {
