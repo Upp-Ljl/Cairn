@@ -1,68 +1,70 @@
 'use strict';
 
 /**
- * mode-a-scout.cjs — Scout CC: spawn a one-shot Claude Code subprocess
- * that reads goal + CAIRN.md (Plan Shape / Plan Hard Constraints / Plan
- * Authority sections) + project root, and outputs a JSON plan draft.
+ * mode-a-scout.cjs — Scout (Cairn-side mentor LLM) drafts a plan from
+ * user goal + CAIRN.md guidance + project context. Uses MiniMax via
+ * `llm-client.cjs::chatJson` (OpenAI-compatible). NOT a CC subprocess.
  *
- * CEO 鸭总 2026-05-14 product decision (Mode A v2):
- *   "plan 应该是根据我的 goal 或者是有引导的提问来由 cairn 结合 cc 之类
- *    工作的 claude 来给出的，而不是让用户去提出来做什么。否则就把 cairn
- *    变成一个提示词转换器。Scout 一定要是跟工作的 session 隔离的 session。"
+ * CEO 鸭总 2026-05-14 corrections:
+ *   "MiniMax 只是为了让 cairn 更智能一些，而不是代替 cc 的 agent 去执行任务。
+ *    也就是 cairn 的 llm 只是作为 mentor 的角色，来润色这个计划，
+ *    并按照这个计划来给 cc 交互。这也是我们区分 cc 的自身的 plan。"
  *
- * Strict isolation invariants (per CEO):
- *   1. Scout's session_id namespace = scratchpad key
- *      `mode_a_scout_session/<project_id>`. Execution session lives
- *      under `mode_a_session/...`. The two are NEVER cross-referenced;
- *      Phase 2's --resume lookup only reads the execution key.
- *   2. Worker-runs go under `~/.cairn/worker-runs/scout-<run_id>/`
- *      so panel widgets that list `wr_*` directories don't accidentally
- *      conflate scout activity with execution activity.
- *   3. Scout MUST exit before execution can spawn (state machine gate:
- *      phase=='planning' → Scout running; phase flips to 'plan_pending'
- *      ONLY after Scout exits and the plan JSON is parsed). The
- *      execution CC is spawned only on phase=='running'.
+ * Layering (locked-in):
+ *   - MiniMax (this module) = Cairn's mentor. Draws plan-level milestones,
+ *     refines labels / rationale / order, flags needs_user_confirm.
+ *   - CC (real `claude` via claude-stream-launcher) = execution agent.
+ *     Picks up each plan step as a milestone and decides internally
+ *     (via its own TodoWrite + Task tool) how to chop sub-steps and
+ *     write code.
+ *   - These are STRICTLY different LLM endpoints (MiniMax HTTP vs
+ *     Anthropic via claude CLI). Sessions can't bleed.
  *
- * Output contract: Scout's last assistant text MUST contain a fenced
- * JSON block of shape:
+ * Output contract: scout's response text MUST contain a fenced JSON
+ * block of shape:
  *     ```json
  *     {
- *       "plan_id": "<ULID-ish>",
+ *       "plan_id": "scout_<8-hex>",
+ *       "rationale": "1-3 sentence WHY",
  *       "steps": [
- *         { "label": "...", "rationale": "..." }
+ *         { "label": "...", "rationale": "...", "needs_user_confirm": false }
  *       ]
  *     }
  *     ```
- * Anything else (free-form prose around the block) is ignored. Scout's
- * prompt explicitly requests this shape.
+ * 3-12 steps. needs_user_confirm MUST be true for any step matching
+ * CAIRN.md `## Plan Authority` entries (mentor prompted to enforce).
  *
- * Fallback policy: if Scout fails (no JSON block, timeout, crash, or
- * spawn refusal), the caller (mentor-tick / IPC handler) falls back to
- * `mode-a-loop.planStepsFromGoal` (the existing deterministic path).
- * Either way the phase transitions to 'plan_pending' so user has
- * something to click Start on.
+ * Audit trail: per-call directory under
+ * `~/.cairn/worker-runs/scout-<runId>/` with prompt.txt + response.txt
+ * + run.json. Worker-runs is reused (panel widgets that list `wr_*`
+ * filter on prefix; `scout-*` is distinct).
+ *
+ * Fallback policy: if Mentor LLM fails (keys missing / network /
+ * non-JSON response), caller (`runScoutThenWritePlan`) falls back to
+ * `mode-a-loop.planStepsFromGoal` (deterministic, 1:1 from
+ * success_criteria). Either way the panel reaches `plan_pending` so
+ * user has something to click Start on. The fallback plan gets
+ * tagged `drafted_by:'deterministic_fallback'` so the panel renders
+ * a yellow "Fallback" pill instead of the purple "Scout" pill.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
-const { createNdjsonStream } = require('./ndjson-stream.cjs');
-const mcpConfigBuilder = require('./claude-mcp-config.cjs');
+const llmClient = require('./llm-client.cjs');
 const cairnLog = require('./cairn-log.cjs');
 
-const SCOUT_WORKER_RUNS_DIR = 'worker-runs'; // under ~/.cairn/
 const SCOUT_PREFIX = 'scout-';
-const DEFAULT_SCOUT_TIMEOUT_MS = parseInt(process.env.CAIRN_MODE_A_SCOUT_TIMEOUT_MS || '', 10) || (5 * 60 * 1000);
-const SCOUT_SESSION_KEY_PREFIX = 'mode_a_scout_session/';
+const DEFAULT_SCOUT_TIMEOUT_MS = parseInt(process.env.CAIRN_MODE_A_SCOUT_TIMEOUT_MS || '', 10) || 60_000;
+const SCOUT_MAX_STEPS = 12;
 
 function newRunId() {
   return SCOUT_PREFIX + crypto.randomBytes(6).toString('hex');
 }
 
 function homeBase(home) {
-  return path.join(home || os.homedir(), '.cairn', SCOUT_WORKER_RUNS_DIR);
+  return path.join(home || os.homedir(), '.cairn', 'worker-runs');
 }
 
 function runDir(runId, home) {
@@ -77,28 +79,6 @@ function writeRunMeta(runId, meta, home) {
   try {
     fs.writeFileSync(path.join(runDir(runId, home), 'run.json'), JSON.stringify(meta, null, 2), 'utf8');
   } catch (_e) {}
-}
-
-/**
- * Resolve a command on PATH. Windows: prefer .cmd / .exe / .bat; never
- * resolve to the no-extension POSIX shim (which spawn() can't execute
- * on Windows — 2026-05-14 panel crash).
- */
-function whichCommand(name) {
-  const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat'] : [''];
-  const sep = process.platform === 'win32' ? ';' : ':';
-  const paths = (process.env.PATH || '').split(sep);
-  for (const dir of paths) {
-    if (!dir) continue;
-    for (const ext of exts) {
-      const p = path.join(dir, name + ext);
-      try {
-        const st = fs.statSync(p);
-        if (st.isFile()) return p;
-      } catch (_e) {}
-    }
-  }
-  return null;
 }
 
 /**
@@ -141,37 +121,77 @@ function extractPlanGuidance(cairnMdText) {
 }
 
 /**
+ * Optionally read a small slice of project context the LLM can use
+ * without filesystem tools: README first 2 KB + top-level package.json
+ * name/description if present. We deliberately keep this tiny —
+ * Mentor is cheap + fast, not a full repo crawler.
+ */
+function gatherProjectContext(projectRoot) {
+  const ctx = { readme_excerpt: '', package_json: '' };
+  if (!projectRoot || typeof projectRoot !== 'string') return ctx;
+  try {
+    for (const name of ['README.md', 'readme.md', 'README']) {
+      const p = path.join(projectRoot, name);
+      if (fs.existsSync(p)) {
+        ctx.readme_excerpt = fs.readFileSync(p, 'utf8').slice(0, 2048);
+        break;
+      }
+    }
+  } catch (_e) {}
+  try {
+    const pkgPath = path.join(projectRoot, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const raw = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      ctx.package_json = JSON.stringify({
+        name: raw.name || null,
+        description: raw.description || null,
+        version: raw.version || null,
+        scripts: raw.scripts ? Object.keys(raw.scripts).slice(0, 12) : null,
+      });
+    }
+  } catch (_e) {}
+  return ctx;
+}
+
+/**
  * Build the prompt that tells Scout exactly what to produce.
  *
- * Distinction from `mode-a-spawner.buildBootPrompt`:
- *   - Boot prompt = "you are working CC, here's the next step, go".
- *   - Scout prompt = "you are PLANNER, do not write code, output JSON".
- *
- * Scout is single-turn (one user message → one assistant reply →
- * exit). It uses the stream-json protocol so we can capture
- * session_id (for diagnostics + future grill turns), but it never
- * resumes a prior session.
+ * Single-shot: one user message in, one assistant response out. No
+ * tools, no follow-up turns. Mentor has NO filesystem access via the
+ * LLM — we pre-load project context above and inject inline.
  */
-function buildScoutPrompt({ goal, projectRoot, projectId, guidance }) {
+function buildScoutPrompt({ goal, projectRoot, projectId, guidance, projectCtx }) {
   const goalTitle = typeof goal === 'string' ? goal : (goal && goal.title) || '(no title)';
   const desiredOutcome = (goal && goal.desired_outcome) || '';
   const criteria = (goal && Array.isArray(goal.success_criteria)) ? goal.success_criteria.filter(s => typeof s === 'string' && s.trim()) : [];
   const nonGoals = (goal && Array.isArray(goal.non_goals)) ? goal.non_goals.filter(s => typeof s === 'string' && s.trim()) : [];
 
   const lines = [
-    '# Cairn Mode A — Plan Scout',
+    '# Cairn Mode A — Plan Mentor',
     '',
-    '你是 Cairn Mode A 的 plan scout。**你不写代码、不动文件、不调用任何修改类工具**。',
-    '你的唯一任务：读 project 当前状态 + CAIRN.md 指导 + 用户 goal，',
-    '输出一个 plan JSON，然后退出。',
+    '你是 Cairn 的 plan mentor。**你不是执行 agent，不写代码**。',
+    '你的工作：根据用户 goal + CAIRN.md 指导 + 项目上下文，',
+    '起草一个 milestone-level plan，让真正的执行 agent（Claude Code）',
+    '后面按照这个 plan 干活。每个 step = 一个 milestone（30min-2hr 的执行体量），',
+    'CC 拿到 step 之后会**自己拆 sub-task**，你不用替它想。',
     '',
     '## Project',
     '- project_id: `' + projectId + '`',
     '- project_root: `' + projectRoot + '`',
-    '',
-    '## User goal',
-    '- title: ' + goalTitle,
   ];
+  if (projectCtx && projectCtx.package_json) {
+    lines.push('- package.json: ' + projectCtx.package_json);
+  }
+  if (projectCtx && projectCtx.readme_excerpt) {
+    lines.push('');
+    lines.push('### README excerpt (first 2KB)');
+    lines.push('```');
+    lines.push(projectCtx.readme_excerpt.slice(0, 1800));
+    lines.push('```');
+  }
+  lines.push('');
+  lines.push('## User goal');
+  lines.push('- title: ' + goalTitle);
   if (desiredOutcome) lines.push('- desired_outcome: ' + desiredOutcome);
   if (criteria.length > 0) {
     lines.push('- success_criteria:');
@@ -184,7 +204,7 @@ function buildScoutPrompt({ goal, projectRoot, projectId, guidance }) {
   lines.push('');
 
   if (guidance && guidance.found_any) {
-    lines.push('## CAIRN.md guidance (read this carefully — it overrides your assumptions)');
+    lines.push('## CAIRN.md guidance (project-owned plan-shaping)');
     if (guidance.shape) {
       lines.push('');
       lines.push('### Plan Shape');
@@ -192,38 +212,35 @@ function buildScoutPrompt({ goal, projectRoot, projectId, guidance }) {
     }
     if (guidance.constraints) {
       lines.push('');
-      lines.push('### Plan Hard Constraints (do NOT violate these)');
+      lines.push('### Plan Hard Constraints (do NOT violate)');
       lines.push(guidance.constraints);
     }
     if (guidance.authority) {
       lines.push('');
-      lines.push('### Plan Authority (flag steps that need user before execution)');
+      lines.push('### Plan Authority (steps touching these MUST get needs_user_confirm:true)');
       lines.push(guidance.authority);
-      lines.push('  → For any step touching the items above, set `"needs_user_confirm": true` on it.');
     }
     lines.push('');
   } else {
     lines.push('## CAIRN.md guidance');
-    lines.push('(No `## Plan Shape` / `## Plan Hard Constraints` / `## Plan Authority` sections found in CAIRN.md. Proceed with reasonable defaults but lean conservative.)');
+    lines.push('(No `## Plan Shape` / `## Plan Hard Constraints` / `## Plan Authority` sections found. Use sensible defaults, lean conservative.)');
     lines.push('');
   }
 
   lines.push(
-    '## What you should do (single turn)',
+    '## Output (JSON only)',
     '',
-    '1. Briefly explore the project (read README, key entry points, recent commits). Use Read / Glob / Grep tools — they are safe.',
-    '2. Cross-reference user goal against CAIRN.md guidance above.',
-    '3. Output ONE fenced JSON block in this exact shape:',
+    '输出 **单个** fenced JSON block，schema：',
     '',
     '```json',
     '{',
     '  "plan_id": "scout_<8-hex>",',
     '  "drafted_by": "scout",',
-    '  "rationale": "1-3 sentence summary of WHY this plan",',
+    '  "rationale": "1-3 句 WHY 这个 plan",',
     '  "steps": [',
     '    {',
-    '      "label": "short imperative step name",',
-    '      "rationale": "why this step, why now",',
+    '      "label": "短祈使句 milestone（不超过 60 字）",',
+    '      "rationale": "为什么这步、为什么这个顺序",',
     '      "needs_user_confirm": false',
     '    }',
     '  ]',
@@ -232,12 +249,12 @@ function buildScoutPrompt({ goal, projectRoot, projectId, guidance }) {
     '',
     '## Hard rules',
     '',
-    '- **NO writes**: no Edit, no Write, no Bash with mutating commands. Read-only exploration only.',
-    '- **NO sub-tasks via Task tool**: scout is single-turn; lead-CC will spawn subagents during execution.',
-    '- **NO running tests / building / committing**.',
-    '- 3 to 8 steps is the right scope. Each step should be 30min-2hr of execution work.',
-    '- Steps must compose toward the user goal; do NOT re-state CAIRN.md constraints as steps (the lead-CC reads CAIRN.md too).',
-    '- After the JSON block, write a one-line `<end-of-plan/>` token and exit.',
+    '- 3-8 个 step，每步 30min-2hr 体量。太大就拆，太小就合并。',
+    '- step.label 写 milestone（"加上 N 个牌桌"），**不要**写具体行动（"在 server.js 第 42 行加 if 判断"）—— 后者是 CC 的事。',
+    '- step 顺序按依赖排：A 是 B 的前置就 A 先。',
+    '- 任何 step 落在 CAIRN.md Plan Authority 范围内 → `needs_user_confirm: true`。',
+    '- 不要把 CAIRN.md constraints 重写成 step（执行 CC 也会读 CAIRN.md）。',
+    '- **只输出 fenced JSON**，前后可以有 1-2 句简短解释，但不要写大段叙述。',
     '',
     '开始。',
   );
@@ -246,16 +263,9 @@ function buildScoutPrompt({ goal, projectRoot, projectId, guidance }) {
 
 /**
  * Extract the first JSON object that looks like a plan from raw text.
- * Strategy:
- *   1. Look for ```json ... ``` fenced block.
- *   2. Otherwise look for the first { ... } that parses cleanly AND
- *      has a `steps` array.
- * Returns null if nothing parseable found.
  */
 function extractPlanJson(text) {
   if (typeof text !== 'string' || !text) return null;
-
-  // 1. Fenced code block
   const fenced = text.match(/```json\s*([\s\S]+?)```/i);
   if (fenced) {
     try {
@@ -263,8 +273,6 @@ function extractPlanJson(text) {
       if (obj && Array.isArray(obj.steps)) return obj;
     } catch (_e) {}
   }
-
-  // 2. First balanced { ... } that parses + has steps
   const startIndices = [];
   for (let i = 0; i < text.length; i++) if (text[i] === '{') startIndices.push(i);
   for (const start of startIndices) {
@@ -287,13 +295,6 @@ function extractPlanJson(text) {
   return null;
 }
 
-/**
- * Normalize a raw scout-output plan into the shape mode-a-loop expects.
- * Sanitizes step labels (strip empty / non-string), assigns idx, sets
- * state=PENDING. Caps step count to a reasonable bound so a runaway
- * scout doesn't write a 200-step plan.
- */
-const SCOUT_MAX_STEPS = 12;
 function normalizePlan(rawPlan, { goal, now } = {}) {
   if (!rawPlan || typeof rawPlan !== 'object') return null;
   const steps = Array.isArray(rawPlan.steps) ? rawPlan.steps : [];
@@ -327,243 +328,133 @@ function normalizePlan(rawPlan, { goal, now } = {}) {
 }
 
 /**
- * Persist Scout's session_id under the ISOLATED key prefix so the
- * Phase-2 execution --resume lookup CANNOT accidentally pick it up.
+ * Run scout via MiniMax (OpenAI-compatible chatJson). Async.
+ *
+ * @param {{ projectId, projectRoot, goal }} input
+ * @param {{ home?, timeoutMs?, chatImpl?, keysFile? }} [opts]
+ *   chatImpl is injected for tests (defaults to llmClient.chatJson).
+ * @returns {Promise<{ ok: true, plan, run_id, response_text } | { ok: false, error, run_id?, response_text? }>}
  */
-function persistScoutSessionId(db, projectId, sessionId, runId, now) {
-  if (!db || !projectId || !sessionId) return;
-  const key = SCOUT_SESSION_KEY_PREFIX + projectId;
-  const ts = now || Date.now();
-  const valueJson = JSON.stringify({ session_id: sessionId, run_id: runId || null, captured_at: ts });
+async function runScout(input, opts) {
+  const o = opts || {};
+  if (!input || !input.projectRoot || !input.projectId) {
+    return { ok: false, error: 'projectRoot_and_projectId_required' };
+  }
+  if (!input.goal) {
+    return { ok: false, error: 'goal_required' };
+  }
+
+  const runId = newRunId();
+  const home = o.home;
+  ensureRunDir(runId, home);
+
+  let guidance = { shape: '', constraints: '', authority: '', found_any: false };
   try {
-    const existing = db.prepare('SELECT key FROM scratchpad WHERE key = ?').get(key);
-    if (existing) {
-      db.prepare('UPDATE scratchpad SET value_json = ?, updated_at = ? WHERE key = ?').run(valueJson, ts, key);
-    } else {
-      db.prepare('INSERT INTO scratchpad (key, value_json, value_path, task_id, expires_at, created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)').run(key, valueJson, ts, ts);
+    const cairnMdPath = path.join(input.projectRoot, 'CAIRN.md');
+    if (fs.existsSync(cairnMdPath)) {
+      guidance = extractPlanGuidance(fs.readFileSync(cairnMdPath, 'utf8'));
     }
   } catch (_e) {}
-}
 
-/**
- * Run the scout end-to-end. Async. Returns a promise of
- * { ok, plan, run_id, session_id, mcp_config_path, raw_text? } |
- * { ok: false, error, run_id?, raw_text? }.
- *
- * Caller (panel IPC handler or mentor-tick async path) is responsible
- * for writing the plan back to scratchpad + flipping the phase state.
- */
-function runScout(input, opts) {
-  return new Promise((resolve) => {
-    const o = opts || {};
-    if (!input || !input.projectRoot || !input.projectId) {
-      return resolve({ ok: false, error: 'projectRoot_and_projectId_required' });
-    }
-    if (!fs.existsSync(input.projectRoot)) {
-      return resolve({ ok: false, error: 'project_root_not_found' });
-    }
+  const projectCtx = gatherProjectContext(input.projectRoot);
 
-    const claudeExe = whichCommand('claude');
-    if (!claudeExe) {
-      return resolve({ ok: false, error: 'provider_unavailable' });
-    }
-
-    const runId = newRunId();
-    const home = o.home;
-    ensureRunDir(runId, home);
-
-    // Build prompt
-    let guidance = { shape: '', constraints: '', authority: '', found_any: false };
-    try {
-      const cairnMdPath = path.join(input.projectRoot, 'CAIRN.md');
-      if (fs.existsSync(cairnMdPath)) {
-        guidance = extractPlanGuidance(fs.readFileSync(cairnMdPath, 'utf8'));
-      }
-    } catch (_e) {}
-
-    const prompt = buildScoutPrompt({
-      goal: input.goal,
-      projectRoot: input.projectRoot,
-      projectId: input.projectId,
-      guidance,
-    });
-
-    try {
-      fs.writeFileSync(path.join(runDir(runId, home), 'prompt.txt'), prompt, 'utf8');
-    } catch (_e) {}
-
-    // Build per-spawn MCP config (Scout uses the same cairn-wedge
-    // canonical entry so it COULD call cairn.scratchpad.write — but the
-    // prompt forbids writes; cairn-wedge is mainly there so CC's read
-    // tools work uniformly.).
-    const mcpRes = mcpConfigBuilder.buildMcpConfigFile({
-      projectRoot: input.projectRoot,
-      runId,
-      tmpDir: o.mcpConfigTmpDir,
-    });
-    if (!mcpRes.ok) {
-      return resolve({ ok: false, error: 'mcp_config_failed', detail: mcpRes.error, run_id: runId });
-    }
-
-    const argv = [
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
-      '--verbose',
-      '--permission-mode', 'bypassPermissions',  // scout is read-only by prompt; bypass keeps it consistent with execution session
-      '--mcp-config', mcpRes.tempPath,
-      '--strict-mcp-config',
-    ];
-
-    let exec = claudeExe;
-    let execArgv = argv;
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(claudeExe)) {
-      exec = process.env.ComSpec || 'cmd.exe';
-      execArgv = ['/d', '/s', '/c', claudeExe, ...argv];
-    }
-
-    const meta = {
-      run_id: runId,
-      provider: 'claude-code-scout',
-      cwd: input.projectRoot,
-      project_id: input.projectId,
-      started_at: Date.now(),
-      ended_at: null,
-      status: 'queued',
-      session_id: null,
-      mcp_config_path: mcpRes.tempPath,
-      cairn_md_guidance_found: guidance.found_any,
-    };
-    writeRunMeta(runId, meta, home);
-
-    let child;
-    try {
-      child = spawn(exec, execArgv, {
-        cwd: input.projectRoot,
-        env: Object.assign({}, process.env, { CAIRN_MODE_A_SCOUT: '1' }),
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-        shell: false,
-      });
-    } catch (e) {
-      mcpRes.cleanup();
-      return resolve({ ok: false, error: 'spawn_threw', detail: (e && e.message) || String(e), run_id: runId });
-    }
-
-    if (child.pid == null) {
-      mcpRes.cleanup();
-      return resolve({ ok: false, error: 'no_pid', run_id: runId });
-    }
-
-    meta.status = 'running';
-    meta.pid = child.pid;
-    writeRunMeta(runId, meta, home);
-
-    cairnLog.info('mode-a-scout', 'spawned', { run_id: runId, project_id: input.projectId, cairn_md_guidance_found: guidance.found_any });
-
-    // Send the prompt as one stream-json user-turn envelope, then close stdin
-    // (scout is single-turn — no follow-up messages).
-    try {
-      child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }) + '\n');
-      child.stdin.end();
-    } catch (_e) {}
-
-    // Collect assistant text across events; capture session_id from result.
-    let assistantText = '';
-    let sessionId = null;
-    const parser = createNdjsonStream(child.stdout);
-
-    parser.on('event', (ev) => {
-      try { fs.appendFileSync(path.join(runDir(runId, home), 'stream_events.jsonl'), JSON.stringify(ev) + '\n'); } catch (_e) {}
-      if (ev && ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
-        for (const block of ev.message.content) {
-          if (block && block.type === 'text' && typeof block.text === 'string') {
-            assistantText += block.text + '\n';
-          }
-        }
-      }
-      if (ev && ev.type === 'result' && typeof ev.session_id === 'string' && ev.session_id) {
-        sessionId = ev.session_id;
-      }
-    });
-
-    parser.on('error', (err, raw) => {
-      cairnLog.warn('mode-a-scout', 'ndjson_parse_error', { run_id: runId, message: (err && err.message) || String(err), raw_preview: raw ? String(raw).slice(0, 200) : null });
-    });
-
-    const timeoutMs = typeof o.timeoutMs === 'number' ? o.timeoutMs : DEFAULT_SCOUT_TIMEOUT_MS;
-    const timer = setTimeout(() => {
-      cairnLog.warn('mode-a-scout', 'timeout', { run_id: runId, timeout_ms: timeoutMs });
-      try { child.kill('SIGTERM'); } catch (_e) {}
-      setTimeout(() => { try { child.kill('SIGKILL'); } catch (_e) {} }, 5000).unref();
-    }, timeoutMs);
-    if (timer.unref) timer.unref();
-
-    child.on('exit', (code, signal) => {
-      clearTimeout(timer);
-      try { mcpRes.cleanup(); } catch (_e) {}
-      meta.ended_at = Date.now();
-      meta.exit_code = code;
-      meta.signal = signal || null;
-      meta.session_id = sessionId;
-
-      // Persist scout's session_id under the isolated key (so Phase 2
-      // execution --resume lookup can NEVER pick it up).
-      if (sessionId && o.db) {
-        persistScoutSessionId(o.db, input.projectId, sessionId, runId, meta.ended_at);
-      }
-
-      // Parse plan JSON from assistant text.
-      const rawPlan = extractPlanJson(assistantText);
-      const plan = normalizePlan(rawPlan, { goal: input.goal });
-      if (plan) {
-        meta.status = 'exited';
-        meta.plan_steps = plan.steps.length;
-        writeRunMeta(runId, meta, home);
-        cairnLog.info('mode-a-scout', 'plan_drafted', { run_id: runId, project_id: input.projectId, steps: plan.steps.length, session_id: sessionId });
-        resolve({ ok: true, plan, run_id: runId, session_id: sessionId, mcp_config_path: mcpRes.tempPath, raw_text: assistantText });
-      } else {
-        meta.status = 'failed';
-        meta.error = code === 0 ? 'plan_json_not_found' : ('exit_code:' + code);
-        writeRunMeta(runId, meta, home);
-        cairnLog.warn('mode-a-scout', 'plan_extraction_failed', { run_id: runId, project_id: input.projectId, exit_code: code, raw_preview: assistantText.slice(-500) });
-        resolve({ ok: false, error: meta.error, run_id: runId, raw_text: assistantText });
-      }
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      try { mcpRes.cleanup(); } catch (_e) {}
-      cairnLog.error('mode-a-scout', 'spawn_error', { run_id: runId, message: (err && err.message) || String(err) });
-      resolve({ ok: false, error: 'spawn_error', detail: (err && err.message) || String(err), run_id: runId });
-    });
+  const prompt = buildScoutPrompt({
+    goal: input.goal,
+    projectRoot: input.projectRoot,
+    projectId: input.projectId,
+    guidance,
+    projectCtx,
   });
+
+  const meta = {
+    run_id: runId,
+    provider: 'minimax-mentor',
+    project_id: input.projectId,
+    cwd: input.projectRoot,
+    started_at: Date.now(),
+    ended_at: null,
+    status: 'queued',
+    cairn_md_guidance_found: guidance.found_any,
+    readme_loaded: !!projectCtx.readme_excerpt,
+  };
+  writeRunMeta(runId, meta, home);
+  try { fs.writeFileSync(path.join(runDir(runId, home), 'prompt.txt'), prompt, 'utf8'); } catch (_e) {}
+
+  cairnLog.info('mode-a-scout', 'request', {
+    run_id: runId,
+    project_id: input.projectId,
+    cairn_md_guidance_found: guidance.found_any,
+    readme_loaded: !!projectCtx.readme_excerpt,
+  });
+
+  const chatImpl = o.chatImpl || llmClient.chatJson;
+  const chatRes = await chatImpl({
+    messages: [
+      { role: 'system', content: 'You are Cairn Mode A plan mentor. Output a fenced JSON block matching the requested schema. Be terse. Do NOT write code or attempt to execute anything.' },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.2,
+  }, {
+    timeoutMs: typeof o.timeoutMs === 'number' ? o.timeoutMs : DEFAULT_SCOUT_TIMEOUT_MS,
+    keysFile: o.keysFile,
+  });
+
+  meta.ended_at = Date.now();
+  meta.duration_ms = meta.ended_at - meta.started_at;
+  meta.llm_model = chatRes.model || null;
+  meta.llm_ok = !!chatRes.ok;
+
+  if (!chatRes.ok) {
+    meta.status = 'failed';
+    meta.error = chatRes.error_code || 'unknown';
+    if (chatRes.enabled === false) meta.error = 'llm_disabled:' + (chatRes.error_code || chatRes.reason || 'unknown');
+    writeRunMeta(runId, meta, home);
+    cairnLog.warn('mode-a-scout', 'request_failed', {
+      run_id: runId,
+      project_id: input.projectId,
+      error_code: meta.error,
+      duration_ms: meta.duration_ms,
+    });
+    return { ok: false, error: meta.error, run_id: runId };
+  }
+
+  const responseText = chatRes.text || '';
+  try { fs.writeFileSync(path.join(runDir(runId, home), 'response.txt'), responseText, 'utf8'); } catch (_e) {}
+
+  const rawPlan = extractPlanJson(responseText);
+  const plan = normalizePlan(rawPlan, { goal: input.goal });
+  if (!plan) {
+    meta.status = 'failed';
+    meta.error = 'plan_json_not_found';
+    writeRunMeta(runId, meta, home);
+    cairnLog.warn('mode-a-scout', 'plan_extraction_failed', {
+      run_id: runId,
+      project_id: input.projectId,
+      response_preview: responseText.slice(0, 400),
+      duration_ms: meta.duration_ms,
+    });
+    return { ok: false, error: 'plan_json_not_found', run_id: runId, response_text: responseText };
+  }
+
+  meta.status = 'exited';
+  meta.plan_steps = plan.steps.length;
+  writeRunMeta(runId, meta, home);
+  cairnLog.info('mode-a-scout', 'plan_drafted', {
+    run_id: runId,
+    project_id: input.projectId,
+    steps: plan.steps.length,
+    duration_ms: meta.duration_ms,
+    model: meta.llm_model,
+  });
+
+  return { ok: true, plan, run_id: runId, response_text: responseText };
 }
 
 /**
- * High-level orchestrator: spawn scout, write plan to scratchpad, flip
- * Mode A phase to 'plan_pending'. Caller (IPC handler) calls this once
- * after transitioning phase to 'planning'. Async — returns a promise
- * that resolves when the plan is on disk (or fallback happened).
- *
- * Fallback: if scout fails, we draft a deterministic plan from
- * goal.success_criteria via `mode-a-loop.planStepsFromGoal` so the
- * user STILL gets a `plan_pending` to click Start on. The plan body
- * is tagged `drafted_by: 'deterministic_fallback'` so the panel can
- * surface that Scout didn't actually run.
- *
- * Inputs (deps):
- *   registry     — registry module (setModeAPhase + saveRegistry)
- *   modeALoop    — mode-a-loop module (writePlan + planStepsFromGoal)
- *   getReg()     — returns latest reg binding (panel re-assigns it)
- *   setReg(reg)  — caller's setter
- *   db           — writable db handle
- *   project      — project entry (must have id + project_root)
- *   goal         — current goal (must be present, called only when so)
- *   profile      — optional CAIRN.md profile
- *   nowFn()      — optional, defaults to Date.now
- *   home         — optional CAIRN_HOME override (for tests)
- *
- * @returns {Promise<{ ok: boolean, plan?: object, source: 'scout'|'fallback', error?: string }>}
+ * High-level orchestrator: scout → write plan to scratchpad → flip
+ * Mode A phase to 'plan_pending'. Async. Fallback to deterministic
+ * planStepsFromGoal on scout failure so user still has a plan to
+ * Start.
  */
 async function runScoutThenWritePlan(deps) {
   const d = deps || {};
@@ -577,26 +468,22 @@ async function runScoutThenWritePlan(deps) {
 
   const now = d.nowFn ? d.nowFn() : Date.now();
 
-  // 1. Spawn scout
   const scoutRes = await runScout({
     projectRoot,
     projectId: project.id,
     goal,
   }, {
-    db: d.db,
     home: d.home,
-    mcpConfigTmpDir: d.mcpConfigTmpDir,
     timeoutMs: d.timeoutMs,
+    chatImpl: d.chatImpl,
   });
 
-  // 2. Determine plan body (scout success or deterministic fallback)
   let plan;
   let source;
   if (scoutRes.ok && scoutRes.plan) {
     plan = scoutRes.plan;
     source = 'scout';
   } else {
-    // Deterministic fallback. We require mode-a-loop.planStepsFromGoal.
     const modeALoop = d.modeALoop || require('./mode-a-loop.cjs');
     const fallbackSteps = modeALoop.planStepsFromGoal(goal);
     if (!fallbackSteps || fallbackSteps.length === 0) {
@@ -611,7 +498,7 @@ async function runScoutThenWritePlan(deps) {
       goal_id: (typeof goal === 'object' && goal && goal.id) || null,
       goal_title: typeof goal === 'string' ? goal : (goal && goal.title) || null,
       drafted_by: 'deterministic_fallback',
-      rationale: 'Scout failed (' + (scoutRes.error || 'unknown') + '); fell back to success_criteria → steps mapping.',
+      rationale: 'Mentor LLM failed (' + (scoutRes.error || 'unknown') + '); fell back to success_criteria → steps mapping.',
       steps: fallbackSteps,
       current_idx: 0,
       drafted_at: now,
@@ -620,7 +507,6 @@ async function runScoutThenWritePlan(deps) {
     source = 'fallback';
   }
 
-  // 3. Write plan to scratchpad
   try {
     const modeALoop = d.modeALoop || require('./mode-a-loop.cjs');
     modeALoop.writePlan(d.db, project.id, plan, now);
@@ -632,7 +518,6 @@ async function runScoutThenWritePlan(deps) {
     return { ok: false, error: 'write_plan_failed', source };
   }
 
-  // 4. Flip phase → plan_pending
   if (d.registry && typeof d.getReg === 'function' && typeof d.setReg === 'function') {
     const curReg = d.getReg();
     const phaseRes = d.registry.setModeAPhase(curReg, project.id, 'plan_pending');
@@ -655,12 +540,12 @@ async function runScoutThenWritePlan(deps) {
 module.exports = {
   runScout,
   runScoutThenWritePlan,
-  SCOUT_SESSION_KEY_PREFIX,
   DEFAULT_SCOUT_TIMEOUT_MS,
+  SCOUT_MAX_STEPS,
   // Exposed for tests
   _extractPlanGuidance: extractPlanGuidance,
   _extractPlanJson: extractPlanJson,
   _normalizePlan: normalizePlan,
   _buildScoutPrompt: buildScoutPrompt,
-  _whichCommand: whichCommand,
+  _gatherProjectContext: gatherProjectContext,
 };
