@@ -1908,6 +1908,47 @@
     color: #ffd6c0;
   }
   .cockpit-mode-toggle .mode-pill[disabled] { opacity: 0.5; cursor: not-allowed; }
+  /* Mode A plan widget (MA-2b). Compact ordered list with progress
+     summary. Read-only — no buttons until MA-2c adds dispatch. */
+  .cockpit-mode-a-plan {
+    margin: 6px 0 8px 0;
+    padding: 6px 8px;
+    background: #1a1f28;
+    border-left: 2px solid #4a2d20;
+    border-radius: 3px;
+    font-size: 0.82em;
+  }
+  .cockpit-mode-a-plan-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
+    color: #ffd6c0;
+  }
+  .cockpit-mode-a-plan-label { font-weight: 600; }
+  .cockpit-mode-a-plan-progress { color: #aac; font-size: 0.9em; }
+  .cockpit-mode-a-plan-steps {
+    margin: 0;
+    padding-left: 1.4em;
+    color: #ccc;
+    list-style: decimal;
+  }
+  .cockpit-mode-a-plan-steps li {
+    padding: 1px 0;
+    line-height: 1.4;
+  }
+  .cockpit-mode-a-plan-steps li.current {
+    color: #ffe8b0;
+    font-weight: 500;
+  }
+  .cockpit-mode-a-plan-steps li.done {
+    color: #88aa88;
+    text-decoration: line-through;
+  }
+  .cockpit-mode-a-plan-empty {
+    color: #888;
+    font-style: italic;
+  }
   .cockpit-mentor-status {
     display: flex;
     flex-wrap: wrap;
@@ -3411,6 +3452,16 @@
         <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
         <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
         <span class="cockpit-mentor-today" id="cockpit-mentor-today"></span>
+      </div>
+      <!-- Mode A plan widget (MA-2b 2026-05-14). Only visible when mode=A
+           and a plan exists. Read-only: shows current step + progress.
+           Auto-dispatch / advance arrives in MA-2c. -->
+      <div class="cockpit-mode-a-plan" id="cockpit-mode-a-plan" hidden>
+        <div class="cockpit-mode-a-plan-header">
+          <span class="cockpit-mode-a-plan-label">Mode A 计划</span>
+          <span class="cockpit-mode-a-plan-progress" id="cockpit-mode-a-plan-progress"></span>
+        </div>
+        <ol class="cockpit-mode-a-plan-steps" id="cockpit-mode-a-plan-steps"></ol>
       </div>
       <div class="cockpit-needs-list" id="cockpit-needs-list">
         <div class="cockpit-needs-empty">No escalations — Mentor handling.</div>

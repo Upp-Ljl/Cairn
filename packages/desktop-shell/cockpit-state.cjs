@@ -59,6 +59,7 @@ const SUPPORTED_TABLES = [
 // Schema-v2 CAIRN.md profile reader — mtime-gated cache via loadProfile,
 // surfaces ## Whole sentence into cockpit state for Module 1 rendering.
 const profileMod = require('./mentor-project-profile.cjs');
+const modeALoop  = require('./mode-a-loop.cjs');
 
 function sqlInList(arr) {
   if (!arr || arr.length === 0) return '(NULL)';
@@ -78,6 +79,7 @@ function emptyCockpitState(project, dbPath, reason) {
     goal: null,
     leader: (project && project.leader) || null,
     mode: (project && project.mode) || 'B',
+    mode_a_plan: null,
     autopilot_status: AUTOPILOT_STATUS.AGENT_IDLE,
     autopilot_reason: reason || 'no_data',
     agents: [],
@@ -989,6 +991,11 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
   const cockpitLane = require('./cockpit-lane.cjs');
   let lanes = [];
   try { lanes = cockpitLane.queryLanes(db, project.id, { limit: 10 }); } catch (_e) { lanes = []; }
+  // Mode A loop (MA-2b 2026-05-14): expose drafted plan so the panel
+  // can render progress. mentor-tick is the writer; this is a pure
+  // read with no side effect (D9 read-only).
+  let mode_a_plan = null;
+  try { mode_a_plan = modeALoop.getPlan(db, project.id); } catch (_e) { mode_a_plan = null; }
   const progress = queryProgress(db, tables, hints);
   const currentTask = queryCurrentTask(db, tables, hints);
   const latestMentor = queryLatestMentorNudge(db, tables, project.id);
@@ -1178,6 +1185,9 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     goal: goal || null,
     leader: project.leader || null,
     mode: project.mode || 'B',
+    // MA-2b (2026-05-14): Mode A execution plan, when mode=A + goal set.
+    // null otherwise. Steps array = ordered success_criteria.
+    mode_a_plan,
     // schema-v2 surface (2026-05-14): Mentor north-star + computed in-flight
     whole_sentence,
     cairn_md_present,
