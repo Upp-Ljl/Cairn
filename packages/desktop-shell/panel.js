@@ -4218,6 +4218,15 @@ function renderCockpit(state) {
     modeBtnA.classList.toggle('active', currentMode === 'A');
     modeBtnB.classList.toggle('active', currentMode === 'B');
   }
+  // Update the inline hint text — tells user at a glance what the
+  // currently-selected mode actually does. Avoids users wondering
+  // "what's A/B?" without having to read the tooltip.
+  const modeHint = document.getElementById('cockpit-run-mode-hint');
+  if (modeHint) {
+    modeHint.textContent = currentMode === 'A'
+      ? 'Mentor 自动起草计划 + 派单 + 答疑'
+      : 'Mentor 给建议，你主动派单';
+  }
   // MA-2b: Mode A plan widget — only visible when mode=A AND plan exists.
   const planRoot = document.getElementById('cockpit-mode-a-plan');
   const planStepsEl = document.getElementById('cockpit-mode-a-plan-steps');
