@@ -452,6 +452,40 @@ function runOnce(deps) {
           if (decision && (decision.action === 'drafted' || decision.action === 'superseded')) {
             out.decisions++;
           }
+          // 2026-05-14 CEO escalation: when decideNextDispatch returns
+          // no_agent, auto-spawn a CC subprocess in the project root.
+          // Without this, Mode A silently sits on PENDING steps forever
+          // any time the user doesn't happen to have a CC terminal open.
+          // The spawner is cooldown-bounded (60s) + alive-run-aware so
+          // we don't fork an army.
+          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'no_agent') {
+            try {
+              const modeASpawner = deps.modeASpawner || require('./mode-a-spawner.cjs');
+              const freshPlan = modeALoop.getPlan(entry.db, project.id);
+              const spawnRes = modeASpawner.spawnModeAWorker({
+                project,
+                plan: freshPlan,
+                db: entry.db,
+                tables: entry.tables,
+              }, { nowFn: deps.nowFn });
+              if (spawnRes && spawnRes.ok) {
+                out.decisions++;
+                if (typeof deps.onDecision === 'function') {
+                  try { deps.onDecision(project.id, {
+                    rule: 'A-mode',
+                    action: 'worker_spawned',
+                    run_id: spawnRes.run_id,
+                    agent_id: spawnRes.agent_id,
+                  }); } catch (_e) {}
+                }
+              }
+            } catch (e) {
+              cairnLog.error('mode-a-spawner', 'tick_spawn_threw', {
+                project_id: project.id,
+                message: (e && e.message) || String(e),
+              });
+            }
+          }
           if (typeof deps.onDecision === 'function' && decision && decision.action !== 'no_goal' && decision.action !== 'unchanged' && decision.action !== 'no_project') {
             try { deps.onDecision(project.id, Object.assign({ rule: 'A-mode' }, decision)); } catch (_e) {}
           }
