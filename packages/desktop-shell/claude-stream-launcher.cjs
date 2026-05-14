@@ -167,10 +167,22 @@ function extractAssistantText(ev) {
  * Resolve a command on PATH (parent-process resolution). Mirrors
  * worker-launcher.cjs::whichCommand semantics so smokes that PATH-prepend
  * a fake binary work the same way for both launchers.
+ *
+ * Windows extension order (2026-05-14 鸭总 panel crash fix):
+ *   On Windows, npm installs shims under %AppData%\Roaming\npm as a
+ *   TRIO — `claude` (no ext, POSIX shell script for Git Bash),
+ *   `claude.cmd` (cmd.exe shim), `claude.ps1` (PowerShell shim).
+ *   `node:child_process.spawn()` cannot execute the no-extension
+ *   POSIX script on Windows — it throws `ENOENT` because the file
+ *   has no executable association. We must prefer the .cmd / .exe /
+ *   .bat shims. Listing '' is *correct on POSIX* (the only valid
+ *   form there) and *fatal on Windows*; drop it from the Windows
+ *   list entirely. The fake-claude smoke writes `.cmd` on Windows
+ *   so this matches what the real binary install ships.
  */
 function whichCommand(name) {
   const exts = process.platform === 'win32'
-    ? ['', '.cmd', '.exe', '.bat']
+    ? ['.cmd', '.exe', '.bat']  // never '' on Windows — see comment above
     : [''];
   const sep = process.platform === 'win32' ? ';' : ':';
   const paths = (process.env.PATH || '').split(sep);
