@@ -4218,6 +4218,32 @@ function renderCockpit(state) {
     modeBtnA.classList.toggle('active', currentMode === 'A');
     modeBtnB.classList.toggle('active', currentMode === 'B');
   }
+  // MA-2b: Mode A plan widget — only visible when mode=A AND plan exists.
+  const planRoot = document.getElementById('cockpit-mode-a-plan');
+  const planStepsEl = document.getElementById('cockpit-mode-a-plan-steps');
+  const planProgressEl = document.getElementById('cockpit-mode-a-plan-progress');
+  const plan = state.mode_a_plan;
+  if (planRoot) {
+    const visible = currentMode === 'A' && plan && Array.isArray(plan.steps);
+    planRoot.hidden = !visible;
+    if (visible && planStepsEl && planProgressEl) {
+      const steps = plan.steps || [];
+      const total = steps.length;
+      const doneCount = steps.filter(s => s.state === 'DONE').length;
+      const currentIdx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
+      planProgressEl.textContent = total > 0
+        ? `${doneCount}/${total} · 当前 #${Math.min(currentIdx + 1, total)}`
+        : '尚无步骤（goal 没填 success criteria）';
+      if (total === 0) {
+        planStepsEl.innerHTML = '<li class="cockpit-mode-a-plan-empty">add success_criteria to the goal to populate the plan</li>';
+      } else {
+        planStepsEl.innerHTML = steps.map((s, idx) => {
+          const cls = s.state === 'DONE' ? 'done' : (idx === currentIdx ? 'current' : '');
+          return `<li class="${cls}">${escapeHtml(s.label || '(unnamed step)')}</li>`;
+        }).join('');
+      }
+    }
+  }
   // Mentor status header (always render — Mentor is primary, not hidden)
   const stateEl = document.getElementById('cockpit-mentor-state');
   const lastCheckEl = document.getElementById('cockpit-mentor-last-check');
