@@ -482,7 +482,14 @@ async function evaluateRuleC_offGoal(ctx) {
     r = await llmJudgeOffGoal({
       enabled: true,
       whole: profile.whole_sentence,
-      goal: profile.goal && profile.goal.text ? profile.goal.text : null,
+      // profile.goal comes from mentor-project-profile.cjs::extractGoal,
+      // which returns a STRING (not {text}). 2026-05-14 bug 鸭总 caught:
+      // original `profile.goal.text` always undefined → goal always null
+      // → Rule C off-goal judge ran without project goal context.
+      // Accept both shapes for forward-compat.
+      goal: typeof profile.goal === 'string' ? profile.goal
+          : (profile.goal && typeof profile.goal.text === 'string' ? profile.goal.text
+          : (profile.goal && typeof profile.goal.title === 'string' ? profile.goal.title : null)),
       recent_activity: recentActivity,
     });
   } catch (e) {
