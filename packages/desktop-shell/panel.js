@@ -94,13 +94,29 @@ function escapeHtml(s) {
 // View state — Project-Aware (L1 default; L2 when selectedProject is set)
 // ---------------------------------------------------------------------------
 
-let currentView = 'projects'; // 'projects' | 'project' | 'cockpit' | 'unassigned'
+let currentView = 'projects'; // 'projects' | 'project' | 'cockpit' | 'unassigned' | 'timeline'
 /** @type {{id:string,label:string,project_root:string,db_path:string}|null} */
 let selectedProject = null;
 /** @type {string|null} db_path the user is drilling into in the Unassigned view */
 let selectedUnassignedDbPath = null;
 /** @type {string|null} agent_id the Tasks tab is filtered to (set from Sessions tab) */
 let selectedAgentId = null;
+
+// View history stack — 2026-05-14 bug 鸭总 caught: ESC from L2 timeline
+// jumped straight to projects list instead of returning to the cockpit.
+// setView pushes the previous (view, meta); ESC pops and restores.
+// Stack is bounded at 16 entries to avoid unbounded growth.
+const viewHistory = [];
+function pushHistory(prevName, prevMeta) {
+  // Don't record a no-op (same view + same meta) entry.
+  const top = viewHistory[viewHistory.length - 1];
+  if (top && top.name === prevName && JSON.stringify(top.meta) === JSON.stringify(prevMeta)) return;
+  viewHistory.push({ name: prevName, meta: prevMeta });
+  while (viewHistory.length > 16) viewHistory.shift();
+}
+function popHistory() {
+  return viewHistory.pop() || null;
+}
 
 function setView(name, meta) {
   // A view switch means the L2 task drill-down is no longer valid:
@@ -145,6 +161,21 @@ function setView(name, meta) {
   // the L1 grid after ESC.
   const menuPop = document.getElementById('menu-pop');
   if (menuPop) menuPop.classList.remove('open');
+  // Save current view to history so ESC can return to it (2026-05-14 fix).
+  // Skip when explicitly opted out (e.g. popHistory's own restore call).
+  // Subagent审查 catch: also push when staying on same view but switching
+  // meta (e.g., cockpit(A) → cockpit(B)) — that's a real navigation.
+  const prevMeta = currentView === 'cockpit' || currentView === 'project'
+    ? (selectedProject ? { id: selectedProject.id, label: selectedProject.label, project_root: selectedProject.project_root, db_path: selectedProject.db_path } : null)
+    : currentView === 'unassigned'
+      ? { db_path: selectedUnassignedDbPath }
+      : null;
+  const nextMetaId = (name === 'cockpit' || name === 'project') && meta ? meta.id : null;
+  const prevMetaId = prevMeta && prevMeta.id;
+  const sameViewSameMeta = currentView === name && prevMetaId === nextMetaId;
+  if (!sameViewSameMeta) {
+    pushHistory(currentView, prevMeta);
+  }
   currentView = name;
   if (name === 'project' || name === 'cockpit') {
     selectedProject = meta || null;
@@ -3788,13 +3819,53 @@ document.addEventListener('keydown', e => {
       closeModal();
       return;
     }
-    // Otherwise: any non-L1 view returns to L1; L1 closes the panel.
-    if (currentView === 'project' || currentView === 'cockpit') {
-      window.cairn.selectProject(null).then(() => setView('projects', null));
-    } else if (currentView === 'unassigned') {
-      setView('projects', null);
-    } else {
+    // Help overlay second (subagent审查 catch 2026-05-14): dismiss
+    // cockpit-help-overlay without history-popping; otherwise '?' open
+    // + ESC close would also navigate backward.
+    const helpOverlay = document.getElementById('cockpit-help-overlay');
+    if (helpOverlay && helpOverlay.classList.contains('open')) {
+      helpOverlay.classList.remove('open');
+      return;
+    }
+    // 2026-05-14 fix: ESC pops view history — back to previous view, not
+    // straight to projects list. If history is empty AND we're on L1,
+    // close the window. If history is empty but we're deeper, fall back
+    // to projects list.
+    const prev = popHistory();
+    if (prev) {
+      // Avoid pushHistory re-recording the current view (we're going back).
+      const restoreName = prev.name || 'projects';
+      // Manual restore that doesn't re-record history.
+      currentView = restoreName;
+      // Subagent审查 catch (2026-05-14): clear per-view scoped state that
+      // setView() normally clears (selectedAgentId, clearTaskSelection)
+      // so the restored view doesn't carry stale filters from the deeper view.
+      selectedAgentId = null;
+      if (typeof clearTaskSelection === 'function') clearTaskSelection();
+      if (restoreName === 'cockpit' || restoreName === 'project') {
+        selectedProject = prev.meta || null;
+        if (prev.meta && prev.meta.id) window.cairn.selectProject(prev.meta.id).catch(() => {});
+      } else if (restoreName === 'unassigned') {
+        selectedUnassignedDbPath = prev.meta && prev.meta.db_path;
+        selectedProject = null;
+      } else {
+        selectedProject = null;
+        selectedUnassignedDbPath = null;
+      }
+      // Refresh visibility flags (mimics setView's hidden toggles).
+      document.getElementById('view-projects-list').hidden = (restoreName !== 'projects');
+      document.getElementById('view-project').hidden       = (restoreName !== 'project');
+      document.getElementById('view-cockpit').hidden       = (restoreName !== 'cockpit');
+      document.getElementById('view-unassigned').hidden    = (restoreName !== 'unassigned');
+      const tlEl = document.getElementById('view-timeline');
+      if (tlEl) tlEl.hidden = (restoreName !== 'timeline');
+      renderHeaderForView();
+      poll().catch(() => {});
+    } else if (currentView === 'projects') {
       window.close();
+    } else {
+      // Empty history but deep view — fall through to projects list.
+      window.cairn.selectProject(null).then(() => setView('projects', null));
     }
   }
 });
@@ -4190,7 +4261,7 @@ function renderTodolist(todos) {
   if (!listEl) return;
   if (!todos || todos.length === 0) {
     listEl.innerHTML =
-      '<div class="cockpit-todolist-empty">No todos yet — agent self-suggestions and Mentor recommendations appear here</div>';
+      '<div class="cockpit-todolist-empty">还没有建议 — Mentor 看到 agent 干完一段、或 agent 主动提议下一步时会出现在这里</div>';
     return;
   }
   const rows = todos.map(t => {
@@ -4882,7 +4953,21 @@ function renderTimelineView(payload) {
   const events = Array.isArray(payload.events) ? payload.events : [];
   metaEl.textContent = events.length > 0 ? `${events.length} events` : '';
   if (events.length === 0) {
-    listEl.innerHTML = '<div class="placeholder">no events yet — agent hasn\'t written timeline records (see docs/cairn-session-timeline-protocol.md)</div>';
+    // 2026-05-14: friendlier empty state. Agent self-written events live
+    // in scratchpad `session_timeline/<agent>/<ulid>` keys; kernel auto-
+    // instrumentation also writes events on every task.* transition
+    // (CREATED / RUNNING / BLOCKED / DONE / ...). If both are empty, the
+    // session genuinely hasn't done anything Cairn could observe yet.
+    listEl.innerHTML = `
+      <div class="placeholder">
+        <strong>这个 session 还没有可显示的工作脉络</strong><br>
+        <span style="font-size:0.85em;color:#888">
+          可能因为:
+          <br>· agent 刚启动，还没创建任何 task<br>
+          · agent 没有调用 <code>cairn.task.*</code> 工具（kernel auto-instrument 不会触发）<br>
+          · agent 没有按 cairn-aware skill 写自定义 timeline 事件
+        </span>
+      </div>`;
     return;
   }
   // Compute indentation depth via parent_event_id chain. Cap at 2 levels
