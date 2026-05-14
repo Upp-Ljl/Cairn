@@ -42,6 +42,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const cairnLog = require('./cairn-log.cjs');
 
 const REGISTRY_PATH       = path.join(os.homedir(), '.cairn', 'projects.json');
 const LEGACY_PREFS_PATH   = path.join(os.homedir(), '.cairn', 'desktop-shell.json');
@@ -300,6 +301,12 @@ function saveRegistry(reg) {
     out.meta = reg.meta;
   }
   atomicWriteJson(REGISTRY_PATH, out);
+  // Logged after the write so caller's HOME / sandbox env is honored
+  // (cairnLog resolves LOG_DIR from os.homedir() at first call).
+  cairnLog.info('registry', 'registry_saved', {
+    path: REGISTRY_PATH,
+    projects_count: out.projects.length,
+  });
 }
 
 // ---------------------------------------------------------------------------

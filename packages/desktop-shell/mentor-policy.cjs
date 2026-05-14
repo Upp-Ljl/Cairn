@@ -34,6 +34,41 @@
 
 const crypto = require('node:crypto');
 const mentorProfile = require('./mentor-project-profile.cjs');
+const cairnLog = require('./cairn-log.cjs');
+
+/**
+ * Pull a human-readable goal title out of whatever shape the caller hands
+ * us. Three legitimate shapes flow through Cairn:
+ *   1. plain string  (mentor-project-profile.extractGoal returns this)
+ *   2. { title: ... } (registry.setProjectGoal stores this)
+ *   3. { text: ... }  (old / never-shipped variant; tolerated for safety)
+ * Returns null on miss + logs a `goal_text_failed` event for triage —
+ * the goal.text vs goal.title drift was the recurring bug class on
+ * 2026-05-13/14, this is its tripwire.
+ */
+function extractGoalTitle(goal, ctx) {
+  if (typeof goal === 'string') return goal;
+  if (goal && typeof goal === 'object') {
+    if (typeof goal.title === 'string') return goal.title;
+    if (typeof goal.text === 'string') return goal.text;
+    cairnLog.warn('goal', 'goal_text_failed', {
+      component: (ctx && ctx.component) || 'unknown',
+      task_id: ctx && ctx.task_id,
+      project_id: ctx && ctx.project_id,
+      observed_keys: Object.keys(goal || {}).slice(0, 8),
+    });
+    return null;
+  }
+  if (goal != null) {
+    cairnLog.warn('goal', 'goal_text_failed', {
+      component: (ctx && ctx.component) || 'unknown',
+      task_id: ctx && ctx.task_id,
+      project_id: ctx && ctx.project_id,
+      observed_type: typeof goal,
+    });
+  }
+  return null;
+}
 
 const ENC = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 function newUlid() {
@@ -487,9 +522,7 @@ async function evaluateRuleC_offGoal(ctx) {
       // original `profile.goal.text` always undefined → goal always null
       // → Rule C off-goal judge ran without project goal context.
       // Accept both shapes for forward-compat.
-      goal: typeof profile.goal === 'string' ? profile.goal
-          : (profile.goal && typeof profile.goal.text === 'string' ? profile.goal.text
-          : (profile.goal && typeof profile.goal.title === 'string' ? profile.goal.title : null)),
+      goal: extractGoalTitle(profile.goal, { component: 'mentor-policy.rule-C', task_id: task.task_id }),
       recent_activity: recentActivity,
     });
   } catch (e) {
@@ -833,6 +866,7 @@ function ackEscalation(db, projectId, escalationId) {
 module.exports = {
   DEFAULTS,
   newUlid,
+  extractGoalTitle,
   // sub-evaluators (exported for tests)
   evaluateRuleB_errorRepetition,
   evaluateRuleC_offGoal,

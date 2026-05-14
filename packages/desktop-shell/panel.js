@@ -176,6 +176,17 @@ function setView(name, meta) {
   if (!sameViewSameMeta) {
     pushHistory(currentView, prevMeta);
   }
+  // Mode A/B reframe (CEO 2026-05-14): structured log of every nav.
+  try {
+    if (window.cairn && typeof window.cairn.log === 'function') {
+      window.cairn.log('panel', 'view_changed', {
+        from: currentView,
+        to: name,
+        project_id: nextMetaId || null,
+        same_view_same_meta: sameViewSameMeta,
+      });
+    }
+  } catch (_e) {}
   currentView = name;
   if (name === 'project' || name === 'cockpit') {
     selectedProject = meta || null;

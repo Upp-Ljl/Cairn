@@ -27,6 +27,8 @@
  * No new MCP tool, no new schema, no new dependencies.
  */
 
+const cairnLog = require('./cairn-log.cjs');
+
 const TICK_INTERVAL_MS = 30 * 1000;
 /** Cap on RUNNING tasks examined per project per tick. Tasks are sorted
  *  by updated_at DESC — most-recent first; deeper backlog evaluated on
@@ -238,6 +240,12 @@ function runOnce(deps) {
                 if (decision && decision.action && decision.action !== 'on_path'
                     && decision.action !== 'strike' && decision.action !== 'helper_skipped') {
                   out.decisions++;
+                  cairnLog.info('mentor-tick', 'rule_decision', {
+                    project_id: project.id,
+                    task_id: task.task_id,
+                    rule: decision.rule || 'C',
+                    action: decision.action,
+                  });
                   if (typeof deps.onDecision === 'function') {
                     try { deps.onDecision(project.id, decision); } catch (_e) {}
                   }
@@ -294,6 +302,10 @@ function runOnce(deps) {
       } catch (_e) { /* lane module missing or other transient — ignore */ }
     } catch (e) {
       out.errors.push({ project_id: project && project.id, error: e && e.message ? e.message : String(e) });
+      cairnLog.error('mentor-tick', 'tick_failed', {
+        project_id: project && project.id,
+        message: (e && e.message) || String(e),
+      });
     }
   }
   _tickCount++;

@@ -24,6 +24,12 @@ const MUTATIONS_ENABLED = (() => {
 })();
 
 const api = {
+  // Renderer-side structured log: fire-and-forget. Main writes to
+  // ~/.cairn/logs/cairn-<date>.jsonl. Never await — failures are
+  // swallowed in main per cairn-log.cjs contract.
+  log: (component, event, details, level) => {
+    try { ipcRenderer.send('cairn:log', component, event, details, level); } catch (_e) {}
+  },
   // ---- Project-Aware Live Panel: L1 + project registry ----
   getProjectsList:    () => ipcRenderer.invoke('get-projects-list'),
   // Cockpit redesign (Phase 1): single-project read-only payload.
