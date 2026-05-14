@@ -221,6 +221,46 @@ function ensureDbHandle(p) {
 }
 
 /**
+ * Same as ensureDbHandle but returns a WRITABLE handle. Used by
+ * mentor-tick (and Mode A/B writes generally) — readonly mode
+ * blocks ALL of: mode-a-loop's plan persistence, mode-b-suggester's
+ * mentor_todo writes, mode-a-auto-answer's blocker updates,
+ * mentor-policy's nudge/escalation writes. None of these are panel
+ * mutations (which D9 governs); they're Mentor-tier kernel writes
+ * already allowed by D9.1 Tier-A. Caller MUST be a Mentor-tier path,
+ * not a panel render path.
+ *
+ * 2026-05-14 fix: pre-this commit mentor-tick was wired to
+ * ensureDbHandle directly, getting a readonly handle → every tick
+ * crashed with "attempt to write a readonly database". Now mentor-tick
+ * is wired to ensureWritableDbHandle, panel renders keep using the
+ * readonly ensureDbHandle.
+ */
+const writableDbHandles = new Map();
+function ensureWritableDbHandle(p) {
+  if (!p || DB_PATH_SENTINELS.has(p)) {
+    p = registry.DEFAULT_DB_PATH;
+  }
+  if (writableDbHandles.has(p)) return writableDbHandles.get(p);
+  if (!fs.existsSync(p)) {
+    return null;
+  }
+  ensureWalMode(p);
+  try {
+    const handle = openWriteDb(p);
+    const entry = { db: handle, tables: queries.getTables(handle) };
+    writableDbHandles.set(p, entry);
+    // eslint-disable-next-line no-console
+    console.log(`cairn: db connected (writable, mentor-tick) ${p}`);
+    return entry;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`cairn: writable db open failed: ${e.message}`);
+    return null;
+  }
+}
+
+/**
  * Close a read handle if no remaining registry project still points
  * at it. Call after registry mutations.
  */
@@ -2803,10 +2843,16 @@ app.whenReady().then(() => {
     mentorTick.start({
       // reg is reassigned by addProject/setGoal/etc handlers, so use a
       // getter that always returns the latest binding. Other deps
-      // (ensureDbHandle, projectQueries, mentorPolicy, registry) are
-      // module-level immutable.
+      // (projectQueries, mentorPolicy, registry) are module-level
+      // immutable.
       get reg() { return reg; },
-      ensureDbHandle, projectQueries, mentorPolicy, registry,
+      // 2026-05-14 fix: mentor-tick MUST write (scratchpad mode_a_plan,
+      // mentor_todo rows, blocker auto-answers, dispatch_requests). The
+      // panel-render ensureDbHandle opens readonly, breaking ALL writes.
+      // ensureWritableDbHandle gives mentor-tick the same handle shape
+      // but in r/w mode. Panel renders still use the readonly version.
+      ensureDbHandle: ensureWritableDbHandle,
+      projectQueries, mentorPolicy, registry,
     });
     // eslint-disable-next-line no-console
     console.log(`cairn mentor auto-tick — started (every ${mentorTick.TICK_INTERVAL_MS / 1000}s)`);
