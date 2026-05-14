@@ -788,9 +788,17 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
 // Autopilot status — derived
 // ---------------------------------------------------------------------------
 
-function deriveAutopilotStatus({ goal, agents, escalationsPending }) {
+function deriveAutopilotStatus({ goal, agents, escalationsPending, progress }) {
   if (!goal) return AUTOPILOT_STATUS.NO_GOAL;
   if (escalationsPending > 0) return AUTOPILOT_STATUS.MENTOR_BLOCKED_NEED_USER;
+  // 2026-05-14 bug 鸭总 caught: "agent 在执行" was shown even when no
+  // RUNNING task existed — just because a Claude Code window was open
+  // (process registered ⇒ ACTIVE). Real "working" requires actual task
+  // activity. ACTIVE process without RUNNING/BLOCKED/REVIEW task = IDLE.
+  const activeTaskCount = progress
+    ? (progress.tasks_running || 0) + (progress.tasks_blocked || 0) + (progress.tasks_waiting_review || 0)
+    : 0;
+  if (activeTaskCount === 0) return AUTOPILOT_STATUS.AGENT_IDLE;
   const liveAgents = agents.filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
   if (liveAgents.length === 0) return AUTOPILOT_STATUS.AGENT_IDLE;
   return AUTOPILOT_STATUS.AGENT_WORKING;
@@ -1001,6 +1009,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     goal,
     agents,
     escalationsPending: escalationsPending.length,
+    progress,
   });
 
   // Schema v2 CAIRN.md: panel surfaces the `## Whole` sentence as
