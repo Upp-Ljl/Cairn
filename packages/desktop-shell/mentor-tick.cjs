@@ -315,8 +315,71 @@ function runOnce(deps) {
             project,
             goal,
             profile,
+            agentIds: hints,
+            leader: (cockpitSettings && cockpitSettings.leader) || null,
             nowFn: deps.nowFn,
           });
+          // MA-2c: execute the dispatch decision (if any). The pure
+          // module decided WHAT to dispatch; the tick is responsible
+          // for WRITING the dispatch_requests row + bookkeeping back
+          // to the plan.
+          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'dispatch') {
+            const dr = decision.dispatch_request;
+            try {
+              // Defensive re-read (subagent verdict 2026-05-14 C): if a
+              // prior tick wrote dispatch_requests but failed at
+              // markStepDispatched, the in-memory `plan` from this tick's
+              // decideNextDispatch may already be stale by the time we
+              // call dispatchTodo. Re-read the plan + bail if the step
+              // has flipped to DISPATCHED in the interim. Cheap belt-and-
+              // -suspenders that costs one scratchpad SELECT.
+              const freshPlan = modeALoop.getPlan(entry.db, project.id);
+              const freshStep = freshPlan && Array.isArray(freshPlan.steps) ? freshPlan.steps[dr.step_idx] : null;
+              if (freshStep && freshStep.state === 'DISPATCHED') {
+                cairnLog.info('mode-a-loop', 'auto_dispatch_skipped', {
+                  project_id: project.id,
+                  step_idx: dr.step_idx,
+                  reason: 'already_dispatched_concurrently',
+                });
+                throw new Error('__skip_already_dispatched__');
+              }
+              const cockpitDispatch = deps.cockpitDispatch || require('./cockpit-dispatch.cjs');
+              const res = cockpitDispatch.dispatchTodo(entry.db, entry.tables, {
+                project_id: project.id,
+                target_agent_id: dr.target_agent_id,
+                label: dr.step.label,
+                source: 'mode-a-loop',
+                todo_id: `mode_a_step/${decision.plan && decision.plan.plan_id}/${dr.step_idx}`,
+                why: 'Mode A — auto-dispatched plan step',
+              });
+              if (res && res.ok && res.dispatch_id) {
+                modeALoop.markStepDispatched(entry.db, project.id, dr.step_idx, res.dispatch_id, deps.nowFn ? deps.nowFn() : Date.now());
+                out.decisions++;
+              } else {
+                cairnLog.warn('mode-a-loop', 'auto_dispatch_failed', {
+                  project_id: project.id,
+                  step_idx: dr.step_idx,
+                  target_agent_id: dr.target_agent_id,
+                  error: res && res.error,
+                });
+              }
+            } catch (e) {
+              // Sentinel for the concurrent-dispatch skip path — already
+              // logged as 'auto_dispatch_skipped'. Suppress here.
+              if (e && e.message === '__skip_already_dispatched__') {
+                /* expected, swallow */
+              } else {
+                cairnLog.error('mode-a-loop', 'auto_dispatch_threw', {
+                  project_id: project.id,
+                  step_idx: dr.step_idx,
+                  message: (e && e.message) || String(e),
+                });
+              }
+            }
+          }
+          if (decision && decision.advance && decision.advance.action === 'advanced') {
+            out.decisions++;
+          }
           if (decision && (decision.action === 'drafted' || decision.action === 'superseded')) {
             out.decisions++;
           }

@@ -196,17 +196,226 @@ function ensurePlan(db, project, goal, profile, opts) {
 }
 
 /**
- * Per-project tick — called from mentor-tick when project mode === 'A'.
- * Reads goal + profile + ensures plan exists. Returns the decision
- * object from ensurePlan so the caller can include it in tick output.
+ * Decide whether to dispatch the current step. Pure read; returns one
+ * of:
+ *   { action: 'dispatch', step, target_agent_id }   — go for it
+ *   { action: 'waiting',  step }                    — step DISPATCHED, awaiting outcome
+ *   { action: 'plan_complete' }                     — all steps DONE
+ *   { action: 'no_steps' }                          — plan empty (no success_criteria)
+ *   { action: 'no_agent' }                          — no ACTIVE process to target
  *
- * Future (MA-2b): also dispatch the current step if no RUNNING task,
- * advance on outcomes PASS, mark COMPLETE / TERMINAL_FAIL.
+ * Target selection: prefer ACTIVE process whose agent_type matches the
+ * project leader; fall back to the first ACTIVE process in `agentIds`.
+ * Static 'mcp-server' presence rows count — those ARE the agent
+ * sessions (claude-code / cursor / aider / etc. each register one).
+ */
+function decideNextDispatch(db, project, plan, agentIds, opts) {
+  if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
+    return { action: 'no_steps' };
+  }
+  const idx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
+  if (idx >= plan.steps.length) {
+    return { action: 'plan_complete' };
+  }
+  const step = plan.steps[idx];
+  if (!step) return { action: 'plan_complete' };
+
+  // If step already DISPATCHED, the loop's job is to wait for advance —
+  // not to re-dispatch. advanceOnComplete handles the transition.
+  if (step.state === 'DISPATCHED') {
+    return { action: 'waiting', step };
+  }
+  if (step.state === 'DONE') {
+    // Should never happen — current_idx should have advanced past DONE
+    // steps. Defensive: treat as plan_complete signal if all subsequent
+    // are also DONE; else return waiting on next pending.
+    return { action: 'noop', reason: 'current_step_already_done' };
+  }
+  if (step.state !== 'PENDING') {
+    return { action: 'noop', reason: 'unknown_state:' + step.state };
+  }
+
+  // Pick target agent. Filter to ACTIVE rows in agentIds.
+  if (!Array.isArray(agentIds) || agentIds.length === 0) {
+    return { action: 'no_agent' };
+  }
+  const placeholders = '(' + agentIds.map(() => '?').join(',') + ')';
+  let candidates = [];
+  try {
+    candidates = db.prepare(`
+      SELECT agent_id, agent_type
+      FROM processes
+      WHERE agent_id IN ${placeholders}
+        AND status = 'ACTIVE'
+      ORDER BY last_heartbeat DESC
+    `).all(...agentIds);
+  } catch (_e) {
+    return { action: 'no_agent' };
+  }
+  if (candidates.length === 0) {
+    return { action: 'no_agent' };
+  }
+  // Leader-preferred selection.
+  //
+  // KNOWN LIMITATION (subagent verdict 2026-05-14 D): in production
+  // mcp-server registers every session with agent_type='mcp-server'
+  // (see packages/mcp-server/src/presence.ts), so this filter never
+  // matches a leader like 'claude-code' / 'cursor' / etc. and we always
+  // fall through to candidates[0]. The opts.leader plumbing stays as
+  // forward-compat for a future kernel change that discriminates by
+  // client IDE — likely via the `client:<name>` capability tag, but
+  // that requires a kernel-side change to surface it on `processes`.
+  // For MA-2c this is documented, not fixed: behavior degrades to
+  // "most recently heartbeated ACTIVE session", which is usually right.
+  const leader = (opts && opts.leader) || null;
+  let chosen = null;
+  if (leader) {
+    chosen = candidates.find(c => c.agent_type === leader);
+  }
+  if (!chosen) chosen = candidates[0];
+  return {
+    action: 'dispatch',
+    step,
+    step_idx: idx,
+    target_agent_id: chosen.agent_id,
+  };
+}
+
+/**
+ * Side-effecting: marks step at idx DISPATCHED with dispatch_id +
+ * dispatched_at and rewrites the plan to scratchpad. Caller is
+ * responsible for actually creating the dispatch row first (so the
+ * dispatch_id is real).
+ */
+function markStepDispatched(db, projectId, stepIdx, dispatchId, now) {
+  const plan = getPlan(db, projectId);
+  if (!plan || !Array.isArray(plan.steps)) return null;
+  const step = plan.steps[stepIdx];
+  if (!step) return null;
+  const ts = now || Date.now();
+  step.state = 'DISPATCHED';
+  step.dispatch_id = dispatchId;
+  step.dispatched_at = ts;
+  plan.updated_at = ts;
+  writePlan(db, projectId, plan, ts);
+  cairnLog.info('mode-a-loop', 'step_dispatched', {
+    project_id: projectId,
+    plan_id: plan.plan_id,
+    step_idx: stepIdx,
+    dispatch_id: dispatchId,
+  });
+  return plan;
+}
+
+/**
+ * Check whether a DISPATCHED step's downstream task has reached a
+ * terminal outcome. Returns:
+ *   { action: 'advanced', step_idx, to_idx, task_id }
+ *   { action: 'failed',   step_idx, task_id }
+ *   { action: 'no_change' }
+ *
+ * Linkage: step.dispatch_id → dispatch_requests.task_id →
+ * outcomes(task_id) with status='PASS' (advance) or 'FAILED' (fail).
+ * Outcomes 'PENDING' / null → no_change.
+ */
+function advanceOnComplete(db, projectId, opts) {
+  const plan = getPlan(db, projectId);
+  if (!plan || !Array.isArray(plan.steps)) return { action: 'no_change' };
+  const idx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
+  const step = plan.steps[idx];
+  if (!step || step.state !== 'DISPATCHED' || !step.dispatch_id) {
+    return { action: 'no_change' };
+  }
+
+  let dispatchRow = null;
+  try {
+    dispatchRow = db.prepare('SELECT task_id FROM dispatch_requests WHERE id = ?').get(step.dispatch_id);
+  } catch (_e) {
+    return { action: 'no_change' };
+  }
+  if (!dispatchRow || !dispatchRow.task_id) {
+    return { action: 'no_change' };
+  }
+
+  let outcomeRow = null;
+  try {
+    outcomeRow = db.prepare('SELECT status FROM outcomes WHERE task_id = ?').get(dispatchRow.task_id);
+  } catch (_e) {
+    return { action: 'no_change' };
+  }
+  if (!outcomeRow || !outcomeRow.status) {
+    return { action: 'no_change' };
+  }
+
+  const now = (opts && opts.nowFn ? opts.nowFn() : Date.now());
+  if (outcomeRow.status === 'PASS') {
+    step.state = 'DONE';
+    step.completed_at = now;
+    step.task_id = dispatchRow.task_id;
+    const toIdx = idx + 1;
+    plan.current_idx = toIdx;
+    plan.updated_at = now;
+    if (toIdx >= plan.steps.length) {
+      plan.status = 'COMPLETE';
+      plan.completed_at = now;
+    }
+    writePlan(db, projectId, plan, now);
+    cairnLog.info('mode-a-loop', 'plan_advanced', {
+      project_id: projectId,
+      plan_id: plan.plan_id,
+      step_idx: idx,
+      to_idx: toIdx,
+      task_id: dispatchRow.task_id,
+      now_complete: plan.status === 'COMPLETE',
+    });
+    return { action: 'advanced', step_idx: idx, to_idx: toIdx, task_id: dispatchRow.task_id };
+  }
+  if (outcomeRow.status === 'FAILED' || outcomeRow.status === 'TERMINAL_FAIL') {
+    step.state = 'FAILED';
+    step.failed_at = now;
+    step.task_id = dispatchRow.task_id;
+    plan.status = 'BLOCKED';
+    plan.updated_at = now;
+    writePlan(db, projectId, plan, now);
+    cairnLog.warn('mode-a-loop', 'plan_step_failed', {
+      project_id: projectId,
+      plan_id: plan.plan_id,
+      step_idx: idx,
+      task_id: dispatchRow.task_id,
+      outcome_status: outcomeRow.status,
+    });
+    return { action: 'failed', step_idx: idx, task_id: dispatchRow.task_id };
+  }
+  return { action: 'no_change' };
+}
+
+/**
+ * Per-project tick — called from mentor-tick when project mode === 'A'.
+ * Composes ensurePlan → advanceOnComplete → decideNextDispatch.
+ *
+ * Caller (mentor-tick) is responsible for actually creating the
+ * dispatch_requests row (via cockpit-dispatch.dispatchTodo) — we
+ * keep that side effect out of this pure-ish module so smoke tests
+ * can exercise the decision logic without spinning up the full
+ * dispatch validation stack.
+ *
+ * Returns:
+ *   { action: 'drafted' | 'superseded' | 'unchanged' | 'no_goal' | 'no_project' }
+ *   plus optionally { advanced: <advanceOnComplete result>, dispatch_request: <decideNextDispatch result> }
  */
 function runOnceForProject(deps) {
-  const { db, project, goal, profile } = deps || {};
+  const { db, project, goal, profile, agentIds, leader } = deps || {};
   try {
-    return ensurePlan(db, project, goal, profile, { nowFn: deps.nowFn });
+    const planDecision = ensurePlan(db, project, goal, profile, { nowFn: deps.nowFn });
+    if (planDecision.action === 'no_goal' || planDecision.action === 'no_project' || planDecision.action === 'error') {
+      return planDecision;
+    }
+    const advanceDecision = advanceOnComplete(db, project.id, { nowFn: deps.nowFn });
+    const dispatchDecision = decideNextDispatch(db, project, getPlan(db, project.id), agentIds, { leader });
+    return Object.assign({}, planDecision, {
+      advance: advanceDecision,
+      dispatch_request: dispatchDecision,
+    });
   } catch (e) {
     cairnLog.error('mode-a-loop', 'tick_failed', {
       project_id: project && project.id,
@@ -223,5 +432,8 @@ module.exports = {
   getPlan,
   writePlan,
   ensurePlan,
+  decideNextDispatch,
+  markStepDispatched,
+  advanceOnComplete,
   runOnceForProject,
 };
