@@ -45,6 +45,13 @@ const AUTOPILOT_STATUS = {
   AGENT_IDLE: 'AGENT_IDLE',                   // grey: no agent process active
   AGENT_WORKING: 'AGENT_WORKING',             // green: agent ACTIVE + no pending escalation
   MENTOR_BLOCKED_NEED_USER: 'MENTOR_BLOCKED_NEED_USER', // red: ≥1 PENDING escalation
+  // Mode A v2 transient states (CEO 2026-05-14 UX fix). Without these,
+  // user clicks Start and panel says "agent 空闲 · 没人在跑" for the
+  // 30-60s gap between spawn and CC's first cairn.task.create call.
+  // Visually misleading. New states paper over the gap with progress.
+  SCOUT_PLANNING: 'SCOUT_PLANNING',           // amber+pulse: Mode A scout drafting plan
+  AGENT_STARTING: 'AGENT_STARTING',           // amber+pulse: spawn done, waiting for CC to call cairn.task.create
+  PLAN_PENDING_REVIEW: 'PLAN_PENDING_REVIEW', // blue: plan drafted, awaiting user click Start
 };
 
 const SUPPORTED_TABLES = [
@@ -793,9 +800,16 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
 // Autopilot status — derived
 // ---------------------------------------------------------------------------
 
-function deriveAutopilotStatus({ goal, agents, escalationsPending, progress }) {
+function deriveAutopilotStatus({ goal, agents, escalationsPending, progress, modeAPhase }) {
   if (!goal) return AUTOPILOT_STATUS.NO_GOAL;
   if (escalationsPending > 0) return AUTOPILOT_STATUS.MENTOR_BLOCKED_NEED_USER;
+  // Mode A v2 transient state surfacing (CEO 2026-05-14 UX fix). Phase
+  // signal arrives BEFORE any tasks-table activity, so we use it to
+  // paper over the spawn-to-CC-task-create gap that would otherwise
+  // show "agent 空闲" for 30-60s after click. Order matters: escalation
+  // still trumps these (red beats amber).
+  if (modeAPhase === 'planning')     return AUTOPILOT_STATUS.SCOUT_PLANNING;
+  if (modeAPhase === 'plan_pending') return AUTOPILOT_STATUS.PLAN_PENDING_REVIEW;
   // 2026-05-14 bug 鸭总 caught: "agent 在执行" was shown even when no
   // RUNNING task existed — just because a Claude Code window was open
   // (process registered ⇒ ACTIVE). Real "working" requires actual task
@@ -803,6 +817,13 @@ function deriveAutopilotStatus({ goal, agents, escalationsPending, progress }) {
   const activeTaskCount = progress
     ? (progress.tasks_running || 0) + (progress.tasks_blocked || 0) + (progress.tasks_waiting_review || 0)
     : 0;
+  // Mode A v2 transient: phase=running but task not yet started =
+  // AGENT_STARTING (amber+pulse) instead of AGENT_IDLE (grey). This is
+  // the 30-60s window after user clicks Start where Cairn has spawned
+  // CC but CC hasn't called cairn.task.create yet.
+  if (modeAPhase === 'running' && activeTaskCount === 0) {
+    return AUTOPILOT_STATUS.AGENT_STARTING;
+  }
   if (activeTaskCount === 0) return AUTOPILOT_STATUS.AGENT_IDLE;
   const liveAgents = agents.filter(a => a.status === 'ACTIVE' || a.status === 'IDLE');
   if (liveAgents.length === 0) return AUTOPILOT_STATUS.AGENT_IDLE;
@@ -1043,6 +1064,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     agents,
     escalationsPending: escalationsPending.length,
     progress,
+    modeAPhase: project.mode_a_phase || null,
   });
 
   // Schema v2 CAIRN.md: panel surfaces the `## Whole` sentence as
@@ -1258,6 +1280,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
 
 module.exports = {
   AUTOPILOT_STATUS,
+  deriveAutopilotStatus,
   ACTIVITY_LIMIT_DEFAULT,
   CHECKPOINT_LIMIT_DEFAULT,
   ESCALATION_LIMIT_DEFAULT,
