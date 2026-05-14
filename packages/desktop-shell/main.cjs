@@ -892,8 +892,17 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
     return cockpitState.emptyCockpitState(proj, dbPathForLookup, 'db_unavailable');
   }
   const agentIds = projectQueries.resolveProjectAgentIds(entry.db, entry.tables, proj);
+  // registry.getProjectGoal returns ProjectGoal object { id, title,
+  // desired_outcome, success_criteria, non_goals, created_at, updated_at }
+  // — NOT a {text} object. 2026-05-14 bug 鸭总 caught: original code
+  // looked for `goal.text` which never exists, so goalText was always
+  // null → autopilot stuck at NO_GOAL → Mentor never engaged → panel
+  // showed no change after the user set a goal.
+  // Backward-compat: if goal is somehow a raw string (legacy callers /
+  // pre-Goal-Mode-Lite registries), accept it as goalText directly.
   const goal = registry.getProjectGoal(reg, projectId);
-  const goalText = goal && typeof goal === 'object' && goal.text ? goal.text
+  const goalText = goal && typeof goal === 'object' && typeof goal.title === 'string'
+                 ? goal.title
                  : (typeof goal === 'string' ? goal : null);
   // Inject leader from cockpit settings (Phase 6) so cockpit-state can
   // surface it in the State Strip + use it for the "talk to leader" path.
