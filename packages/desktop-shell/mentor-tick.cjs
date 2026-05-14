@@ -28,6 +28,7 @@
  */
 
 const cairnLog = require('./cairn-log.cjs');
+const modeALoop = require('./mode-a-loop.cjs');
 
 const TICK_INTERVAL_MS = 30 * 1000;
 /** Cap on RUNNING tasks examined per project per tick. Tasks are sorted
@@ -300,6 +301,35 @@ function runOnce(deps) {
           } catch (_e) { /* skip — non-fatal */ }
         }
       } catch (_e) { /* lane module missing or other transient — ignore */ }
+
+      // ----- Mode A loop (CEO 2026-05-14): "长程任务的执行" path.
+      // Per-project: only fire when cockpit_settings.mode === 'A'.
+      // MA-2a slice = deterministic plan drafting only. Re-runs are
+      // idempotent against goal_id (see mode-a-loop.ensurePlan).
+      try {
+        const cockpitSettings = deps.registry.getCockpitSettings(deps.reg, project.id);
+        if (cockpitSettings && cockpitSettings.mode === 'A') {
+          const goal = deps.registry.getProjectGoal(deps.reg, project.id);
+          const decision = modeALoop.runOnceForProject({
+            db: entry.db,
+            project,
+            goal,
+            profile,
+            nowFn: deps.nowFn,
+          });
+          if (decision && (decision.action === 'drafted' || decision.action === 'superseded')) {
+            out.decisions++;
+          }
+          if (typeof deps.onDecision === 'function' && decision && decision.action !== 'no_goal' && decision.action !== 'unchanged' && decision.action !== 'no_project') {
+            try { deps.onDecision(project.id, Object.assign({ rule: 'A-mode' }, decision)); } catch (_e) {}
+          }
+        }
+      } catch (e) {
+        cairnLog.error('mode-a-loop', 'tick_failed', {
+          project_id: project && project.id,
+          message: (e && e.message) || String(e),
+        });
+      }
     } catch (e) {
       out.errors.push({ project_id: project && project.id, error: e && e.message ? e.message : String(e) });
       cairnLog.error('mentor-tick', 'tick_failed', {
