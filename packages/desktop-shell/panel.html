@@ -1932,6 +1932,18 @@
     white-space: nowrap;
   }
   .cockpit-goal-edit-link:hover { color: #cce; text-decoration: underline; }
+  .cockpit-ship-now-btn {
+    background: #2d4a7a; color: #cfe6ff; border: 0; border-radius: 3px;
+    padding: 3px 10px; cursor: pointer; font-family: inherit; font-size: 0.85em;
+    font-weight: 600; white-space: nowrap; margin-left: 6px;
+  }
+  .cockpit-ship-now-btn:hover { background: #3a5e96; }
+  .cockpit-ship-now-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cockpit-ship-now-status {
+    color: #888; font-size: 0.85em; font-style: italic; margin-left: 4px;
+  }
+  .cockpit-ship-now-status.ok { color: #88aa88; }
+  .cockpit-ship-now-status.err { color: #ff7070; }
   .cockpit-mode-toggle {
     display: inline-flex;
     border: 1px solid #444;
@@ -3476,6 +3488,13 @@
         <span class="cockpit-goal-label">GOAL</span>
         <span class="cockpit-goal-title" id="cockpit-goal-title"></span>
         <a class="cockpit-goal-edit-link" id="cockpit-goal-edit-link" href="#" title="编辑 goal（含 success_criteria）">✎ 编辑</a>
+        <!-- 2026-05-14 Q4 鸭总: 一键推送 — runs autoShip on this
+             project. Independent of auto_ship.enabled (manual override). -->
+        <button class="cockpit-ship-now-btn" id="cockpit-ship-now-btn" type="button"
+                title="推送当前项目所有未推送的 commit (会自动 commit dirty 改动)">
+          📤 推送
+        </button>
+        <span class="cockpit-ship-now-status" id="cockpit-ship-now-status"></span>
       </div>
       <!-- CAIRN.md ## Whole — Mentor's stable north-star sentence (schema v2, 2026-05-14).
            Hidden when the project has no CAIRN.md or no Whole line. -->

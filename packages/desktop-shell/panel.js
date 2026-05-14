@@ -4731,6 +4731,32 @@ function setupCockpit() {
       openGoalEditModal(lastGoal);
     });
   }
+  // 2026-05-14 Q4 鸭总: 一键推送 button — runs autoShip on current project.
+  const shipNowBtn = document.getElementById('cockpit-ship-now-btn');
+  const shipNowStatus = document.getElementById('cockpit-ship-now-status');
+  if (shipNowBtn) {
+    shipNowBtn.addEventListener('click', async () => {
+      if (!selectedProject) return;
+      shipNowBtn.disabled = true;
+      if (shipNowStatus) { shipNowStatus.textContent = '推送中…'; shipNowStatus.className = 'cockpit-ship-now-status'; }
+      try {
+        const r = await window.cairn.modeAShipNow(selectedProject.id);
+        if (r && r.ok) {
+          const sha = (r.commit_sha || '').slice(0, 7);
+          const committedStr = r.committed ? '已提交+推送' : '已推送已有提交';
+          if (shipNowStatus) { shipNowStatus.textContent = '✓ ' + committedStr + ' ' + sha; shipNowStatus.className = 'cockpit-ship-now-status ok'; }
+        } else {
+          const reason = r && r.reason ? r.reason : '未知错误';
+          if (shipNowStatus) { shipNowStatus.textContent = '✗ ' + reason; shipNowStatus.className = 'cockpit-ship-now-status err'; }
+        }
+      } catch (e) {
+        if (shipNowStatus) { shipNowStatus.textContent = '✗ ' + (e && e.message || 'IPC failed'); shipNowStatus.className = 'cockpit-ship-now-status err'; }
+      } finally {
+        shipNowBtn.disabled = false;
+        setTimeout(() => { if (shipNowStatus) shipNowStatus.textContent = ''; }, 6000);
+      }
+    });
+  }
   // Server validates against KNOWN_MODES; render reflects on next poll.
   // Disable buttons during in-flight call to avoid double-toggle races.
   ['cockpit-mode-A', 'cockpit-mode-B'].forEach((id) => {

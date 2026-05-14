@@ -261,6 +261,60 @@ function ensureWritableDbHandle(p) {
 }
 
 /**
+ * 2026-05-14 Mode A auto-ship probe. Idempotent; safe to call any number
+ * of times. Mutates module-level `reg` + persists via saveRegistry.
+ *
+ * Skips work when cockpit_settings.auto_ship is already set (preserves
+ * user's enabled/disabled choice). Called from both add-project and
+ * get-cockpit-settings (the latter backfills legacy projects).
+ */
+function _probeAutoShip(projectRoot, projectId) {
+  try {
+    const existing = registry.getCockpitSettings(reg, projectId);
+    if (existing && existing.auto_ship && typeof existing.auto_ship.enabled !== 'undefined' && existing.auto_ship.remote_url !== null) {
+      // Already probed — don't overwrite (user may have toggled enabled).
+      return;
+    }
+    const autoShip = {
+      enabled: (existing && existing.auto_ship && existing.auto_ship.enabled) || false,
+      remote_url: null,
+      default_branch: 'main',
+      pat_path: null,
+    };
+    try {
+      const r = execFileSync('git', ['-C', projectRoot, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8', timeout: 2000, windowsHide: true,
+      }).trim();
+      if (r) autoShip.remote_url = r;
+    } catch (_e) { /* no remote */ }
+    try {
+      const r = execFileSync('git', ['-C', projectRoot, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+        encoding: 'utf8', timeout: 2000, windowsHide: true,
+      }).trim();
+      const parts = r.split('/');
+      if (parts.length === 2 && parts[1]) autoShip.default_branch = parts[1];
+    } catch (_e) { /* default main */ }
+    const patProbe = [
+      path.join(projectRoot, '.token', 'ljl.txt'),
+      path.join(projectRoot, '.cairn-push-token', 'ljl-token.txt'),
+      path.join(projectRoot, '.cairn-push-token', 'token.txt'),
+      path.join(projectRoot, '.git-token'),
+    ];
+    for (const p of patProbe) {
+      if (fs.existsSync(p)) { autoShip.pat_path = p; break; }
+    }
+    const setRes = registry.setCockpitSettings(reg, projectId, Object.assign({}, existing, { auto_ship: autoShip }));
+    if (setRes && setRes.reg) {
+      reg = setRes.reg;
+      try { registry.saveRegistry(reg); } catch (_e) {}
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('_probeAutoShip failed:', e && e.message);
+  }
+}
+
+/**
  * Close a read handle if no remaining registry project still points
  * at it. Call after registry mutations.
  */
@@ -1214,7 +1268,47 @@ ipcMain.handle('cockpit-rewind-preview', (_e, input) => {
 // Cockpit redesign Phase 6 — per-project settings + LLM helpers.
 ipcMain.handle('get-cockpit-settings', (_e, projectId) => {
   if (!projectId || typeof projectId !== 'string') return registry.COCKPIT_SETTINGS_DEFAULT;
+  // 2026-05-14 Q3 fix: backfill auto_ship probe for projects registered
+  // before the probe code existed. Idempotent; only runs if auto_ship
+  // is missing/half-set. Cheap (one git invocation, 2s timeout).
+  try {
+    const cur = registry.getCockpitSettings(reg, projectId);
+    if (!cur || !cur.auto_ship || cur.auto_ship.remote_url === null) {
+      const proj = reg.projects.find(p => p.id === projectId);
+      if (proj && proj.project_root) {
+        _probeAutoShip(proj.project_root, projectId);
+      }
+    }
+  } catch (_e) { /* non-fatal */ }
   return registry.getCockpitSettings(reg, projectId);
+});
+
+// 2026-05-14 Q4: one-click "ship now" — push everything in the project
+// (commit dirty changes if any + push ahead commits). Independent of
+// auto_ship.enabled; this is a manual user action via panel button.
+ipcMain.handle('mode-a-ship-now', async (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'project_id_required' };
+  const proj = reg.projects.find(p => p.id === projectId);
+  if (!proj || !proj.project_root) return { ok: false, error: 'project_not_found' };
+  // Backfill probe if needed so we have remote_url + pat_path.
+  try { _probeAutoShip(proj.project_root, projectId); } catch (_e) {}
+  const settings = registry.getCockpitSettings(reg, projectId);
+  const autoShipCfg = (settings && settings.auto_ship) || {};
+  const modeAAutoShip = require('./mode-a-auto-ship.cjs');
+  const result = modeAAutoShip.autoShip(proj.project_root, 'Manual ship via cockpit panel', {
+    patPath: autoShipCfg.pat_path || null,
+    branch: autoShipCfg.default_branch || 'main',
+    remoteUrl: autoShipCfg.remote_url || null,
+  });
+  cairnLog.info('mode-a-ship-now', 'manual_ship_result', {
+    project_id: projectId,
+    ok: !!result.ok,
+    commit_sha: result.commit_sha,
+    push_backend: result.push_backend,
+    reason: result.reason,
+    committed: result.committed,
+  });
+  return result;
 });
 
 ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
@@ -1374,52 +1468,9 @@ ipcMain.handle('add-project', async (_e, input) => {
   reg = result.reg;
   const dbEntry = ensureDbHandle(db_path); // open the handle eagerly so L1 can render
 
-  // 2026-05-14 Mode A auto-ship pre-probe: at add-project time, detect
-  // git remote URL + default branch + project-local PAT file. Stored in
-  // cockpit_settings.auto_ship for later use by mentor-tick's ship hook.
-  // `enabled` starts false — user explicitly opts in (push is
-  // irreversible). All probes are 2s-timeout, failure → leave null.
-  try {
-    const autoShip = {
-      enabled: false,
-      remote_url: null,
-      default_branch: 'main',
-      pat_path: null,
-    };
-    try {
-      const r = execFileSync('git', ['-C', project_root, 'remote', 'get-url', 'origin'], {
-        encoding: 'utf8', timeout: 2000, windowsHide: true,
-      }).trim();
-      if (r) autoShip.remote_url = r;
-    } catch (_e) { /* no remote configured */ }
-    try {
-      const r = execFileSync('git', ['-C', project_root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
-        encoding: 'utf8', timeout: 2000, windowsHide: true,
-      }).trim();
-      // r is like "origin/main" — strip prefix.
-      const parts = r.split('/');
-      if (parts.length === 2 && parts[1]) autoShip.default_branch = parts[1];
-    } catch (_e) { /* fallback to 'main' */ }
-    const patProbe = [
-      path.join(project_root, '.token', 'ljl.txt'),
-      path.join(project_root, '.cairn-push-token', 'ljl-token.txt'),
-      path.join(project_root, '.cairn-push-token', 'token.txt'),
-      path.join(project_root, '.git-token'),
-    ];
-    for (const p of patProbe) {
-      if (fs.existsSync(p)) { autoShip.pat_path = p; break; }
-    }
-    // Merge into cockpit_settings without clobbering other fields.
-    const cur = registry.getCockpitSettings(reg, result.entry.id);
-    const setRes = registry.setCockpitSettings(reg, result.entry.id, Object.assign({}, cur, { auto_ship: autoShip }));
-    if (setRes && setRes.reg) {
-      reg = setRes.reg;
-      try { registry.saveRegistry(reg); } catch (_e) {}
-    }
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error('add-project: auto_ship probe failed:', e && e.message);
-  }
+  // 2026-05-14 Mode A auto-ship probe (extracted to helper so the
+  // get-cockpit-settings handler can backfill legacy projects).
+  _probeAutoShip(project_root, result.entry.id);
 
   // ------------------------------------------------------------------
   // Bootstrap pipeline (Phase 1 / 2026-05-14):

@@ -554,6 +554,7 @@ function runOnce(deps) {
               const spawnRes = modeASpawner.spawnModeAWorker({
                 project,
                 plan: freshPlan,
+                profile, // 2026-05-14 Q1: thread CAIRN.md profile into boot prompt
                 db: entry.db,
                 tables: entry.tables,
               }, { nowFn: deps.nowFn });

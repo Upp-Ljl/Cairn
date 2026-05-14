@@ -61,7 +61,7 @@ function _newAgentId() {
  * across many turns is a follow-up (will need persistent CC
  * sessions, not --print one-shots).
  */
-function buildBootPrompt(project, plan, agentId) {
+function buildBootPrompt(project, plan, agentId, profile) {
   const step = plan && Array.isArray(plan.steps) && plan.steps[plan.current_idx || 0];
   const stepLabel = step ? step.label : '(next plan step)';
   const projectRoot = project.project_root || project.path || '(unknown)';
@@ -81,6 +81,32 @@ function buildBootPrompt(project, plan, agentId) {
     '- project_root: `' + projectRoot + '`',
     '- project_id: `' + project.id + '`',
     '',
+  ];
+  // 2026-05-14 Q1 fix: inject CAIRN.md profile content so CC's single
+  // turn actually uses the project charter. Each section is optional;
+  // omitted entirely if the profile didn't load (no CAIRN.md present).
+  if (profile && typeof profile === 'object') {
+    if (typeof profile.whole_sentence === 'string' && profile.whole_sentence.trim()) {
+      lines.push('## Project north star (CAIRN.md ## Whole)');
+      lines.push('> ' + profile.whole_sentence.trim());
+      lines.push('');
+    }
+    const constraints = Array.isArray(profile.constraints) ? profile.constraints.filter(s => typeof s === 'string' && s.trim()) : [];
+    if (constraints.length > 0) {
+      lines.push('## Hard constraints (CAIRN.md)');
+      for (const c of constraints.slice(0, 8)) lines.push('- ' + c.trim());
+      lines.push('');
+    }
+    const auth = profile.authority || {};
+    const escalate = Array.isArray(auth.escalate) ? auth.escalate.filter(s => typeof s === 'string' && s.trim()) : [];
+    if (escalate.length > 0) {
+      lines.push('## Always escalate (CAIRN.md ## Authority)');
+      for (const e of escalate.slice(0, 6)) lines.push('- ' + e.trim());
+      lines.push('  Use `cairn.task.block` for these — DO NOT decide unilaterally.');
+      lines.push('');
+    }
+  }
+  lines.push(
     '## What to do (in this single turn)',
     '',
     '1. **Call `cairn.session.name`** with name="Mode A · ' +
@@ -106,7 +132,7 @@ function buildBootPrompt(project, plan, agentId) {
     '- 不要问用户 — Mode A 的承诺是"走开就行"。卡住了走 cairn.task.block 让 Mentor 答',
     '',
     '开干。',
-  ];
+  );
   return lines.join('\n');
 }
 
@@ -172,9 +198,20 @@ function spawnModeAWorker(input, opts) {
 
   const now = o.nowFn ? o.nowFn() : Date.now();
 
-  // Idempotence: if previous spawn for this project is still alive
-  // or its cooldown is still active, skip.
-  const existing = _spawnState.get(project.id);
+  // 2026-05-14 Q2b fix: cooldown key includes plan_id + current_idx so
+  // a fresh step (e.g. step 0 → step 1 advance) can spawn immediately
+  // without waiting for the prior step's cooldown. Without this, 15+
+  // ACTIVE rows accumulated for one project because the per-project
+  // cooldown only blocked re-spawns of the SAME step but every
+  // stale-reset of the same step still passed (after 60s).
+  const planId = plan && plan.plan_id ? plan.plan_id : 'no-plan';
+  const stepIdx = plan && typeof plan.current_idx === 'number' ? plan.current_idx : 0;
+  const cooldownKey = project.id + '/' + planId + '/' + stepIdx;
+
+  // Idempotence: if previous spawn for this (project, plan, step) is
+  // still alive or its cooldown is still active, skip. Different step
+  // → new key → immediate spawn allowed.
+  const existing = _spawnState.get(cooldownKey);
   if (existing) {
     try {
       const run = launcher.getWorkerRun(existing.run_id, { home: o.home });
@@ -189,7 +226,7 @@ function spawnModeAWorker(input, opts) {
   }
 
   const agentId = _newAgentId();
-  const prompt = buildBootPrompt(project, plan, agentId);
+  const prompt = buildBootPrompt(project, plan, agentId, input.profile);
 
   // ---- BOOKKEEPING FIRST (advanceOnComplete needs the linkage) ----
   // 1. Pre-register the agent_id so dispatchTodo's checkAgentExists
@@ -281,11 +318,13 @@ function spawnModeAWorker(input, opts) {
     return { ok: false, error: 'launch_failed', detail: launchRes && launchRes.error };
   }
 
-  _spawnState.set(project.id, {
+  _spawnState.set(cooldownKey, {
     run_id: launchRes.run_id,
     agent_id: agentId,
     spawned_at: now,
     dispatch_id: dispatchId,
+    plan_id: planId,
+    step_idx: stepIdx,
   });
   cairnLog.info('mode-a-spawner', 'worker_spawned', {
     project_id: project.id,

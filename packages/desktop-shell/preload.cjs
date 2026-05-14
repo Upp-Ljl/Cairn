@@ -67,6 +67,10 @@ const api = {
   // Mode A/B (CEO 2026-05-14): thin wrapper over setCockpitSettings({mode}).
   // Server validates against ['A','B'] in registry.setCockpitSettings.
   cockpitSetMode:       (projectId, mode) => ipcRenderer.invoke('set-cockpit-settings', projectId, { mode }),
+  // 2026-05-14 Q4 鸭总: one-click manual ship button for Mode A
+  // projects. Triggers git commit (if dirty) + push (system config or
+  // PAT fallback). Returns the autoShip result.
+  modeAShipNow:         (projectId) => ipcRenderer.invoke('mode-a-ship-now', projectId),
   cockpitSummarizeTail: (input) => ipcRenderer.invoke('cockpit-summarize-tail', input || {}),
   cockpitExplainConflict: (input) => ipcRenderer.invoke('cockpit-explain-conflict', input || {}),
   cockpitSortInbox:     (input) => ipcRenderer.invoke('cockpit-sort-inbox', input || {}),
