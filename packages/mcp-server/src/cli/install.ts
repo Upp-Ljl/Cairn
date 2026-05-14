@@ -68,7 +68,10 @@ const HOOK_MARKER = '# cairn-pre-commit-v1';
 // v2 (A3 session-naming): adds cairn.session.name startup instruction.
 // v3 (A1.1 timeline): adds session timeline write protocol.
 // v4 (A2.2 dispatch wire): adds agent self-proposal convention via scratchpad.
-const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v4 -->';
+// v5 (MA-2d 2026-05-14): adds Mode A auto-answer polling — agent must re-read
+//                        OPEN blockers it raised because Mode A auto-resolves
+//                        them via the blockers table (status OPEN → ANSWERED).
+const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v5 -->';
 
 // Claude Code project-level skill that makes CC actually Cairn-aware
 // without manual user setup. Loaded by `cairn install` into
@@ -144,6 +147,41 @@ need to write a brief for every block — but for non-trivial blocks:
    false and a \`mentor_recommendation\` field is present, the kernel
    flagged your question as irreversible (e.g. \`npm publish\`) — wait
    for the user OR override per CAIRN.md.
+
+## After raising a blocker — keep checking it (Mode A loop closure)
+
+When the immediate \`cairn.task.block\` call returns NOT auto-resolved
+(\`auto_resolved: false\` or no \`answer\` field), do **not** sit on it.
+The blocker is now \`status: 'OPEN'\` in the kernel. In Mode A the
+desktop Mentor will write an answer back asynchronously (every ~30s)
+via the blockers table — \`status\` flips to \`'ANSWERED'\` + \`answer\`
++ \`answered_by: 'mode-a-auto:<rule>'\` gets filled in.
+
+Your job: poll the resume packet between turns and consume any answers
+that landed:
+
+\`\`\`
+cairn.task.resume_packet({ task_id })
+\`\`\`
+
+The returned packet includes a \`blockers\` array. Each blocker with
+\`status: 'ANSWERED'\` you previously raised carries the answer in its
+\`answer\` field. Read it, treat it like a user-provided answer, and
+continue the task — do not re-raise the same question.
+
+Notes:
+- Polling interval: when you would otherwise stop and wait, instead
+  re-poll \`resume_packet\` every 10–30s for up to ~3 cycles, then
+  proceed with your best judgment per the goal even without an answer
+  (Mode A's fallback path covers this case but you should not need it).
+- Audit: an answer whose \`answered_by\` starts with \`mode-a-auto:\`
+  was Mentor-decided, not human-decided. Lower confidence; if you find
+  the answer leads to a goal-violating consequence, raise a NEW blocker
+  with the violation as context — Mentor's pattern matcher will route
+  it differently second time around.
+- Mode B (default) does NOT auto-answer; in Mode B the blocker waits
+  for the user. The polling pattern still works, but expect human
+  cadence rather than 30s cadence.
 
 ## Subagent results
 
@@ -554,8 +592,9 @@ export function runInstall(opts: InstallOptions): InstallResult {
     if (fs.existsSync(skillPath)) {
       const cur = fs.readFileSync(skillPath, 'utf8');
       // Accept the current marker AND legacy v1/v2/v3 markers so existing
-      // installs are upgraded to v4 rather than left as-is.
+      // installs are upgraded to v5 rather than left as-is.
       const isOurSkill = cur.includes(CAIRN_AWARE_SKILL_MARKER) ||
+                         cur.includes('<!-- cairn-aware-skill-v4 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v3 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v2 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v1 -->');
