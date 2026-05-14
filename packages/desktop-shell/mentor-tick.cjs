@@ -418,15 +418,44 @@ function runOnce(deps) {
               message: (e && e.message) || String(e),
             });
           }
-          const decision = modeALoop.runOnceForProject({
-            db: entry.db,
-            project,
-            goal,
-            profile,
-            agentIds: hints,
-            leader: (cockpitSettings && cockpitSettings.leader) || null,
-            nowFn: deps.nowFn,
-          });
+          // Mode A v2 race fix (CEO 2026-05-14, opus reviewer 2026-05-14
+          // P2): runOnceForProject calls ensurePlan which writes a
+          // DETERMINISTIC plan to mode_a_plan/<pid>. While scout is
+          // in-flight (phase='planning') that overwrites scout's
+          // half-built state and the panel shows the wrong plan
+          // briefly until scout exits and rewrites. While the user is
+          // reviewing scout's draft (phase='plan_pending') we MUST NOT
+          // re-draft either — scout's plan is the source of truth and
+          // user is about to Start it. paused = user explicitly told
+          // us to stop — don't keep drafting/advancing/dispatching.
+          //
+          // Only run the full plan/advance/dispatch loop when:
+          //   - 'running' (live execution — advance + dispatch needed)
+          //   - 'idle'    (legacy path: pre-Mode-A-v2 projects that
+          //                never went through scout. ensurePlan does
+          //                the only-on-first-draft work; if a plan
+          //                already exists it returns 'unchanged'.)
+          const modeAPhaseForLoop = (cockpitSettings && cockpitSettings.mode_a && cockpitSettings.mode_a.phase) || 'idle';
+          let decision = null;
+          if (modeAPhaseForLoop === 'running' || modeAPhaseForLoop === 'idle') {
+            decision = modeALoop.runOnceForProject({
+              db: entry.db,
+              project,
+              goal,
+              profile,
+              agentIds: hints,
+              leader: (cockpitSettings && cockpitSettings.leader) || null,
+              nowFn: deps.nowFn,
+            });
+          } else {
+            // phase is 'planning' / 'plan_pending' / 'paused' — scout
+            // owns plan state, user owns execution state. Tick has
+            // nothing to do for this project this round.
+            cairnLog.info('mode-a-loop', 'tick_skipped_by_phase', {
+              project_id: project.id,
+              phase: modeAPhaseForLoop,
+            });
+          }
           // MA-2c: execute the dispatch decision (if any). The pure
           // module decided WHAT to dispatch; the tick is responsible
           // for WRITING the dispatch_requests row + bookkeeping back
@@ -434,7 +463,11 @@ function runOnce(deps) {
           // skip the normal dispatch path so the spawn block below
           // creates a fresh worker instead of re-dispatching to the
           // same idle agent that's been failing to pick up.
-          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'dispatch' && !forceSpawn) {
+          //
+          // Mode A v2 gate: same as the spawn block below — no
+          // dispatch unless phase === 'running'.
+          const modeAPhaseForDispatch = (cockpitSettings && cockpitSettings.mode_a && cockpitSettings.mode_a.phase) || 'idle';
+          if (decision && decision.dispatch_request && decision.dispatch_request.action === 'dispatch' && !forceSpawn && modeAPhaseForDispatch === 'running') {
             const dr = decision.dispatch_request;
             try {
               // Defensive re-read (subagent verdict 2026-05-14 C): if a
@@ -546,8 +579,17 @@ function runOnce(deps) {
           // project root. Without this, Mode A silently sits on PENDING
           // steps forever any time the user doesn't happen to have a
           // working CC session in the project. Cooldown-bounded (60s).
+          //
+          // Mode A v2 gate (2026-05-14 CEO reframe): only spawn the
+          // execution CC when phase === 'running'. Earlier phases mean
+          // either Scout is drafting (planning), the plan is waiting
+          // for user Start (plan_pending), the user paused (paused),
+          // or Mode A isn't engaged (idle). The phase machine is
+          // owned by IPC handlers + mode-a-scout.cjs.
+          const modeAPhase = (cockpitSettings && cockpitSettings.mode_a && cockpitSettings.mode_a.phase) || 'idle';
           if (decision && decision.dispatch_request &&
-              (decision.dispatch_request.action === 'no_agent' || forceSpawn)) {
+              (decision.dispatch_request.action === 'no_agent' || forceSpawn) &&
+              modeAPhase === 'running') {
             try {
               const modeASpawner = deps.modeASpawner || require('./mode-a-spawner.cjs');
               const freshPlan = modeALoop.getPlan(entry.db, project.id);

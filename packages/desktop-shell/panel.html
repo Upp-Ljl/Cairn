@@ -2014,6 +2014,73 @@
     color: #888;
     font-style: italic;
   }
+  /* Mode A v2 — phase pill + Scout rationale + Start/Stop/Re-plan
+     controls (CEO 2026-05-14 reframe). */
+  .cockpit-mode-a-plan-phase-pill {
+    display: inline-block;
+    margin: 0 6px;
+    padding: 1px 6px;
+    font-size: 0.85em;
+    border-radius: 8px;
+    background: #2a2f3a;
+    color: #aac;
+    border: 1px solid #3a4050;
+  }
+  .cockpit-mode-a-plan-phase-pill.planning     { background: #2d2a18; color: #ffd87b; border-color: #5a4a20; }
+  .cockpit-mode-a-plan-phase-pill.plan_pending { background: #1f2a3a; color: #7bc3ff; border-color: #305580; }
+  .cockpit-mode-a-plan-phase-pill.running      { background: #1f3a25; color: #8be09a; border-color: #305a40; }
+  .cockpit-mode-a-plan-phase-pill.paused       { background: #3a1f1f; color: #ff9a8a; border-color: #5a3030; }
+  .cockpit-mode-a-rationale {
+    margin: 4px 0 6px 0;
+    padding: 4px 8px;
+    background: #14181e;
+    border-left: 2px solid #3a4050;
+    color: #bbb;
+    font-style: italic;
+    font-size: 0.92em;
+  }
+  .cockpit-mode-a-rationale .scout-tag {
+    display: inline-block;
+    margin-right: 4px;
+    padding: 0 4px;
+    background: #2a2030;
+    color: #d8b8e8;
+    font-size: 0.85em;
+    border-radius: 2px;
+    font-style: normal;
+  }
+  .cockpit-mode-a-rationale .fallback-tag {
+    display: inline-block;
+    margin-right: 4px;
+    padding: 0 4px;
+    background: #3a2a18;
+    color: #ffc880;
+    font-size: 0.85em;
+    border-radius: 2px;
+    font-style: normal;
+  }
+  .cockpit-mode-a-controls {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .cockpit-mode-a-btn {
+    padding: 3px 10px;
+    background: #2a2f3a;
+    color: #ddd;
+    border: 1px solid #3a4050;
+    border-radius: 3px;
+    font-size: 0.82em;
+    cursor: pointer;
+  }
+  .cockpit-mode-a-btn:hover { background: #353b46; }
+  .cockpit-mode-a-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cockpit-mode-a-btn-primary {
+    background: #305a40;
+    color: #d8ffd8;
+    border-color: #45784f;
+  }
+  .cockpit-mode-a-btn-primary:hover { background: #3a704f; }
   .cockpit-mentor-status {
     display: flex;
     flex-wrap: wrap;
@@ -3555,9 +3622,19 @@
       <div class="cockpit-mode-a-plan" id="cockpit-mode-a-plan" hidden>
         <div class="cockpit-mode-a-plan-header">
           <span class="cockpit-mode-a-plan-label">Mode A 计划</span>
+          <span class="cockpit-mode-a-plan-phase-pill" id="cockpit-mode-a-phase-pill"></span>
           <span class="cockpit-mode-a-plan-progress" id="cockpit-mode-a-plan-progress"></span>
         </div>
+        <!-- Mode A v2 (CEO 2026-05-14 reframe): plan rationale + Scout
+             draft indicator + Start/Stop/Re-plan buttons. Hidden until
+             a plan exists. -->
+        <div class="cockpit-mode-a-rationale" id="cockpit-mode-a-rationale" hidden></div>
         <ol class="cockpit-mode-a-plan-steps" id="cockpit-mode-a-plan-steps"></ol>
+        <div class="cockpit-mode-a-controls" id="cockpit-mode-a-controls" hidden>
+          <button type="button" id="cockpit-mode-a-start"  class="cockpit-mode-a-btn cockpit-mode-a-btn-primary" hidden>▶ 开始执行</button>
+          <button type="button" id="cockpit-mode-a-stop"   class="cockpit-mode-a-btn" hidden>⏸ 暂停</button>
+          <button type="button" id="cockpit-mode-a-replan" class="cockpit-mode-a-btn" hidden>↻ 重新规划</button>
+        </div>
       </div>
       <div class="cockpit-needs-list" id="cockpit-needs-list">
         <div class="cockpit-needs-empty">No escalations — Mentor handling.</div>

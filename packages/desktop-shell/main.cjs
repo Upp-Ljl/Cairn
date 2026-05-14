@@ -58,6 +58,8 @@ const cockpitLane = require('./cockpit-lane.cjs');
 const mentorPolicy = require('./mentor-policy.cjs');
 const llmHelpers = require('./cockpit-llm-helpers.cjs');
 const mentorTick = require('./mentor-tick.cjs');
+const modeAScout = require('./mode-a-scout.cjs');
+const modeALoop  = require('./mode-a-loop.cjs');
 const claudeSessionScan = require('./agent-adapters/claude-code-session-scan.cjs');
 const codexSessionScan  = require('./agent-adapters/codex-session-log-scan.cjs');
 const agentActivity     = require('./agent-activity.cjs');
@@ -1050,6 +1052,10 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
     // Mode A/B (CEO 2026-05-14): expose current mode so panel header
     // can render the A|B toggle without an extra IPC roundtrip.
     mode: settings.mode,
+    // Mode A v2 phase (CEO 2026-05-14 reframe): expose phase so the
+    // panel sidebar can render Start/Stop/Re-plan buttons + a status
+    // pill (planning / plan_pending / running / paused).
+    mode_a_phase: settings.mode_a && settings.mode_a.phase,
   });
   const payload = cockpitState.buildCockpitState(
     entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
@@ -1315,13 +1321,26 @@ ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
   if (!projectId || typeof projectId !== 'string') {
     return { ok: false, error: 'project_id_required' };
   }
+  // Capture prior mode before writing so we can detect the B→A flip.
+  const priorCs = registry.getCockpitSettings(reg, projectId);
   const result = registry.setCockpitSettings(reg, projectId, input || {});
   if (result.error) return { ok: false, error: result.error };
   reg = result.reg;
   // 2026-05-14: was `registry.writeRegistry(reg)` — undefined fn, silently
   // ate by catch. Pre-existing bug, surfaced by MA-1 subagent审查.
   try { registry.saveRegistry(reg); } catch (_e) {}
-  return { ok: true, settings: result.settings };
+  // Mode A v2 (CEO 2026-05-14): when the user flips from Mode B to
+  // Mode A AND a goal is already set, immediately kick the scout to
+  // draft a plan. Without this they'd be stuck on phase=idle with no
+  // plan and no obvious way to start.
+  let scoutTrig = null;
+  if (priorCs && priorCs.mode === 'B' && result.settings && result.settings.mode === 'A') {
+    try {
+      const goal = registry.getProjectGoal(reg, projectId);
+      if (goal) scoutTrig = _triggerScoutForProject(projectId);
+    } catch (_e) {}
+  }
+  return { ok: true, settings: result.settings, scout: scoutTrig };
 });
 
 ipcMain.handle('cockpit-summarize-tail', async (_e, input) => {
@@ -1625,6 +1644,69 @@ ipcMain.handle('get-project-goal', (_e, projectId) => {
   return registry.getProjectGoal(reg, projectId);
 });
 
+/**
+ * Mode A v2 helper: kick off the scout for a project. Async — sets
+ * phase to 'planning', spawns scout in background, on completion
+ * writes plan + flips to 'plan_pending'. Caller should NOT await this
+ * (it can take minutes); IPC handlers fire-and-forget.
+ *
+ * Idempotent against repeated calls: if phase is already 'planning'
+ * we don't re-spawn (avoids dual scouts on a button mash). Caller can
+ * read phase after to decide if a scout was actually started.
+ *
+ * Returns { ok: true, scout_started: boolean, reason?: string }.
+ */
+function _triggerScoutForProject(projectId, opts) {
+  const o = opts || {};
+  try {
+    const project = (reg.projects || []).find(p => p.id === projectId);
+    if (!project) return { ok: false, error: 'project_not_found' };
+    const goal = registry.getProjectGoal(reg, projectId);
+    if (!goal) return { ok: true, scout_started: false, reason: 'no_goal' };
+    const cs = registry.getCockpitSettings(reg, projectId);
+    if (!cs || cs.mode !== 'A') return { ok: true, scout_started: false, reason: 'not_mode_a' };
+    if (cs.mode_a && cs.mode_a.phase === 'planning') {
+      return { ok: true, scout_started: false, reason: 'already_planning' };
+    }
+    // Phase → planning. Refuse on disallowed transitions (returns error).
+    const phaseRes = registry.setModeAPhase(reg, projectId, 'planning');
+    if (phaseRes.error) {
+      // Caller (e.g. running → planning during a tick) — log + bail.
+      return { ok: false, error: phaseRes.error };
+    }
+    reg = phaseRes.reg;
+    try { registry.saveRegistry(reg); } catch (_e) {}
+
+    // Get a writable DB for scout's session_id persistence + plan write.
+    let entry = null;
+    try { entry = ensureWritableDbHandle(project); } catch (_e) {}
+    const dbHandle = entry && entry.db ? entry.db : null;
+
+    // Fire-and-forget. Errors are logged; promise can never reject
+    // because runScoutThenWritePlan resolves with { ok: false }.
+    modeAScout.runScoutThenWritePlan({
+      project,
+      goal,
+      db: dbHandle,
+      registry,
+      getReg: () => reg,
+      setReg: (r) => { reg = r; },
+      modeALoop,
+    }).catch((e) => {
+      try {
+        require('./cairn-log.cjs').error('mode-a-scout', 'orchestrator_threw', {
+          project_id: projectId,
+          message: (e && e.message) || String(e),
+        });
+      } catch (_e) {}
+    });
+
+    return { ok: true, scout_started: true };
+  } catch (e) {
+    return { ok: false, error: 'trigger_threw: ' + ((e && e.message) || String(e)) };
+  }
+}
+
 ipcMain.handle('set-project-goal', (_e, projectId, input) => {
   if (!projectId || typeof projectId !== 'string') {
     return { ok: false, error: 'projectId_required' };
@@ -1632,7 +1714,62 @@ ipcMain.handle('set-project-goal', (_e, projectId, input) => {
   const result = registry.setProjectGoal(reg, projectId, input || {});
   if (result.error) return { ok: false, error: result.error };
   reg = result.reg;
+  // Mode A v2: if goal changes while mode === 'A', re-fire scout so the
+  // plan is rebuilt against the new goal content. Goal_id rotation
+  // (registry.cjs fingerprint logic) already invalidated the old plan;
+  // scout draft populates the new one. Idempotent against concurrent
+  // edits — if scout is already running, this is a no-op.
+  try {
+    const cs = registry.getCockpitSettings(reg, projectId);
+    if (cs && cs.mode === 'A') {
+      const trig = _triggerScoutForProject(projectId);
+      return { ok: true, goal: result.goal, scout: trig };
+    }
+  } catch (_e) {}
   return { ok: true, goal: result.goal };
+});
+
+/**
+ * Mode A v2 control surface (CEO 2026-05-14): the panel sidebar exposes
+ * Start / Stop / Re-plan against this IPC. Each handler is a thin
+ * registry mutation + (for Start / Re-plan) optional scout kick.
+ *
+ * All three are tier-1 mutations (registry write only — no project
+ * filesystem writes), so PRODUCT.md §12 D9.1 still holds.
+ */
+ipcMain.handle('mode-a-start', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'projectId_required' };
+  const res = registry.setModeAPhase(reg, projectId, 'running');
+  if (res.error) return { ok: false, error: res.error };
+  reg = res.reg;
+  try { registry.saveRegistry(reg); } catch (_e) {}
+  // Kick mentor-tick immediately so the first execution spawn doesn't
+  // wait 30s for the next interval fire.
+  try { mentorTick.runOnce({ get reg() { return reg; }, ensureDbHandle: ensureWritableDbHandle, projectQueries, mentorPolicy, registry }); } catch (_e) {}
+  return { ok: true, settings: res.settings };
+});
+
+ipcMain.handle('mode-a-stop', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'projectId_required' };
+  const cs = registry.getCockpitSettings(reg, projectId);
+  // Map current phase → most sensible "stopped" target. running → paused
+  // (resumable). plan_pending → idle (cancelled before start). paused
+  // and idle are no-ops.
+  let target;
+  if (cs.mode_a && cs.mode_a.phase === 'running') target = 'paused';
+  else if (cs.mode_a && cs.mode_a.phase === 'plan_pending') target = 'idle';
+  else if (cs.mode_a && cs.mode_a.phase === 'planning') target = 'idle';
+  else return { ok: true, settings: cs, no_op: true };
+  const res = registry.setModeAPhase(reg, projectId, target);
+  if (res.error) return { ok: false, error: res.error };
+  reg = res.reg;
+  try { registry.saveRegistry(reg); } catch (_e) {}
+  return { ok: true, settings: res.settings };
+});
+
+ipcMain.handle('mode-a-replan', (_e, projectId) => {
+  if (!projectId || typeof projectId !== 'string') return { ok: false, error: 'projectId_required' };
+  return _triggerScoutForProject(projectId);
 });
 
 // Project Rules — registry-only governance layer.

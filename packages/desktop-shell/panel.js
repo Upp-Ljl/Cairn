@@ -4265,7 +4265,55 @@ function renderCockpit(state) {
   const planRoot = document.getElementById('cockpit-mode-a-plan');
   const planStepsEl = document.getElementById('cockpit-mode-a-plan-steps');
   const planProgressEl = document.getElementById('cockpit-mode-a-plan-progress');
+  const planPhasePillEl = document.getElementById('cockpit-mode-a-phase-pill');
+  const planRationaleEl = document.getElementById('cockpit-mode-a-rationale');
+  const planControlsEl = document.getElementById('cockpit-mode-a-controls');
+  const btnStart  = document.getElementById('cockpit-mode-a-start');
+  const btnStop   = document.getElementById('cockpit-mode-a-stop');
+  const btnReplan = document.getElementById('cockpit-mode-a-replan');
   const plan = state.mode_a_plan;
+  const modeAPhase = state.mode_a_phase || 'idle';
+  // Mode A v2 phase pill (CEO 2026-05-14 reframe). Always render when
+  // we're inside the Mode A widget so the user sees state transitions.
+  if (planPhasePillEl) {
+    const PHASE_LABEL = {
+      idle:         '空闲',
+      planning:     '🔍 Scout 起 plan 中…',
+      plan_pending: '📋 plan 待审',
+      running:     '▶ 执行中',
+      paused:      '⏸ 暂停',
+    };
+    planPhasePillEl.textContent = PHASE_LABEL[modeAPhase] || modeAPhase;
+    planPhasePillEl.className = 'cockpit-mode-a-plan-phase-pill ' + modeAPhase;
+  }
+  // Mode A v2 controls — visibility by phase.
+  if (planControlsEl && btnStart && btnStop && btnReplan) {
+    const showControls = currentMode === 'A' && modeAPhase !== 'idle';
+    planControlsEl.hidden = !showControls;
+    // Start: plan_pending OR paused
+    btnStart.hidden  = !(modeAPhase === 'plan_pending' || modeAPhase === 'paused');
+    // Stop: running, plan_pending, planning (cancel)
+    btnStop.hidden   = !(modeAPhase === 'running' || modeAPhase === 'plan_pending' || modeAPhase === 'planning');
+    // Re-plan: plan_pending / paused / running (re-draft after edits)
+    btnReplan.hidden = !(modeAPhase === 'plan_pending' || modeAPhase === 'paused' || modeAPhase === 'running');
+    // Disable while planning (scout in flight — let it finish)
+    const planningGate = modeAPhase === 'planning';
+    btnStart.disabled  = planningGate;
+    btnReplan.disabled = planningGate;
+  }
+  // Plan rationale — surface scout / fallback origin so user can judge.
+  if (planRationaleEl) {
+    if (plan && (plan.drafted_by === 'scout' || plan.drafted_by === 'deterministic_fallback') && plan.rationale) {
+      const tagCls = plan.drafted_by === 'scout' ? 'scout-tag' : 'fallback-tag';
+      const tagText = plan.drafted_by === 'scout' ? 'Scout' : 'Fallback';
+      planRationaleEl.innerHTML =
+        '<span class="' + tagCls + '">' + escapeHtml(tagText) + '</span> ' +
+        escapeHtml(String(plan.rationale).slice(0, 280));
+      planRationaleEl.hidden = false;
+    } else {
+      planRationaleEl.hidden = true;
+    }
+  }
   if (planRoot) {
     planRoot.hidden = currentMode !== 'A';
     if (currentMode === 'A' && planStepsEl && planProgressEl) {
@@ -4731,6 +4779,55 @@ function setupCockpit() {
       openGoalEditModal(lastGoal);
     });
   }
+  // Mode A v2 controls (CEO 2026-05-14): Start / Stop / Re-plan
+  // buttons in the plan widget. Each is a single IPC roundtrip; panel
+  // re-renders on next poll cycle, so disable briefly to avoid double-
+  // click races but don't try to predict the new phase locally.
+  const wireModeABtn = (id, ipcName, busyLabel) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      if (!selectedProject) return;
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = busyLabel || orig;
+      try {
+        const fn = window.cairn && window.cairn[ipcName];
+        if (typeof fn !== 'function') {
+          if (window.cairn && typeof window.cairn.log === 'function') {
+            window.cairn.log('panel', 'mode_a_btn_no_ipc', { project_id: selectedProject.id, ipc: ipcName }, 'warn');
+          }
+          return;
+        }
+        const res = await fn(selectedProject.id);
+        if (window.cairn && typeof window.cairn.log === 'function') {
+          window.cairn.log('panel', 'mode_a_btn_clicked', {
+            project_id: selectedProject.id,
+            ipc: ipcName,
+            ok: !!(res && res.ok),
+            phase: res && res.settings && res.settings.mode_a && res.settings.mode_a.phase,
+            scout_started: res && res.scout_started,
+            error: res && res.error,
+          });
+        }
+      } catch (e) {
+        if (window.cairn && typeof window.cairn.log === 'function') {
+          window.cairn.log('panel', 'mode_a_btn_threw', {
+            project_id: selectedProject.id,
+            ipc: ipcName,
+            message: (e && e.message) || String(e),
+          }, 'warn');
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    });
+  };
+  wireModeABtn('cockpit-mode-a-start',  'modeAStart',  '▶ 启动中…');
+  wireModeABtn('cockpit-mode-a-stop',   'modeAStop',   '…');
+  wireModeABtn('cockpit-mode-a-replan', 'modeAReplan', '↻ 调度 Scout…');
+
   // 2026-05-14 Q4 鸭总: 一键推送 button — runs autoShip on current project.
   const shipNowBtn = document.getElementById('cockpit-ship-now-btn');
   const shipNowStatus = document.getElementById('cockpit-ship-now-status');
