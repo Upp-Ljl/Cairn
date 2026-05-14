@@ -908,8 +908,13 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
           label,
           ts: Number(body.ts) || Number(r.updated_at) || 0,
           project_id: body.project_id || projectId,
-          task_id: null,
-          why: null,
+          // MA-3 (2026-05-14): extract task_id / why / priority from
+          // body so H2/H3 per-task targeting + rationale + ranking
+          // actually reach the panel. Pre-MA-3 these were always null
+          // because user-typed mentor_todo entries didn't carry them.
+          task_id: typeof body.task_id === 'string' ? body.task_id : null,
+          why: typeof body.why === 'string' ? body.why : null,
+          priority: typeof body.priority === 'number' ? body.priority : null,
           raw: body,
         });
       }
@@ -948,9 +953,14 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
     } catch (_e) {}
   }
 
-  // Sort ts DESC (most recent first), break ties by todo_id lexically (ULID
-  // are time-sortable so this preserves insertion order within same ms).
+  // MA-3 (2026-05-14): sort priority DESC first, then ts DESC. Items
+  // without an explicit priority (user_todo / agent_proposal pre-MA-3)
+  // get priority=0 so they fall below ranked mentor_todo suggestions
+  // when one exists. Tie-break by todo_id (ULIDs are time-sortable).
   todos.sort((a, b) => {
+    const pa = typeof a.priority === 'number' ? a.priority : 0;
+    const pb = typeof b.priority === 'number' ? b.priority : 0;
+    if (pb !== pa) return pb - pa;
     if (b.ts !== a.ts) return b.ts - a.ts;
     return b.todo_id < a.todo_id ? -1 : 1;
   });
