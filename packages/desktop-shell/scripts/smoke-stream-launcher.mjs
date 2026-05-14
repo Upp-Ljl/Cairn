@@ -35,9 +35,33 @@ const _projectDir = path.join(_tmpDir, 'project');
 fs.mkdirSync(_projectDir, { recursive: true });
 fs.mkdirSync(path.join(_tmpDir, '.cairn'), { recursive: true });
 
-// Write fake-claude.js that emits NDJSON events
+// Write fake-claude.js that emits NDJSON events AND dumps argv so smoke
+// can verify --mcp-config / --strict-mcp-config / --resume are present.
+const argvDumpDir = path.join(_tmpDir, 'argv-dumps');
+fs.mkdirSync(argvDumpDir, { recursive: true });
 const fakeBody = `#!/usr/bin/env node
-// Fake claude — emits 5 NDJSON events, ignores stdin (just sinks it).
+// Fake claude — emits 5 NDJSON events, dumps argv, ignores stdin.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const dumpDir = ${JSON.stringify(argvDumpDir)};
+try {
+  // Filename prefixed with high-resolution timestamp so sort() gives
+  // launch order (random suffix breaks collisions within same ms).
+  const stamp = String(Date.now()).padStart(16, '0') + '-' + process.hrtime.bigint().toString().padStart(20, '0');
+  const dumpFile = path.join(dumpDir, 'argv-' + stamp + '-' + crypto.randomBytes(3).toString('hex') + '.json');
+  fs.writeFileSync(dumpFile, JSON.stringify({
+    argv: process.argv.slice(2),
+    cwd: process.cwd(),
+    has_resume: process.argv.includes('--resume'),
+    has_mcp_config: process.argv.includes('--mcp-config'),
+    has_strict_mcp_config: process.argv.includes('--strict-mcp-config'),
+    has_bypass: process.argv.includes('bypassPermissions'),
+    pid: process.pid,
+    captured_at: Date.now(),
+  }, null, 2));
+} catch (_e) {}
+
 process.stdin.resume();
 process.stdin.on('data', () => {}); // drain stdin
 
@@ -112,6 +136,17 @@ section('3 extractAssistantText handles text + tool_use blocks');
   ok(launcher._extractAssistantText({ type: 'result' }) === '', 'non-assistant returns empty');
 }
 
+// Seed the project with a .mcp.json holding a non-cairn server entry so
+// smoke can verify the merge: project's `notion-mcp` should survive,
+// `cairn-wedge` gets overridden with canonical path.
+const projectMcpPath = path.join(_projectDir, '.mcp.json');
+fs.writeFileSync(projectMcpPath, JSON.stringify({
+  mcpServers: {
+    'notion-mcp': { command: 'node', args: ['./notion-mcp.js'] },
+    'cairn-wedge': { command: 'node', args: ['STALE-PATH-SHOULD-BE-OVERRIDDEN'] },
+  },
+}, null, 2));
+
 section('4 launch fake, verify files written + status');
 {
   const res = launcher.launchStreamWorker({
@@ -164,6 +199,136 @@ section('4 launch fake, verify files written + status');
   ok(/starting work/.test(tail), 'tail.log has assistant text "starting work"');
   ok(/tool_use: Read/.test(tail), 'tail.log has tool_use summary');
   ok(!/session_id/.test(tail), 'tail.log does NOT contain raw NDJSON (no session_id leak)');
+
+  // Phase 3 argv assertions: --mcp-config <path> + --strict-mcp-config + bypassPermissions.
+  ok(Array.isArray(meta.argv) && meta.argv.includes('--mcp-config'), 'argv contains --mcp-config');
+  ok(meta.argv.includes('--strict-mcp-config'), 'argv contains --strict-mcp-config');
+  ok(typeof meta.mcp_config_path === 'string' && meta.mcp_config_path.length > 0, 'meta.mcp_config_path set (got ' + meta.mcp_config_path + ')');
+  ok(meta.mcp_server_count === 2, 'mcp_server_count=2 (notion + cairn-wedge), got ' + meta.mcp_server_count);
+
+  // Phase 3 cleanup: the temp file must be gone after child exit.
+  ok(!fs.existsSync(meta.mcp_config_path), 'mcp-config temp file cleaned up on exit');
+
+  // Phase 2 negative: no resumeSessionId given → no --resume in argv.
+  ok(!meta.argv.includes('--resume'), 'argv does NOT contain --resume (no prior session)');
+  ok(meta.resume_session_id === null, 'meta.resume_session_id is null');
+
+  // Phase 3 argv on the child side (what the fake binary actually received).
+  const argvFiles = fs.readdirSync(argvDumpDir).filter(f => f.startsWith('argv-')).sort();
+  ok(argvFiles.length >= 1, 'fake claude dumped ≥1 argv file (got ' + argvFiles.length + ')');
+  const lastDump = JSON.parse(fs.readFileSync(path.join(argvDumpDir, argvFiles[argvFiles.length - 1]), 'utf8'));
+  ok(lastDump.has_mcp_config === true, 'child saw --mcp-config in its argv');
+  ok(lastDump.has_strict_mcp_config === true, 'child saw --strict-mcp-config in its argv');
+  ok(lastDump.has_bypass === true, 'child saw bypassPermissions');
+  ok(lastDump.has_resume === false, 'child did NOT see --resume on cold start');
+}
+
+section('5 Phase 3 — mcp-config file content + canonical cairn-wedge override');
+{
+  // Build a config file directly via the helper and inspect.
+  const mcpHelper = require(path.join(dsRoot, 'claude-mcp-config.cjs'));
+  const res = mcpHelper.buildMcpConfigFile({
+    projectRoot: _projectDir,
+    runId: 'smoke_p3_' + Date.now(),
+    tmpDir: _tmpDir,
+  });
+  ok(res.ok === true, 'buildMcpConfigFile ok');
+  ok(fs.existsSync(res.tempPath), 'temp file exists');
+  ok(res.projectHadCairnWedge === true, 'detected stale cairn-wedge in project .mcp.json');
+
+  const parsed = JSON.parse(fs.readFileSync(res.tempPath, 'utf8'));
+  ok(parsed.mcpServers && typeof parsed.mcpServers === 'object', 'file has mcpServers map');
+  ok(parsed.mcpServers['notion-mcp'] != null, 'notion-mcp survives merge');
+  ok(parsed.mcpServers['cairn-wedge'] != null, 'cairn-wedge present');
+  const cw = parsed.mcpServers['cairn-wedge'];
+  ok(cw.command === 'node', 'cairn-wedge.command = node');
+  ok(Array.isArray(cw.args) && cw.args.length === 1, 'cairn-wedge.args length 1');
+  ok(!String(cw.args[0]).includes('STALE'), 'STALE path overridden by canonical (got ' + cw.args[0] + ')');
+  ok(/mcp-server[\\/]dist[\\/]index\.js$/.test(cw.args[0]), 'canonical points at mcp-server/dist/index.js');
+
+  res.cleanup();
+  ok(!fs.existsSync(res.tempPath), 'cleanup() removes the temp file');
+}
+
+section('6 Phase 3 — no project .mcp.json still injects canonical cairn-wedge');
+{
+  const mcpHelper = require(path.join(dsRoot, 'claude-mcp-config.cjs'));
+  const bareDir = path.join(_tmpDir, 'bare-project');
+  fs.mkdirSync(bareDir, { recursive: true });
+  const res = mcpHelper.buildMcpConfigFile({
+    projectRoot: bareDir,
+    runId: 'smoke_p3_bare_' + Date.now(),
+    tmpDir: _tmpDir,
+  });
+  ok(res.ok === true, 'buildMcpConfigFile ok on bare project');
+  ok(res.projectHadCairnWedge === false, 'projectHadCairnWedge=false (no .mcp.json)');
+  ok(res.serverCount === 1, 'serverCount=1 (cairn-wedge only)');
+  const parsed = JSON.parse(fs.readFileSync(res.tempPath, 'utf8'));
+  ok(parsed.mcpServers && parsed.mcpServers['cairn-wedge'], 'cairn-wedge auto-injected');
+  res.cleanup();
+}
+
+section('7 Phase 2 — resumeSessionId puts --resume in argv');
+{
+  // Second launch with resumeSessionId — verify argv mutation + meta recording.
+  const fakeSession = 'sess_fake_resumed_xyz';
+  const res = launcher.launchStreamWorker({
+    cwd: _projectDir,
+    prompt: 'continue please',
+    project_id: 'p_test',
+    iteration_id: 'smoke-resume',
+    env: process.env,
+    resumeSessionId: fakeSession,
+  }, { home: _tmpDir });
+
+  ok(res.ok === true, 'launch with resumeSessionId returns ok');
+  const runJsonPath = path.join(_tmpDir, '.cairn', 'worker-runs', res.run_id, 'run.json');
+  await new Promise((resolve) => {
+    const deadline = Date.now() + 8000;
+    const tick = () => {
+      if (Date.now() > deadline) return resolve();
+      try {
+        const m = JSON.parse(fs.readFileSync(runJsonPath, 'utf8'));
+        if (m.status !== 'running' && m.status !== 'queued') return resolve();
+      } catch (_e) {}
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+  const meta = JSON.parse(fs.readFileSync(runJsonPath, 'utf8'));
+  ok(meta.argv.includes('--resume'), 'argv contains --resume');
+  const idx = meta.argv.indexOf('--resume');
+  ok(meta.argv[idx + 1] === fakeSession, 'argv has the session_id after --resume');
+  ok(meta.resume_session_id === fakeSession, 'meta.resume_session_id = ' + fakeSession);
+
+  // Verify the fake binary actually received --resume too.
+  const argvFiles2 = fs.readdirSync(argvDumpDir).filter(f => f.startsWith('argv-')).sort();
+  const lastDump2 = JSON.parse(fs.readFileSync(path.join(argvDumpDir, argvFiles2[argvFiles2.length - 1]), 'utf8'));
+  ok(lastDump2.has_resume === true, 'child saw --resume in its argv on resume launch');
+  ok(lastDump2.argv.includes(fakeSession), 'child argv includes the session_id literal');
+}
+
+section('8 Phase 2 — invalid resumeSessionId rejected');
+{
+  const res = launcher.launchStreamWorker({
+    cwd: _projectDir,
+    prompt: 'x',
+    project_id: 'p_test',
+    env: process.env,
+    resumeSessionId: '   ',
+  }, { home: _tmpDir });
+  ok(res.ok === false, 'empty/whitespace resumeSessionId rejected');
+  ok(res.error === 'resumeSessionId_must_be_nonempty_string', 'error = resumeSessionId_must_be_nonempty_string (got ' + res.error + ')');
+
+  const res2 = launcher.launchStreamWorker({
+    cwd: _projectDir,
+    prompt: 'x',
+    project_id: 'p_test',
+    env: process.env,
+    resumeSessionId: 42, // non-string
+  }, { home: _tmpDir });
+  ok(res2.ok === false, 'non-string resumeSessionId rejected');
+  ok(res2.error === 'resumeSessionId_must_be_nonempty_string', 'error matches');
 }
 
 header(`${asserts - fails}/${asserts} assertions passed (${fails} failed)`);

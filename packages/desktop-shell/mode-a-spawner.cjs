@@ -42,6 +42,9 @@ const launcher = require('./worker-launcher.cjs');
 // events → stream_events.jsonl, text-only → tail.log). Mode B continues
 // to use worker-launcher with --print — unaffected.
 const streamLauncher = require('./claude-stream-launcher.cjs');
+// Phase 2 (2026-05-14): durable (project_id, plan_id) → session_id map
+// for --resume. Lookup before spawn, persist on result event.
+const sessionStore = require('./mode-a-session-store.cjs');
 const cairnLog = require('./cairn-log.cjs');
 
 const SPAWN_COOLDOWN_MS = 60_000;
@@ -299,18 +302,60 @@ function spawnModeAWorker(input, opts) {
     CAIRN_MODE_A_PROJECT_ID: project.id,
   });
 
+  // Phase 2: look up persisted session_id for (project, plan). If we
+  // have one, the launcher will pass `--resume <id>` to claude so it
+  // picks up the SAME conversation it had on the prior plan step.
+  // First step of a plan: no row → fresh spawn, session_id captured
+  // from the result event below and persisted then.
+  const planIdForResume = plan && plan.plan_id ? plan.plan_id : null;
+  const persistedSessionId = (db && planIdForResume)
+    ? sessionStore.getSessionId(db, project.id, planIdForResume)
+    : null;
+
   let launchRes;
   try {
     // Use the stream-json launcher (Phase 1 2026-05-14). Argv hardcoded
     // by streamLauncher: --output-format stream-json --input-format
-    // stream-json --verbose --permission-mode bypassPermissions.
+    // stream-json --verbose --permission-mode bypassPermissions
+    // --mcp-config <tmp> --strict-mcp-config [--resume <id>].
     launchRes = streamLauncher.launchStreamWorker({
       cwd,
       prompt,
       iteration_id: 'mode-a:' + project.id + ':' + (plan && plan.plan_id || 'no-plan'),
       project_id: project.id,
       env,
-    }, { home: o.home });
+      resumeSessionId: persistedSessionId || undefined,
+    }, {
+      home: o.home,
+      // Capture session_id from the first `result` event and persist
+      // it so the NEXT plan step resumes the same CC session.
+      onEvent: (ev) => {
+        if (!ev || ev.type !== 'result') return;
+        if (typeof ev.session_id !== 'string' || !ev.session_id) return;
+        if (!db || !planIdForResume) return;
+        // Skip if we already have the same one (idempotent — `result`
+        // can fire more than once over a multi-turn session).
+        const prior = sessionStore.getSessionId(db, project.id, planIdForResume);
+        if (prior === ev.session_id) return;
+        const res = sessionStore.setSessionId(
+          db, project.id, planIdForResume, ev.session_id, launchRes && launchRes.run_id,
+        );
+        if (res && res.ok) {
+          cairnLog.info('mode-a-spawner', 'session_id_persisted', {
+            project_id: project.id,
+            plan_id: planIdForResume,
+            session_id: ev.session_id,
+            was_resume: !!persistedSessionId,
+          });
+        } else {
+          cairnLog.warn('mode-a-spawner', 'session_id_persist_failed', {
+            project_id: project.id,
+            plan_id: planIdForResume,
+            error: res && res.error,
+          });
+        }
+      },
+    });
   } catch (e) {
     cairnLog.error('mode-a-spawner', 'launch_threw', {
       project_id: project.id,
@@ -343,8 +388,15 @@ function spawnModeAWorker(input, opts) {
     dispatch_id: dispatchId,
     cwd,
     step_label: (plan && plan.steps && plan.steps[plan.current_idx || 0] || {}).label || null,
+    resume_session_id: persistedSessionId || null,
   });
-  return { ok: true, run_id: launchRes.run_id, agent_id: agentId, dispatch_id: dispatchId };
+  return {
+    ok: true,
+    run_id: launchRes.run_id,
+    agent_id: agentId,
+    dispatch_id: dispatchId,
+    resume_session_id: persistedSessionId || null,
+  };
 }
 
 module.exports = {
