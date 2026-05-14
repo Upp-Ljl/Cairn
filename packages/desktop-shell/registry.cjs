@@ -873,9 +873,26 @@ const COCKPIT_SETTINGS_DEFAULT = Object.freeze({
     default_branch: 'main',
     pat_path: null,
   },
+  // Mode A v2 phase state machine (CEO 2026-05-14 reframe). Drives the
+  // "保存 goal → Scout 起 plan → 用户审 → Start → 执行" workflow.
+  //
+  //   idle          ─→ nothing (Mode B, or Mode A + no goal yet)
+  //   planning      ─→ Scout CC is drafting a plan
+  //   plan_pending  ─→ Scout output a plan; waiting for user click Start
+  //   running       ─→ User clicked Start; mode-a-spawner can fire
+  //   paused        ─→ User clicked Stop; spawner blocked
+  //
+  // No execution CC is spawned unless phase === 'running'. Scout writes
+  // happen independently of execution writes (see mode-a-scout.cjs).
+  // Goal change / mode B→A toggle / explicit Re-plan IPC re-enter
+  // 'planning'.
+  mode_a: {
+    phase: 'idle',
+  },
 });
 
 const KNOWN_MODES = ['A', 'B'];
+const VALID_MODE_A_PHASES = ['idle', 'planning', 'plan_pending', 'running', 'paused'];
 
 function getCockpitSettings(reg, projectId) {
   if (!reg || !Array.isArray(reg.projects)) return COCKPIT_SETTINGS_DEFAULT;
@@ -883,12 +900,16 @@ function getCockpitSettings(reg, projectId) {
   if (!p) return COCKPIT_SETTINGS_DEFAULT;
   const s = p.cockpit_settings || {};
   // Merge against defaults so newly added fields don't break.
+  const mode_a_raw = s.mode_a || {};
   return {
     leader: typeof s.leader === 'string' ? s.leader : COCKPIT_SETTINGS_DEFAULT.leader,
     mode: KNOWN_MODES.includes(s.mode) ? s.mode : COCKPIT_SETTINGS_DEFAULT.mode,
     llm_helpers: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.llm_helpers, s.llm_helpers || {}),
     escalation_thresholds: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.escalation_thresholds, s.escalation_thresholds || {}),
     auto_ship: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.auto_ship, s.auto_ship || {}),
+    mode_a: {
+      phase: VALID_MODE_A_PHASES.includes(mode_a_raw.phase) ? mode_a_raw.phase : COCKPIT_SETTINGS_DEFAULT.mode_a.phase,
+    },
   };
 }
 
@@ -904,11 +925,19 @@ function setCockpitSettings(reg, projectId, input) {
   const idx = reg.projects.findIndex(x => x.id === projectId);
   if (idx < 0) return { error: 'project_not_found' };
   const cur = getCockpitSettings(reg, projectId);
+  // Mode A phase merge: accept an explicit phase override OR inherit
+  // current. Validation rejects unknown phases loudly so panel typos
+  // don't silently corrupt the state machine.
+  const nextModeA = Object.assign({}, cur.mode_a, input.mode_a || {});
+  if (!VALID_MODE_A_PHASES.includes(nextModeA.phase)) {
+    return { error: `unknown_mode_a_phase: ${nextModeA.phase}` };
+  }
   const next = {
     leader: typeof input.leader === 'string' ? input.leader : cur.leader,
     mode: typeof input.mode === 'string' ? input.mode : cur.mode,
     llm_helpers: Object.assign({}, cur.llm_helpers, input.llm_helpers || {}),
     escalation_thresholds: Object.assign({}, cur.escalation_thresholds, input.escalation_thresholds || {}),
+    mode_a: nextModeA,
   };
   // Validate leader against known values (extensible).
   const KNOWN_LEADERS = ['claude-code', 'cursor', 'codex', 'aider', 'cline'];
@@ -918,17 +947,63 @@ function setCockpitSettings(reg, projectId, input) {
   if (!KNOWN_MODES.includes(next.mode)) {
     return { error: `unknown_mode: ${next.mode}` };
   }
+  // Auto-coerce phase when mode flips. Going A→B: reset to idle (no
+  // spawning, no plan ambiguity). Going B→A with goal already set:
+  // jump to 'planning' so Scout fires on next tick / kick.
+  if (next.mode === 'B' && cur.mode === 'A' && cur.mode_a.phase !== 'idle' && !input.mode_a) {
+    next.mode_a = { phase: 'idle' };
+  }
   const newProjects = reg.projects.slice();
   newProjects[idx] = Object.assign({}, newProjects[idx], { cockpit_settings: next });
   const newReg = Object.assign({}, reg, { projects: newProjects });
   return { reg: newReg, settings: next };
 }
 
+/**
+ * Convenience: transition Mode A phase + persist + return the new
+ * settings. Returns { error } on invalid transition or unknown phase.
+ *
+ * Allowed transitions (rest are no-op / error):
+ *   idle          → planning      (mode B→A, or goal set while A)
+ *   planning      → plan_pending  (Scout completed)
+ *   planning      → idle          (cancelled while scout was running)
+ *   plan_pending  → running       (user click Start)
+ *   plan_pending  → planning      (user click Re-plan)
+ *   plan_pending  → idle          (user click Stop)
+ *   running       → paused        (user click Stop)
+ *   running       → planning      (user click Re-plan while running)
+ *   paused        → running       (user click Start)
+ *   paused        → planning      (user click Re-plan)
+ *   paused        → idle          (mode A→B)
+ *   <any>         → <same>        (no-op, returns settings unchanged)
+ */
+const _MODE_A_TRANSITIONS = {
+  idle:         new Set(['idle', 'planning']),
+  planning:     new Set(['planning', 'plan_pending', 'idle']),
+  plan_pending: new Set(['plan_pending', 'running', 'planning', 'idle']),
+  running:      new Set(['running', 'paused', 'planning']),
+  paused:       new Set(['paused', 'running', 'planning', 'idle']),
+};
+function setModeAPhase(reg, projectId, nextPhase) {
+  if (!VALID_MODE_A_PHASES.includes(nextPhase)) {
+    return { error: `unknown_mode_a_phase: ${nextPhase}` };
+  }
+  const cur = getCockpitSettings(reg, projectId);
+  const curPhase = cur.mode_a.phase;
+  const allowed = _MODE_A_TRANSITIONS[curPhase];
+  if (!allowed || !allowed.has(nextPhase)) {
+    return { error: `invalid_phase_transition: ${curPhase} → ${nextPhase}` };
+  }
+  return setCockpitSettings(reg, projectId, { mode_a: { phase: nextPhase } });
+}
+
 // Attach Phase 6 exports to module.exports (after const declarations).
 module.exports.getCockpitSettings = getCockpitSettings;
 module.exports.setCockpitSettings = setCockpitSettings;
+module.exports.setModeAPhase = setModeAPhase;
 module.exports.COCKPIT_SETTINGS_DEFAULT = COCKPIT_SETTINGS_DEFAULT;
 module.exports.KNOWN_MODES = KNOWN_MODES;
+module.exports.VALID_MODE_A_PHASES = VALID_MODE_A_PHASES;
 
 // ---------------------------------------------------------------------------
 // B4 Onboarding wizard — first-launch flag

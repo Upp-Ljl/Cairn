@@ -71,6 +71,14 @@ const api = {
   // projects. Triggers git commit (if dirty) + push (system config or
   // PAT fallback). Returns the autoShip result.
   modeAShipNow:         (projectId) => ipcRenderer.invoke('mode-a-ship-now', projectId),
+  // Mode A v2 panel controls (CEO 2026-05-14 reframe). After CEO
+  // edits a goal in Mode A, Scout drafts a plan and parks it at
+  // phase=plan_pending. The user reviews the plan in the panel
+  // sidebar and clicks Start (→ running) / Stop (→ paused / idle) /
+  // Re-plan (→ planning, scout re-spawned).
+  modeAStart:           (projectId) => ipcRenderer.invoke('mode-a-start', projectId),
+  modeAStop:            (projectId) => ipcRenderer.invoke('mode-a-stop', projectId),
+  modeAReplan:          (projectId) => ipcRenderer.invoke('mode-a-replan', projectId),
   cockpitSummarizeTail: (input) => ipcRenderer.invoke('cockpit-summarize-tail', input || {}),
   cockpitExplainConflict: (input) => ipcRenderer.invoke('cockpit-explain-conflict', input || {}),
   cockpitSortInbox:     (input) => ipcRenderer.invoke('cockpit-sort-inbox', input || {}),

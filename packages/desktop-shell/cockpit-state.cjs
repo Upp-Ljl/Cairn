@@ -79,6 +79,7 @@ function emptyCockpitState(project, dbPath, reason) {
     goal: null,
     leader: (project && project.leader) || null,
     mode: (project && project.mode) || 'B',
+    mode_a_phase: (project && project.mode_a_phase) || 'idle',
     mode_a_plan: null,
     active_agents_count: 0,
     autopilot_status: AUTOPILOT_STATUS.AGENT_IDLE,
@@ -1209,6 +1210,10 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     goal: goal || null,
     leader: project.leader || null,
     mode: project.mode || 'B',
+    // Mode A v2 phase (CEO 2026-05-14 reframe). idle | planning |
+    // plan_pending | running | paused. Drives the Start/Stop/Re-plan
+    // surface in the panel sidebar.
+    mode_a_phase: project.mode_a_phase || 'idle',
     // MA-2b (2026-05-14): Mode A execution plan, when mode=A + goal set.
     // null otherwise. Steps array = ordered success_criteria.
     mode_a_plan,
