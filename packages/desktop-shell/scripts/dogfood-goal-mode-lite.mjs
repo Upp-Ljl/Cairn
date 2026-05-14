@@ -30,6 +30,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+// SAFETY GATE (2026-05-14 incident): this dogfood writes to the user's
+// REAL ~/.cairn/projects.json via registry.setProjectGoal. Accidental
+// runs (e.g., from a regression sweep that forgot to filter dogfoods)
+// would overwrite the live registry. Require explicit --live flag.
+if (!process.argv.includes('--live')) {
+  console.error('\n✋ dogfood-goal-mode-lite mutates LIVE ~/.cairn/projects.json.');
+  console.error('   Pass --live to confirm:');
+  console.error('       node packages/desktop-shell/scripts/dogfood-goal-mode-lite.mjs --live');
+  console.error('   Without --live, this script aborts to prevent registry damage.\n');
+  process.exit(2);
+}
+
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');

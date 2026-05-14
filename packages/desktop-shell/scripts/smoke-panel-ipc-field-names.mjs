@@ -18,12 +18,56 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_JS  = path.resolve(__dirname, '..', 'panel.js');
 const REGISTRY  = path.resolve(__dirname, '..', 'registry.cjs');
+
+// ---------------------------------------------------------------------------
+// SAFETY: Sandbox HOME before requiring registry.cjs.
+// registry.cjs computes DEFAULT_DB_PATH = path.join(os.homedir(), '.cairn',
+// 'cairn.db') at module load time. setProjectGoal (and friends) call
+// saveRegistry which writes to that path. Without this sandbox, the
+// runtime section (3) of this smoke wipes the user's REAL projects.json.
+// 鸭总 caught the bug 2026-05-14 — fixed by hoisting HOME override before
+// any require() of registry.cjs runs. Pattern copied from existing
+// smoke-goal-registry.mjs which already does this correctly.
+// ---------------------------------------------------------------------------
+const realHome = os.homedir();
+const realProjectsJson = path.join(realHome, '.cairn', 'projects.json');
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cairn-ipc-smoke-'));
+fs.mkdirSync(path.join(tmpDir, '.cairn'), { recursive: true });
+process.env.HOME = tmpDir;
+process.env.USERPROFILE = tmpDir;
+
+// Defense-in-depth: even with HOME overridden, if a future change
+// somehow points back at the real home, abort BEFORE any write.
+function assertSandboxIntact() {
+  if (process.env.HOME !== tmpDir || process.env.USERPROFILE !== tmpDir) {
+    console.error('FATAL: HOME/USERPROFILE escaped sandbox — refusing to run');
+    process.exit(2);
+  }
+}
+assertSandboxIntact();
+
+// On exit, verify we did NOT write to the real ~/.cairn/projects.json.
+// This catches any sneaky regression that bypasses HOME override (e.g.,
+// hardcoded absolute path).
+const realJsonStatBefore = fs.existsSync(realProjectsJson)
+  ? fs.statSync(realProjectsJson).mtimeMs
+  : null;
+process.on('exit', () => {
+  const realJsonStatAfter = fs.existsSync(realProjectsJson)
+    ? fs.statSync(realProjectsJson).mtimeMs
+    : null;
+  if (realJsonStatBefore !== realJsonStatAfter) {
+    console.error('FATAL: smoke wrote to REAL ~/.cairn/projects.json — sandbox failed');
+    process.exit(3);
+  }
+});
 
 let asserts = 0, fails = 0;
 const failures = [];
