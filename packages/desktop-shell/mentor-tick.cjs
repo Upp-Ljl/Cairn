@@ -312,6 +312,34 @@ function runOnce(deps) {
         const cockpitSettings = deps.registry.getCockpitSettings(deps.reg, project.id);
         if (cockpitSettings && cockpitSettings.mode === 'A') {
           const goal = deps.registry.getProjectGoal(deps.reg, project.id);
+          // 2026-05-14 subagent verdict: per-project tick summary so
+          // future "Mode A 没反应" sessions can grep one log line to
+          // see all 6 conditions at once: mode / has_goal / sc_count
+          // / agentIds / active_candidates / has_plan.
+          try {
+            const scCount = goal && Array.isArray(goal.success_criteria)
+              ? goal.success_criteria.filter(s => typeof s === 'string' && s.trim().length > 0).length
+              : 0;
+            let activeCandidates = 0;
+            if (entry.tables.has('processes') && hints.length > 0) {
+              const phs = '(' + hints.map(() => '?').join(',') + ')';
+              try {
+                activeCandidates = entry.db.prepare(
+                  `SELECT COUNT(*) AS n FROM processes WHERE agent_id IN ${phs} AND status='ACTIVE'`
+                ).get(...hints).n;
+              } catch (_e) { /* leave 0 */ }
+            }
+            const hasPlan = !!modeALoop.getPlan(entry.db, project.id);
+            cairnLog.info('mode-a-loop', 'tick_summary', {
+              project_id: project.id,
+              mode: 'A',
+              has_goal: !!goal,
+              sc_count: scCount,
+              agent_ids_count: hints.length,
+              active_candidates: activeCandidates,
+              has_plan: hasPlan,
+            });
+          } catch (_e) { /* never block the tick on telemetry */ }
           // MA-2d: aggressive Rule D auto-answer for Mode A — before
           // the plan loop runs, sweep any OPEN blockers and answer them
           // so CC doesn't sit indefinitely waiting for a human.

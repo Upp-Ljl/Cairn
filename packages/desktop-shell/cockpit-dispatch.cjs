@@ -177,6 +177,44 @@ function dispatchTodo(db, tables, input) {
     source: input.source,
   });
 
+  // 4b. Notify the target agent via scratchpad agent_inbox (2026-05-14
+  // subagent verdict). dispatchTodo previously wrote dispatch_requests
+  // only — but the cairn-aware skill (v1-v4) tells agents to poll
+  // `agent_inbox/<their-agent-id>/*` for steer messages, NOT to scan
+  // dispatch_requests. Net result: the dispatch row existed but no
+  // agent ever picked it up. 5 prior "Mode A 没反应" commits all
+  // missed this last-meter break.
+  //
+  // Failure is non-fatal: dispatch_requests is still authoritative for
+  // audit, and a future inbox-aware mentor-tick could replay missed
+  // injections from the row. But missing this here is what made Mode A
+  // look like it doesn't work.
+  try {
+    const cockpitSteer = require('./cockpit-steer.cjs');
+    const inboxRes = cockpitSteer.injectSteer(db, tables, {
+      project_id: input.project_id,
+      agent_id: input.target_agent_id,
+      message:
+        '[' + (input.source === 'mode-a-loop' ? 'Mode A 自动派单' : 'cockpit-dispatch') + '/' + dispatchId + '] ' +
+        input.label.trim() +
+        (input.why ? ' — ' + input.why.trim() : ''),
+      supervisor_id: input.source === 'mode-a-loop' ? 'cairn-mode-a' : 'cairn-cockpit',
+    });
+    cairnLog.info('dispatch', 'inbox_injected', {
+      dispatch_id: dispatchId,
+      target_agent_id: input.target_agent_id,
+      ok: !!inboxRes.ok,
+      key: inboxRes.key,
+      error: inboxRes.ok ? undefined : inboxRes.error,
+    });
+  } catch (e) {
+    cairnLog.warn('dispatch', 'inbox_inject_threw', {
+      dispatch_id: dispatchId,
+      target_agent_id: input.target_agent_id,
+      message: (e && e.message) || String(e),
+    });
+  }
+
   // 5. Mark the scratchpad todo entry as dispatched.
   //    The todo is stored at key = todo_id (e.g. "agent_proposal/<aid>/<ulid>").
   //    We read the existing value_json, merge dispatched_* fields, and update.

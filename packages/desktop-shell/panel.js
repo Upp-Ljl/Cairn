@@ -4315,9 +4315,32 @@ function renderCockpit(state) {
         }).join('');
       } else {
         // (c) — has criteria but plan not yet drafted; transient.
-        planProgressEl.textContent = `${criteria.length} 条 criteria · 等待 Mentor 起草…`;
-        planStepsEl.innerHTML = criteria.map(c =>
-          `<li>${escapeHtml(c)}</li>`).join('');
+        // OR plan drafted but 0 ACTIVE agents → dispatch blocked.
+        const activeCount = typeof state.active_agents_count === 'number'
+          ? state.active_agents_count : 0;
+        if (activeCount === 0) {
+          // (c2) Critical user-action gate — no agent to dispatch to.
+          // Mode A's loop needs at least one ACTIVE CC / agent session
+          // in this project's directory. Tell user explicitly.
+          planProgressEl.textContent = '⚠ 0 ACTIVE agent';
+          const projRoot = state.project && state.project.project_root ? state.project.project_root : '<项目目录>';
+          planStepsEl.innerHTML =
+            '<li class="cockpit-mode-a-plan-empty">' +
+            'Mode A 需要至少一个 <strong>ACTIVE</strong> 的 Cairn-aware agent session 才能派单。' +
+            '当前为 0。' +
+            '<br><br>' +
+            '<strong>怎么开一个</strong>：在项目目录开终端 → 跑 <code>claude</code>，' +
+            'mcp-server 会自动注册 process 行 + cairn-aware skill 会教 CC poll <code>agent_inbox</code>。' +
+            '<br><span style="opacity:0.7;font-size:0.9em;">项目目录：<code>' +
+            escapeHtml(projRoot) + '</code></span>' +
+            '</li>';
+        } else {
+          // (c1) Active agent exists, plan just not yet drafted (next tick will do it).
+          planProgressEl.textContent =
+            `${criteria.length} 条 criteria · ${activeCount} ACTIVE agent · 等待 Mentor 起草…`;
+          planStepsEl.innerHTML = criteria.map(c =>
+            `<li>${escapeHtml(c)}</li>`).join('');
+        }
       }
     }
   }

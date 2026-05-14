@@ -80,6 +80,7 @@ function emptyCockpitState(project, dbPath, reason) {
     leader: (project && project.leader) || null,
     mode: (project && project.mode) || 'B',
     mode_a_plan: null,
+    active_agents_count: 0,
     autopilot_status: AUTOPILOT_STATUS.AGENT_IDLE,
     autopilot_reason: reason || 'no_data',
     agents: [],
@@ -1006,6 +1007,19 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
   // read with no side effect (D9 read-only).
   let mode_a_plan = null;
   try { mode_a_plan = modeALoop.getPlan(db, project.id); } catch (_e) { mode_a_plan = null; }
+  // 2026-05-14 subagent verdict B5: surface ACTIVE candidate count so
+  // the panel can warn "Mode A 需要 ≥1 ACTIVE agent" when there's
+  // nothing to dispatch to. Aligned with mode-a-loop.decideNextDispatch
+  // gate (status='ACTIVE' filter at mode-a-loop.cjs:249).
+  let active_agents_count = 0;
+  try {
+    if (tables.has('processes') && hints && hints.length > 0) {
+      const phs = '(' + hints.map(() => '?').join(',') + ')';
+      active_agents_count = db.prepare(
+        `SELECT COUNT(*) AS n FROM processes WHERE agent_id IN ${phs} AND status='ACTIVE'`
+      ).get(...hints).n;
+    }
+  } catch (_e) { active_agents_count = 0; }
   const progress = queryProgress(db, tables, hints);
   const currentTask = queryCurrentTask(db, tables, hints);
   const latestMentor = queryLatestMentorNudge(db, tables, project.id);
@@ -1198,6 +1212,9 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     // MA-2b (2026-05-14): Mode A execution plan, when mode=A + goal set.
     // null otherwise. Steps array = ordered success_criteria.
     mode_a_plan,
+    // 2026-05-14: active ACTIVE-status processes attributable to this
+    // project. Mode A's decideNextDispatch requires ≥1 to fire.
+    active_agents_count,
     // schema-v2 surface (2026-05-14): Mentor north-star + computed in-flight
     whole_sentence,
     cairn_md_present,
