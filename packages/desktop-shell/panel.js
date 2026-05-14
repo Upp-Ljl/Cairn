@@ -4757,7 +4757,11 @@ function openGoalModal() {
   document.getElementById('goal-input-save')?.addEventListener('click', async () => {
     const text = (ta && ta.value || '').trim();
     if (!text) { ta && ta.focus(); return; }
-    const res = await window.cairn.setProjectGoal(selectedProject.id, { text });
+    // The onboarding modal only collects a single line; the registry's
+    // setProjectGoal validation requires `title` (not `text`). 2026-05-14
+    // bug 鸭总 caught: 'Failed: title_required' alert was thrown for
+    // every onboarding save because the field name was wrong here.
+    const res = await window.cairn.setProjectGoal(selectedProject.id, { title: text });
     if (res && res.ok) {
       closeModal();
       poll().catch(() => {});
