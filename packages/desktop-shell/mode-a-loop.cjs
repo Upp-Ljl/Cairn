@@ -296,6 +296,12 @@ function markStepDispatched(db, projectId, stepIdx, dispatchId, now) {
   step.state = 'DISPATCHED';
   step.dispatch_id = dispatchId;
   step.dispatched_at = ts;
+  // 2026-05-14: stamp inbox_injected_at synchronously — cockpit-dispatch
+  // already wrote agent_inbox by the time markStepDispatched is called
+  // (commit f1e88af). The stamp is the signal to reconcileInbox below
+  // that this step does NOT need a replay injection. Pre-f1e88af
+  // dispatches lack this stamp, so reconciliation will heal them.
+  step.inbox_injected_at = ts;
   plan.updated_at = ts;
   writePlan(db, projectId, plan, ts);
   cairnLog.info('mode-a-loop', 'step_dispatched', {
@@ -305,6 +311,86 @@ function markStepDispatched(db, projectId, stepIdx, dispatchId, now) {
     dispatch_id: dispatchId,
   });
   return plan;
+}
+
+/**
+ * Heal orphan dispatches: any plan step in DISPATCHED state whose
+ * inbox_injected_at is missing → re-inject the cockpit-steer message
+ * so the agent's polling loop can pick it up. Idempotent on
+ * inbox_injected_at — once stamped, subsequent ticks skip the step.
+ *
+ * Why this exists: dispatchTodo only started writing agent_inbox in
+ * commit f1e88af. Pre-f1e88af dispatches sit in dispatch_requests as
+ * PENDING with no inbox notification, and since the step is already
+ * DISPATCHED, decideNextDispatch won't redispatch. The reconciler is
+ * the only path that closes the loop for those stragglers.
+ *
+ * Returns { reconciled: number, errors: number }.
+ */
+function reconcileInbox(db, project, opts) {
+  const out = { reconciled: 0, errors: 0 };
+  if (!db || !project) return out;
+  const plan = getPlan(db, project.id);
+  if (!plan || !Array.isArray(plan.steps)) return out;
+  let dirty = false;
+  for (let i = 0; i < plan.steps.length; i++) {
+    const step = plan.steps[i];
+    if (!step || step.state !== 'DISPATCHED' || !step.dispatch_id) continue;
+    if (step.inbox_injected_at) continue;
+    let drow = null;
+    try {
+      drow = db.prepare(
+        'SELECT target_agent, nl_intent FROM dispatch_requests WHERE id = ?'
+      ).get(step.dispatch_id);
+    } catch (_e) { /* skip */ }
+    if (!drow || !drow.target_agent) {
+      out.errors++;
+      continue;
+    }
+    try {
+      const cockpitSteer = require('./cockpit-steer.cjs');
+      const tables = opts && opts.tables ? opts.tables : new Set(['scratchpad']);
+      const r = cockpitSteer.injectSteer(db, tables, {
+        project_id: project.id,
+        agent_id: drow.target_agent,
+        message: '[Mode A 重补派单/' + step.dispatch_id + '] ' +
+                 (step.label || drow.nl_intent || '(unnamed step)'),
+        supervisor_id: 'cairn-mode-a-recon',
+      });
+      if (r.ok) {
+        step.inbox_injected_at = Date.now();
+        dirty = true;
+        out.reconciled++;
+        cairnLog.info('mode-a-loop', 'inbox_reconciled', {
+          project_id: project.id,
+          plan_id: plan.plan_id,
+          step_idx: i,
+          dispatch_id: step.dispatch_id,
+          target_agent_id: drow.target_agent,
+        });
+      } else {
+        out.errors++;
+        cairnLog.warn('mode-a-loop', 'inbox_reconcile_failed', {
+          project_id: project.id,
+          step_idx: i,
+          dispatch_id: step.dispatch_id,
+          error: r.error,
+        });
+      }
+    } catch (e) {
+      out.errors++;
+      cairnLog.error('mode-a-loop', 'inbox_reconcile_threw', {
+        project_id: project.id,
+        step_idx: i,
+        message: (e && e.message) || String(e),
+      });
+    }
+  }
+  if (dirty) {
+    try { writePlan(db, project.id, plan, Date.now()); }
+    catch (_e) { /* logged above */ }
+  }
+  return out;
 }
 
 /**
@@ -435,5 +521,6 @@ module.exports = {
   decideNextDispatch,
   markStepDispatched,
   advanceOnComplete,
+  reconcileInbox,
   runOnceForProject,
 };

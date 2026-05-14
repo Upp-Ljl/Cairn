@@ -340,6 +340,20 @@ function runOnce(deps) {
               has_plan: hasPlan,
             });
           } catch (_e) { /* never block the tick on telemetry */ }
+          // 2026-05-14: reconcile any orphan DISPATCHED step whose
+          // inbox notification didn't go out (pre-f1e88af dispatches
+          // sit PENDING in dispatch_requests with no agent_inbox row;
+          // step is DISPATCHED so decideNextDispatch won't redispatch;
+          // only this reconciler closes the loop). Idempotent on
+          // step.inbox_injected_at — runs at most once per step.
+          try {
+            modeALoop.reconcileInbox(entry.db, project, { tables: entry.tables });
+          } catch (e) {
+            cairnLog.error('mode-a-loop', 'reconcile_threw', {
+              project_id: project.id,
+              message: (e && e.message) || String(e),
+            });
+          }
           // MA-2d: aggressive Rule D auto-answer for Mode A — before
           // the plan loop runs, sweep any OPEN blockers and answer them
           // so CC doesn't sit indefinitely waiting for a human.
