@@ -37,6 +37,11 @@
 
 const crypto = require('node:crypto');
 const launcher = require('./worker-launcher.cjs');
+// 2026-05-14 Phase 1 stream-json: Mode A uses a dedicated launcher that
+// owns its own I/O (stdin held open, NDJSON parsed from stdout, raw
+// events → stream_events.jsonl, text-only → tail.log). Mode B continues
+// to use worker-launcher with --print — unaffected.
+const streamLauncher = require('./claude-stream-launcher.cjs');
 const cairnLog = require('./cairn-log.cjs');
 
 const SPAWN_COOLDOWN_MS = 60_000;
@@ -214,7 +219,9 @@ function spawnModeAWorker(input, opts) {
   const existing = _spawnState.get(cooldownKey);
   if (existing) {
     try {
-      const run = launcher.getWorkerRun(existing.run_id, { home: o.home });
+      // Use streamLauncher.getStreamRun (on-disk shape compatible with
+      // worker-launcher's getWorkerRun — both read run.json).
+      const run = streamLauncher.getStreamRun(existing.run_id, { home: o.home });
       if (run && (run.status === 'running' || run.status === 'queued')) {
         return { ok: false, error: 'already_running', run_id: existing.run_id };
       }
@@ -294,13 +301,16 @@ function spawnModeAWorker(input, opts) {
 
   let launchRes;
   try {
-    launchRes = launcher.launchWorker({
-      provider: 'claude-code',
+    // Use the stream-json launcher (Phase 1 2026-05-14). Argv hardcoded
+    // by streamLauncher: --output-format stream-json --input-format
+    // stream-json --verbose --permission-mode bypassPermissions.
+    launchRes = streamLauncher.launchStreamWorker({
       cwd,
       prompt,
       iteration_id: 'mode-a:' + project.id + ':' + (plan && plan.plan_id || 'no-plan'),
       project_id: project.id,
-    }, { home: o.home, env });
+      env,
+    }, { home: o.home });
   } catch (e) {
     cairnLog.error('mode-a-spawner', 'launch_threw', {
       project_id: project.id,
