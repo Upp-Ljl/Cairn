@@ -4227,6 +4227,32 @@ function renderCockpit(state) {
       ? 'Mentor 自动起草计划 + 派单 + 答疑'
       : 'Mentor 给建议，你主动派单';
   }
+  // 2026-05-14 fix: persistent goal row in cockpit state strip so the
+  // user can edit the goal AFTER setting it (the onboarding "Set goal"
+  // button hides itself once a goal exists; this is the always-on
+  // entry point to the full editor including success_criteria).
+  // Also: keep `lastGoal` in sync with cockpit state.goal — otherwise
+  // openGoalEditModal(lastGoal) opens a blank form and saving would
+  // wipe the existing goal's fields. (lastGoal historically tracked
+  // only the legacy goal-card render path.)
+  const goalRow = document.getElementById('cockpit-goal-row');
+  const goalTitleEl = document.getElementById('cockpit-goal-title');
+  if (goalRow && goalTitleEl) {
+    const goalObj = state.goal;
+    const goalTitle = goalObj && typeof goalObj === 'object' && typeof goalObj.title === 'string'
+                    ? goalObj.title
+                    : (typeof goalObj === 'string' ? goalObj : null);
+    if (goalTitle) {
+      goalRow.hidden = false;
+      goalTitleEl.textContent = goalTitle;
+      // Sync lastGoal so the editor opens with all fields pre-filled.
+      if (goalObj && typeof goalObj === 'object') {
+        lastGoal = goalObj;
+      }
+    } else {
+      goalRow.hidden = true;
+    }
+  }
   // MA-2b: Mode A plan widget — visible whenever mode=A (so the user
   // sees diagnostic state, not just successful runs). Three visible
   // sub-states:
@@ -4248,13 +4274,26 @@ function renderCockpit(state) {
       if (!hasCriteria) {
         // (a) — most common "why no reaction" cause. Make it loud.
         planProgressEl.textContent = '⚠ 缺 success_criteria';
+        // Inline ✎ 编辑 goal link inside the warning text. Click handler
+        // wired below via setTimeout so the listener attaches AFTER
+        // innerHTML replaces the prior subtree.
         planStepsEl.innerHTML =
           '<li class="cockpit-mode-a-plan-empty">' +
           'Mode A 计划从 goal 的 <code>success_criteria</code> 派生 — 当前为空，' +
-          '所以没步骤可派。点上方 <strong>✎ 编辑</strong> goal，' +
-          '在 "Success criteria" 一栏填几条可验收的子目标（每行一条），' +
+          '所以没步骤可派。' +
+          '<a href="#" id="cockpit-mode-a-fix-goal-link" class="cockpit-goal-edit-link" style="margin:0 4px;">' +
+          '✎ 编辑 goal' +
+          '</a>' +
+          '，在 "Success criteria" 一栏填几条可验收的子目标（每行一条），' +
           'Save 后 30 秒内 Mentor 会起草计划并自动派单。' +
           '</li>';
+        const fixLink = document.getElementById('cockpit-mode-a-fix-goal-link');
+        if (fixLink) {
+          fixLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (selectedProject) openGoalEditModal(lastGoal);
+          });
+        }
       } else if (plan && Array.isArray(plan.steps) && plan.steps.length > 0) {
         // (b) — happy path.
         const steps = plan.steps;
@@ -4651,6 +4690,17 @@ function setupCockpit() {
   }
 
   // Mode A/B toggle (CEO 2026-05-14). Click → setCockpitSettings({mode}).
+  // Goal edit link in cockpit state strip (2026-05-14 fix). Opens the
+  // full-form editor (title + desired_outcome + success_criteria +
+  // non_goals), unlike onboarding's title-only modal.
+  const goalEditLink = document.getElementById('cockpit-goal-edit-link');
+  if (goalEditLink) {
+    goalEditLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!selectedProject) return;
+      openGoalEditModal(lastGoal);
+    });
+  }
   // Server validates against KNOWN_MODES; render reflects on next poll.
   // Disable buttons during in-flight call to avoid double-toggle races.
   ['cockpit-mode-A', 'cockpit-mode-B'].forEach((id) => {
@@ -4882,13 +4932,16 @@ function setupCockpitOnboarding() {
   const setGoalBtn = document.getElementById('cockpit-onboarding-set-goal');
   if (setGoalBtn) {
     setGoalBtn.addEventListener('click', () => {
-      // Electron disables window.prompt() in renderer by default. Use an
-      // inline modal that the existing #modal-overlay already supports.
       if (!selectedProject) {
         alert('No project selected.');
         return;
       }
-      openGoalModal();
+      // 2026-05-14 fix: was openGoalModal() which only collects title.
+      // That meant first-time goal entry through the cockpit produced a
+      // goal with NO success_criteria → Mode A had 0 steps → "no
+      // reaction". Use the full-form editor instead so users see the
+      // success_criteria + desired_outcome + non_goals fields too.
+      openGoalEditModal(lastGoal);
     });
   }
   const helpLink = document.getElementById('cockpit-onboarding-help');

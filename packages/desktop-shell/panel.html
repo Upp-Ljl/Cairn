@@ -1899,6 +1899,39 @@
     margin-left: auto;
     font-style: italic;
   }
+  /* Goal row in cockpit state strip (2026-05-14 fix). */
+  .cockpit-goal-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+    padding: 4px 8px;
+    background: #1a1a1c;
+    border-left: 3px solid #4a7a2d;
+    border-radius: 3px;
+    font-size: 0.85em;
+  }
+  .cockpit-goal-label {
+    color: #aac;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    font-size: 0.85em;
+  }
+  .cockpit-goal-title {
+    color: #c6ffd6;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cockpit-goal-edit-link {
+    color: #88aaee;
+    cursor: pointer;
+    text-decoration: none;
+    font-size: 0.9em;
+    white-space: nowrap;
+  }
+  .cockpit-goal-edit-link:hover { color: #cce; text-decoration: underline; }
   .cockpit-mode-toggle {
     display: inline-flex;
     border: 1px solid #444;
@@ -3430,6 +3463,19 @@
           </button>
         </div>
         <span class="cockpit-run-mode-hint" id="cockpit-run-mode-hint"></span>
+      </div>
+      <!-- Goal row (2026-05-14 fix): persistent goal-edit entry in
+           cockpit view. Pre-this commit the only way to edit goal in
+           cockpit was the onboarding "Set goal" button — which hid
+           itself once a goal existed, leaving no way back to the
+           full editor. The legacy multi-card view had this; cockpit
+           was missing it. Always visible when there's a goal title;
+           shows ✎ 编辑 link → opens openGoalEditModal (full form
+           with success_criteria / desired_outcome / non_goals). -->
+      <div class="cockpit-goal-row" id="cockpit-goal-row" hidden>
+        <span class="cockpit-goal-label">GOAL</span>
+        <span class="cockpit-goal-title" id="cockpit-goal-title"></span>
+        <a class="cockpit-goal-edit-link" id="cockpit-goal-edit-link" href="#" title="编辑 goal（含 success_criteria）">✎ 编辑</a>
       </div>
       <!-- CAIRN.md ## Whole — Mentor's stable north-star sentence (schema v2, 2026-05-14).
            Hidden when the project has no CAIRN.md or no Whole line. -->
