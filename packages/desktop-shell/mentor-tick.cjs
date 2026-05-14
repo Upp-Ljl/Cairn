@@ -29,6 +29,7 @@
 
 const cairnLog = require('./cairn-log.cjs');
 const modeALoop = require('./mode-a-loop.cjs');
+const modeBSuggester = require('./mode-b-suggester.cjs');
 
 const TICK_INTERVAL_MS = 30 * 1000;
 /** Cap on RUNNING tasks examined per project per tick. Tasks are sorted
@@ -385,6 +386,23 @@ function runOnce(deps) {
           }
           if (typeof deps.onDecision === 'function' && decision && decision.action !== 'no_goal' && decision.action !== 'unchanged' && decision.action !== 'no_project') {
             try { deps.onDecision(project.id, Object.assign({ rule: 'A-mode' }, decision)); } catch (_e) {}
+          }
+        } else if (cockpitSettings && cockpitSettings.mode === 'B') {
+          // ----- Mode B suggestion ranking (MA-3 2026-05-14).
+          // Heuristic-based mentor_todo entries. Writes ranked suggestions
+          // to scratchpad — existing Todolist render path picks them up.
+          const bDecision = modeBSuggester.runOnceForProject({
+            db: entry.db,
+            tables: entry.tables,
+            project,
+            agentIds: hints,
+            nowFn: deps.nowFn,
+          });
+          if (bDecision && bDecision.added > 0) {
+            out.decisions += bDecision.added;
+          }
+          if (typeof deps.onDecision === 'function' && bDecision && bDecision.action === 'ran' && bDecision.added > 0) {
+            try { deps.onDecision(project.id, Object.assign({ rule: 'B-mode' }, bDecision)); } catch (_e) {}
           }
         }
       } catch (e) {
