@@ -17,6 +17,7 @@ import { toolDispatchRequest, toolDispatchConfirm } from './tools/dispatch.js';
 import { toolCreateTask, toolGetTask, toolListTasks, toolStartAttempt, toolCancelTask, toolBlockTask, toolAnswerBlocker, toolResumePacket, toolSubmitForReview } from './tools/task.js';
 import { toolEvaluateOutcome, toolTerminalFailOutcome } from './tools/outcomes.js';
 import { toolSetSessionName } from './tools/session-name.js';
+import { startInboxPusher } from './inbox-pusher.js';
 
 const ws = openWorkspace();
 
@@ -27,7 +28,11 @@ startPresence(ws);
 
 const server = new Server(
   { name: 'cairn-mcp', version: '0.0.1' },
-  { capabilities: { tools: {} } },
+  // 2026-05-14: advertise `logging` capability so the MCP client (CC)
+  // knows we may send `notifications/message`. Without this declaration
+  // some clients ignore unsolicited server notifications. See
+  // inbox-pusher.ts for the actual push loop.
+  { capabilities: { tools: {}, logging: {} } },
 );
 
 const TOOLS = [
@@ -493,3 +498,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 await server.connect(new StdioServerTransport());
+
+// Server-initiated push for agent_inbox (2026-05-14 CEO escalation).
+// Started AFTER server.connect so sendLoggingMessage has a live
+// transport on the very first poll.
+startInboxPusher(server, ws);

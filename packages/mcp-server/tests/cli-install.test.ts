@@ -82,7 +82,7 @@ describe('fresh repo', () => {
     expect(fs.existsSync(skillPath)).toBe(true);
     const skill = fs.readFileSync(skillPath, 'utf8');
     expect(skill).toContain('name: cairn-aware');
-    expect(skill).toContain('cairn-aware-skill-v5');
+    expect(skill).toContain('cairn-aware-skill-v6');
     expect(skill).toContain('agent_inbox/<your-');
     expect(skill).toContain('agent_brief');
     expect(skill).toContain('cairn.task.block');
@@ -293,7 +293,7 @@ describe('cairn-aware skill (Phase 4)', () => {
     const r2 = runInstall(baseOpts());
     expect(r2.cairnAwareSkillAction).toBe('replaced');
     const skill = fs.readFileSync(skillPath, 'utf8');
-    expect(skill).toContain('cairn-aware-skill-v5');
+    expect(skill).toContain('cairn-aware-skill-v6');
   });
 
   it('preserves a non-cairn skill of the same name (no overwrite of foreign content)', () => {
@@ -327,7 +327,7 @@ describe('cairn-aware skill (Phase 4)', () => {
     expect(result.ok).toBe(true);
     expect(result.cairnAwareSkillAction).toBe('replaced');
     const upgraded = fs.readFileSync(skillPath, 'utf8');
-    expect(upgraded).toContain('cairn-aware-skill-v5');
+    expect(upgraded).toContain('cairn-aware-skill-v6');
     expect(upgraded).toContain('session_timeline/');
     expect(upgraded).toContain('agent_proposal/');
     expect(upgraded).not.toContain('old v2 content');
@@ -347,7 +347,7 @@ describe('cairn-aware skill (Phase 4)', () => {
     expect(result.ok).toBe(true);
     expect(result.cairnAwareSkillAction).toBe('replaced');
     const upgraded = fs.readFileSync(skillPath, 'utf8');
-    expect(upgraded).toContain('cairn-aware-skill-v5');
+    expect(upgraded).toContain('cairn-aware-skill-v6');
     expect(upgraded).toContain('agent_proposal/');
     expect(upgraded).toContain('dispatch_requests');
     expect(upgraded).not.toContain('old v3 content');

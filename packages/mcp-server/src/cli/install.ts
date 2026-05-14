@@ -71,7 +71,13 @@ const HOOK_MARKER = '# cairn-pre-commit-v1';
 // v5 (MA-2d 2026-05-14): adds Mode A auto-answer polling — agent must re-read
 //                        OPEN blockers it raised because Mode A auto-resolves
 //                        them via the blockers table (status OPEN → ANSWERED).
-const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v5 -->';
+// v6 (2026-05-14 CEO escalation): adds MCP notifications/message push channel.
+//                        cairn-mcp server now actively pushes inbox events
+//                        instead of relying on CC to poll between turns —
+//                        fixes the "Cairn writes inbox / idle CC never sees
+//                        it" gap. Skill teaches CC how to handle the new
+//                        notification shape.
+const CAIRN_AWARE_SKILL_MARKER = '<!-- cairn-aware-skill-v6 -->';
 
 // Claude Code project-level skill that makes CC actually Cairn-aware
 // without manual user setup. Loaded by `cairn install` into
@@ -118,6 +124,46 @@ sessions productive.
 
 Your \`cairn-session-agent-id\` is set in the env var \`CAIRN_SESSION_AGENT_ID\`
 by the mcp-server process; you can also obtain it via \`cairn.process.status\`.
+
+## Cairn push notifications (MCP \`notifications/message\`)
+
+The cairn-mcp server pushes \`notifications/message\` over the same stdio
+pipe whenever a new \`agent_inbox/<your-agent-id>/<ulid>\` entry appears.
+The notification body is JSON-shaped:
+
+\`\`\`json
+{
+  "level": "info",
+  "logger": "cairn",
+  "data": {
+    "type": "cairn_steer",
+    "inbox_key": "agent_inbox/<your-agent-id>/<ulid>",
+    "agent_id": "<your-agent-id>",
+    "ts": 1778739000000,
+    "preview": { /* full value_json of the inbox entry */ }
+  }
+}
+\`\`\`
+
+When you receive one (whether during a tool call's response window or
+as an unsolicited notification between turns):
+
+1. Treat it as **higher priority** than whatever you were idling on —
+   Mentor or another agent has asked you to do something.
+2. Call \`cairn.scratchpad.read({ key: <inbox_key> })\` to get the full
+   message (the \`preview\` field may be truncated by future client
+   policy; the scratchpad row is authoritative).
+3. Act on the message. For Mode A dispatches the message starts with
+   \`[Mode A 自动派单/<dispatch_id>] <step label>\` — treat the label
+   as your next work item.
+4. After handling, call \`cairn.scratchpad.delete({ key: <inbox_key> })\`
+   to mark consumed.
+
+This replaces the previous "poll between turns" pattern — you no longer
+need to scan the inbox on every turn, since the server will tell you
+when a new entry exists. Polling on session start (step 3 above) is
+still recommended to catch any entry that arrived before the push
+channel was live.
 
 ## Before raising a blocker
 
@@ -592,8 +638,9 @@ export function runInstall(opts: InstallOptions): InstallResult {
     if (fs.existsSync(skillPath)) {
       const cur = fs.readFileSync(skillPath, 'utf8');
       // Accept the current marker AND legacy v1/v2/v3 markers so existing
-      // installs are upgraded to v5 rather than left as-is.
+      // installs are upgraded to v6 rather than left as-is.
       const isOurSkill = cur.includes(CAIRN_AWARE_SKILL_MARKER) ||
+                         cur.includes('<!-- cairn-aware-skill-v5 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v4 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v3 -->') ||
                          cur.includes('<!-- cairn-aware-skill-v2 -->') ||
