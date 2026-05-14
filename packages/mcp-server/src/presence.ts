@@ -1,5 +1,36 @@
+import { basename, join } from 'node:path';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { Workspace } from './workspace.js';
 import { registerProcess, heartbeat } from '../../daemon/dist/storage/repositories/processes.js';
+import { putScratch, getScratch } from '../../daemon/dist/storage/repositories/scratchpad.js';
+import { sessionNameKey } from './tools/session-name.js';
+
+/**
+ * Minimal mcp-server-side mirror of desktop-shell/cairn-log.cjs.
+ * Writes to the same `~/.cairn/logs/cairn-<date>.jsonl` so the panel
+ * "View log" surface can read events from both processes in one feed.
+ * Fire-and-forget; never throws.
+ */
+function logEvent(component: string, event: string, details: Record<string, unknown>): void {
+  try {
+    const dir = join(homedir(), '.cairn', 'logs');
+    mkdirSync(dir, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10);
+    const file = join(dir, `cairn-${day}.jsonl`);
+    const entry = {
+      ts: Date.now(),
+      ts_iso: new Date().toISOString(),
+      level: 'info',
+      component,
+      event,
+      ...details,
+    };
+    appendFileSync(file, JSON.stringify(entry) + '\n', 'utf8');
+  } catch (_e) {
+    /* never block presence */
+  }
+}
 
 /**
  * Build the default `capabilities` tag set for a session's presence row.
@@ -153,6 +184,44 @@ export function startPresence(
     // panel will simply not see this session, but tools still work.
     // eslint-disable-next-line no-console
     console.error('[presence] boot register failed:', err);
+  }
+
+  // Mode A/B reframe (CEO 2026-05-14): "session 尽量在初期就有个比较
+  // 清晰的命名，不要直接用用户不友好的 uuid 之类的". Write a default
+  // session name derived from the cwd basename + HH:MM iff none exists
+  // yet. Agents can override via `cairn.session.name` (set_by:'agent').
+  // We tag set_by:'auto' so override paths know they can clobber freely.
+  try {
+    const existing = getScratch(ws.db, sessionNameKey(ws.agentId));
+    const hasAgentName =
+      existing &&
+      typeof existing === 'object' &&
+      typeof (existing as { name?: unknown }).name === 'string' &&
+      (existing as { name?: unknown }).name !== '';
+    if (!hasAgentName) {
+      const project = basename(ws.gitRoot || ws.cwd) || 'cairn';
+      // toISOString() is spec-guaranteed UTC; locale-stable across hosts.
+      const hhmm = new Date().toISOString().slice(11, 16);
+      const name = `${project} · ${hhmm}`;
+      putScratch(ws.db, ws.blobRoot, {
+        key: sessionNameKey(ws.agentId),
+        value: {
+          name,
+          set_at: Date.now(),
+          set_by: 'auto' as const,
+        },
+      });
+      logEvent('session/naming', 'auto_named', {
+        agent_id: ws.agentId,
+        name,
+        cwd: ws.cwd,
+        git_root: ws.gitRoot,
+      });
+    }
+  } catch (err) {
+    // Auto-name is best-effort. Panel falls back to hex agent_id.
+    // eslint-disable-next-line no-console
+    console.error('[presence] auto-name failed:', err);
   }
 
   let stopped = false;

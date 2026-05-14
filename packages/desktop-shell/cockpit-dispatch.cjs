@@ -18,6 +18,7 @@
  */
 
 const crypto = require('node:crypto');
+const cairnLog = require('./cairn-log.cjs');
 
 // ---------------------------------------------------------------------------
 // Inline ULID generator (Crockford base-32, no external deps)
@@ -159,8 +160,20 @@ function dispatchTodo(db, tables, input) {
       created_at: now,
     });
   } catch (e) {
+    cairnLog.error('dispatch', 'dispatch_insert_failed', {
+      project_id: input.project_id,
+      target_agent_id: input.target_agent_id,
+      message: (e && e.message) || String(e),
+    });
     return { ok: false, error: 'dispatch_insert_failed: ' + (e && e.message ? e.message : String(e)) };
   }
+  cairnLog.info('dispatch', 'dispatch_created', {
+    project_id: input.project_id,
+    dispatch_id: dispatchId,
+    todo_id: input.todo_id,
+    target_agent_id: input.target_agent_id,
+    source: input.source,
+  });
 
   // 5. Mark the scratchpad todo entry as dispatched.
   //    The todo is stored at key = todo_id (e.g. "agent_proposal/<aid>/<ulid>").

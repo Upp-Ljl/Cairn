@@ -48,6 +48,7 @@ function canonicalizeToGitToplevel(dir) {
 
 const queries = require('./queries.cjs');
 const registry = require('./registry.cjs');
+const cairnLog = require('./cairn-log.cjs');
 const projectQueries = require('./project-queries.cjs');
 const cockpitState = require('./cockpit-state.cjs');
 const cockpitSteer = require('./cockpit-steer.cjs');
@@ -864,6 +865,48 @@ function foldCodexIntoSummary(summary, codexRows) {
   }
 }
 
+// Wrap ipcMain.handle so every handler thrown error gets logged with the
+// channel name. Otherwise IPC failures vanish into the renderer console
+// only, which is exactly the "panel still wrong, no idea why" mode of
+// failure the user kept hitting on 2026-05-13/14. Returns are unchanged
+// (electron auto-unwraps promise rejection into renderer error).
+{
+  const _origHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = function instrumentedHandle(channel, fn) {
+    return _origHandle(channel, async (...args) => {
+      try {
+        return await fn(...args);
+      } catch (err) {
+        cairnLog.error('ipc', 'ipc_failed', {
+          channel,
+          message: (err && err.message) || String(err),
+          stack: err && err.stack ? String(err.stack).split('\n').slice(0, 5).join(' | ') : undefined,
+        });
+        throw err;
+      }
+    });
+  };
+}
+
+// Renderer-side log relay. Renderer is untrusted-ish — sanitize before
+// passing to disk: cap component/event to 64 chars, details must be a
+// plain object (else dropped silently).
+ipcMain.on('cairn:log', (_e, component, event, details, level) => {
+  const c = typeof component === 'string' ? component.slice(0, 64) : 'renderer';
+  const ev = typeof event === 'string' ? event.slice(0, 64) : 'unspecified';
+  let d = (details && typeof details === 'object' && !Array.isArray(details)) ? details : {};
+  // Byte-cap renderer details so a hostile / runaway renderer can't
+  // append megabyte-per-event entries to the log. 4KB is plenty for
+  // structured event payload (view_changed etc. — sub-100 bytes
+  // typical).
+  try {
+    const s = JSON.stringify(d);
+    if (s && s.length > 4096) d = { _truncated: true, len: s.length };
+  } catch (_e) { d = { _serialize_failed: true }; }
+  const lv = level === 'warn' || level === 'error' ? level : 'info';
+  cairnLog.log(c, ev, d, lv);
+});
+
 ipcMain.handle('get-projects-list', () => getProjectsList());
 
 // ---------------------------------------------------------------------------
@@ -901,9 +944,10 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   // Backward-compat: if goal is somehow a raw string (legacy callers /
   // pre-Goal-Mode-Lite registries), accept it as goalText directly.
   const goal = registry.getProjectGoal(reg, projectId);
-  const goalText = goal && typeof goal === 'object' && typeof goal.title === 'string'
-                 ? goal.title
-                 : (typeof goal === 'string' ? goal : null);
+  const goalText = mentorPolicy.extractGoalTitle(goal, {
+    component: 'main.cockpit-state.goalText',
+    project_id: projectId,
+  });
   // Inject leader from cockpit settings (Phase 6) so cockpit-state can
   // surface it in the State Strip + use it for the "talk to leader" path.
   const settings = registry.getCockpitSettings(reg, projectId);
