@@ -1677,10 +1677,34 @@ function _triggerScoutForProject(projectId, opts) {
     reg = phaseRes.reg;
     try { registry.saveRegistry(reg); } catch (_e) {}
 
-    // Get a writable DB for scout's session_id persistence + plan write.
+    // Get a writable DB for scout's plan write. BUG fix 2026-05-14:
+    // ensureWritableDbHandle takes a PATH string, not a project object.
+    // Passing `project` (object) used to coerce to "[object Object]" in
+    // fs.existsSync → null entry → null db → modeALoop.writePlan(null)
+    // is a silent no-op → scout's plan never landed in scratchpad.
+    // Symptom CEO hit: clicked Re-plan, scout actually drafted a clean
+    // 7-step plan via MiniMax (verified in log + ~/.cairn/worker-runs/
+    // scout-*/response.txt), but `mode_a_plan/<pid>` stayed pinned to
+    // the stale deterministic 3-step plan. Sentinel db_path normalize
+    // mirrors what mentor-tick.cjs does for the same project shape.
+    let dbPath = project.db_path;
+    if (!dbPath || dbPath === '/dev/null' || dbPath === '(unknown)') {
+      dbPath = registry.DEFAULT_DB_PATH;
+    }
     let entry = null;
-    try { entry = ensureWritableDbHandle(project); } catch (_e) {}
+    try { entry = ensureWritableDbHandle(dbPath); } catch (_e) {}
     const dbHandle = entry && entry.db ? entry.db : null;
+    if (!dbHandle) {
+      // Loud failure beats silent no-op: if scout finishes successfully
+      // but can't persist, the panel stays at phase='planning' forever
+      // unless we surface the failure here.
+      try {
+        require('./cairn-log.cjs').error('mode-a-scout', 'db_handle_missing', {
+          project_id: projectId,
+          db_path: dbPath,
+        });
+      } catch (_e) {}
+    }
 
     // Fire-and-forget. Errors are logged; promise can never reject
     // because runScoutThenWritePlan resolves with { ok: false }.
