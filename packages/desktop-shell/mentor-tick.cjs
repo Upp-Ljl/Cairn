@@ -387,6 +387,19 @@ function runOnce(deps) {
           // we force a spawn regardless of how many ACTIVE agents
           // claim to be alive — the idle ones aren't actually
           // working, so we need a fresh worker process.
+          // 2026-05-14: bind orphan tasks. Some spawn paths (notably
+          // mode-a-spawner via worker-launcher) leave step.task_id
+          // unbound — the spawned CC creates a task but doesn't write
+          // back to dispatch_requests.task_id. bindOrphanTask scans
+          // for matching tasks by intent text and binds them.
+          try {
+            modeALoop.bindOrphanTask(entry.db, project, hints, { nowFn: deps.nowFn });
+          } catch (e) {
+            cairnLog.error('mode-a-loop', 'bind_orphan_threw', {
+              project_id: project.id,
+              message: (e && e.message) || String(e),
+            });
+          }
           let forceSpawn = false;
           try {
             const staleRes = modeALoop.detectStaleAndReset(entry.db, project, { nowFn: deps.nowFn });

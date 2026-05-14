@@ -394,44 +394,60 @@ function reconcileInbox(db, project, opts) {
 }
 
 /**
- * Check whether a DISPATCHED step's downstream task has reached a
- * terminal outcome. Returns:
+ * Check whether the current DISPATCHED step's downstream task has
+ * reached a terminal outcome. Returns:
  *   { action: 'advanced', step_idx, to_idx, task_id }
  *   { action: 'failed',   step_idx, task_id }
  *   { action: 'no_change' }
  *
- * Linkage: step.dispatch_id → dispatch_requests.task_id →
- * outcomes(task_id) with status='PASS' (advance) or 'FAILED' (fail).
- * Outcomes 'PENDING' / null → no_change.
+ * Linkage (in priority order, 2026-05-14 fix):
+ *   1. step.task_id (set by bindOrphanTask or markStepDispatched)
+ *   2. step.dispatch_id → dispatch_requests.task_id (original path)
+ *
+ * The fallback to step.task_id exists because some dispatch shapes
+ * leave dispatch_requests.task_id unset (e.g. when an agent creates
+ * a task without explicitly linking it to a dispatch row, which is
+ * the spawned-CC case — CC starts via boot prompt + creates a task,
+ * but never writes back to dispatch_requests.task_id).
  */
 function advanceOnComplete(db, projectId, opts) {
   const plan = getPlan(db, projectId);
   if (!plan || !Array.isArray(plan.steps)) return { action: 'no_change' };
   const idx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
   const step = plan.steps[idx];
-  if (!step || step.state !== 'DISPATCHED' || !step.dispatch_id) {
+  if (!step || step.state !== 'DISPATCHED') {
     return { action: 'no_change' };
   }
 
-  let dispatchRow = null;
-  try {
-    dispatchRow = db.prepare('SELECT task_id FROM dispatch_requests WHERE id = ?').get(step.dispatch_id);
-  } catch (_e) {
-    return { action: 'no_change' };
+  // Path 1: direct task_id linkage on the step.
+  let taskId = step.task_id || null;
+  // Path 2: fall back to dispatch_requests.task_id via step.dispatch_id.
+  if (!taskId && step.dispatch_id) {
+    try {
+      const dispatchRow = db.prepare('SELECT task_id FROM dispatch_requests WHERE id = ?').get(step.dispatch_id);
+      if (dispatchRow && dispatchRow.task_id) taskId = dispatchRow.task_id;
+    } catch (_e) { /* fall through */ }
   }
-  if (!dispatchRow || !dispatchRow.task_id) {
+  if (!taskId) {
     return { action: 'no_change' };
   }
 
   let outcomeRow = null;
   try {
-    outcomeRow = db.prepare('SELECT status FROM outcomes WHERE task_id = ?').get(dispatchRow.task_id);
+    outcomeRow = db.prepare('SELECT status FROM outcomes WHERE task_id = ?').get(taskId);
   } catch (_e) {
     return { action: 'no_change' };
   }
   if (!outcomeRow || !outcomeRow.status) {
     return { action: 'no_change' };
   }
+  // Rebind the resolved task_id onto the step so subsequent ticks
+  // skip the lookup. Mutating-then-writePlan is cheap.
+  if (!step.task_id) {
+    step.task_id = taskId;
+    try { writePlan(db, projectId, plan, Date.now()); } catch (_e) {}
+  }
+  const dispatchRow = { task_id: taskId };
 
   const now = (opts && opts.nowFn ? opts.nowFn() : Date.now());
   if (outcomeRow.status === 'PASS') {
@@ -542,7 +558,11 @@ function detectStaleAndReset(db, project, opts) {
     const step = plan.steps[i];
     if (!step || step.state !== 'DISPATCHED') continue;
     if (!step.dispatched_at || (now - step.dispatched_at) < staleMs) continue;
-    // Check the dispatch_requests row for task_id linkage.
+    // Direct task_id binding (set by bindOrphanTask or markStepDispatched)
+    // → an agent IS picking up the work, even if dispatch_requests row
+    // never got linked. Not stale.
+    if (step.task_id) continue;
+    // Otherwise look at the dispatch_requests row for task_id linkage.
     let dr = null;
     if (step.dispatch_id) {
       try {
@@ -550,6 +570,9 @@ function detectStaleAndReset(db, project, opts) {
       } catch (_e) { /* skip */ }
     }
     if (dr && dr.task_id) continue; // agent picked up; not stale
+    // Capture stale_age BEFORE we delete dispatched_at (subagent审查
+    // fix: previously logged 0 because the delete happened first).
+    const staleAgeMs = now - (step.dispatched_at || now);
     // Reset.
     const retryCount = (step.retry_count || 0) + 1;
     step.state = 'PENDING';
@@ -568,7 +591,7 @@ function detectStaleAndReset(db, project, opts) {
       plan_id: plan.plan_id,
       step_idx: i,
       retry_count: retryCount,
-      stale_age_ms: now - (step.dispatched_at || now),
+      stale_age_ms: staleAgeMs,
     });
   }
   if (dirty) {
@@ -576,6 +599,84 @@ function detectStaleAndReset(db, project, opts) {
       plan.updated_at = now;
       writePlan(db, project.id, plan, now);
     } catch (_e) { /* logged above */ }
+  }
+  return out;
+}
+
+/**
+ * Bind an orphan task to a plan step. "Orphan" = a task created by an
+ * agent in this project whose intent matches a step's label, but no
+ * plan step's task_id points at it yet AND step.dispatch_id (if any)
+ * has no task_id link in dispatch_requests.
+ *
+ * Why this exists: when Cairn spawns a CC via mode-a-spawner, the
+ * spawn writes a dispatch_requests row and the spawned CC creates a
+ * task. The boot prompt instructs CC to call task.create but doesn't
+ * have CC update dispatch_requests.task_id (CC doesn't know the
+ * dispatch_id). So the chain step.dispatch_id → dispatch.task_id →
+ * outcomes is broken at the dispatch.task_id hop.
+ *
+ * bindOrphanTask closes the gap by matching on intent text: if a
+ * RUNNING/WAITING_REVIEW/DONE task's intent matches the current
+ * step's label (substring either direction, ≥ 10 char minimum), bind
+ * task.task_id directly onto step.task_id. advanceOnComplete then
+ * uses step.task_id directly (no dispatch lookup needed).
+ *
+ * Only binds the CURRENT step (plan.current_idx). Idempotent if
+ * already bound. Pure-ish: reads tasks table, writes scratchpad plan.
+ */
+function bindOrphanTask(db, project, hints, opts) {
+  const out = { bound: 0 };
+  if (!db || !project || !Array.isArray(hints) || hints.length === 0) return out;
+  const plan = getPlan(db, project.id);
+  if (!plan || !Array.isArray(plan.steps)) return out;
+  const idx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
+  const step = plan.steps[idx];
+  if (!step || step.task_id) return out; // already bound
+
+  const stepLabel = (step.label || '').toLowerCase().trim();
+  if (stepLabel.length < 10) return out; // too short to match reliably
+
+  const placeholders = '(' + hints.map(() => '?').join(',') + ')';
+  let candidates = [];
+  try {
+    candidates = db.prepare(
+      `SELECT task_id, intent, state FROM tasks
+       WHERE created_by_agent_id IN ${placeholders}
+         AND state IN ('RUNNING','WAITING_REVIEW','DONE')
+       ORDER BY created_at DESC
+       LIMIT 30`,
+    ).all(...hints);
+  } catch (_e) { return out; }
+
+  // Tasks already bound to OTHER plan steps — skip them.
+  const boundTaskIds = new Set(plan.steps.filter(s => s.task_id).map(s => s.task_id));
+
+  for (const c of candidates) {
+    if (!c || !c.task_id || boundTaskIds.has(c.task_id)) continue;
+    const intentLower = (c.intent || '').toLowerCase().trim();
+    if (!intentLower) continue;
+    // Match: ≥ 10-char prefix or full substring in either direction.
+    const matched =
+      intentLower.includes(stepLabel.slice(0, Math.min(stepLabel.length, 20))) ||
+      stepLabel.includes(intentLower.slice(0, Math.min(intentLower.length, 20)));
+    if (!matched) continue;
+    step.task_id = c.task_id;
+    const now = (opts && opts.nowFn ? opts.nowFn() : Date.now());
+    plan.updated_at = now;
+    try { writePlan(db, project.id, plan, now); } catch (_e) { /* logged elsewhere */ }
+    cairnLog.info('mode-a-loop', 'orphan_task_bound', {
+      project_id: project.id,
+      plan_id: plan.plan_id,
+      step_idx: idx,
+      task_id: c.task_id,
+      task_state: c.state,
+      intent_preview: (c.intent || '').slice(0, 60),
+    });
+    out.bound = 1;
+    out.task_id = c.task_id;
+    out.step_idx = idx;
+    return out;
   }
   return out;
 }
@@ -592,5 +693,6 @@ module.exports = {
   advanceOnComplete,
   reconcileInbox,
   detectStaleAndReset,
+  bindOrphanTask,
   runOnceForProject,
 };
