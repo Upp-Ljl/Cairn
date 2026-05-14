@@ -301,3 +301,10 @@ Read-only（DB 只读模式打开，绝不写）。挨个 ✓/✗ 检查 8 个 g
 - **desktop-shell 真实列名**：`tasks.task_id`（不是 `id`） / `blockers.raised_at`（不是 `created_at`） / `conflicts.id` / `paths_json` / `dispatch_requests.id`，详 `packages/desktop-shell/SCHEMA_NOTES.md`。任何 panel 查询写错列名直接 schema 报错。
 - **desktop-shell stack frozen**：Electron 32 + 原生 HTML/CSS/JS + better-sqlite3，**不引** React / Vue / Svelte / Tailwind / Vite / TypeScript（subagent verdict 2026-05-08）。
 - **不再做版本路线（v0.2 / v0.3）**：PRODUCT.md v3 §12 D10 锁定，路线只有 "Product MVP（当前）" 和 "Later（不绑时间）"。新 feature 评估只问"在 MVP 里 / 不在 MVP 里"，不再切版本号。
+- **Mode A stream-json launcher**（Phase 1+2+3，2026-05-14）：Mode A 用 `claude --output-format stream-json --input-format stream-json --verbose --permission-mode bypassPermissions --mcp-config <tmp> --strict-mcp-config [--resume <id>]` 替换老的 `--print`。
+  - `packages/desktop-shell/claude-stream-launcher.cjs` — 双向 stdio；stdin 一直开；stdout NDJSON 实时解析 → `~/.cairn/worker-runs/<run_id>/stream_events.jsonl`（raw）+ `tail.log`（仅 assistant text）；10 分钟 idle watchdog；session_id 从 result event 抽出。
+  - `packages/desktop-shell/claude-mcp-config.cjs`（Phase 3）— 每次 spawn 都重新构造 `os.tmpdir()/cairn-mcp-<runId>.json`：读 project `.mcp.json` → merge → canonical cairn-wedge 覆盖（override-on-conflict）→ 写出 → child exit 时 cleanup。
+  - `packages/desktop-shell/mode-a-session-store.cjs`（Phase 2）— 持久化 `(project_id, plan_id) → session_id`，scratchpad key `mode_a_session/<project_id>/<plan_id>`。下一步 plan 调用 `--resume <id>` 续接 CC context。Plan supersession 由 key 天然隔离。
+  - PRODUCT.md §12 D9.4 锁：Mode A spawn 用 `bypassPermissions` 仅限 managed project。Mode B 不受影响（继续走 `worker-launcher.cjs` `--print` 单 turn）。
+  - Smoke：`scripts/smoke-stream-launcher.mjs`（62 断言）/ `scripts/smoke-mode-a-session-store.mjs`（39）/ `scripts/smoke-mode-a-spawn-resume.mjs`（28，integration with fake claude binary）。
+- **better-sqlite3 NODE_MODULE_VERSION 坑**：desktop-shell 的 better-sqlite3 是 Electron-rebuild（128），Node 24 是 137。需要 `Database` 的 smoke 直接用 `packages/daemon/node_modules/better-sqlite3`（已为 Node 24 compile）。`smoke-mode-a-session-store.mjs` / `smoke-mode-a-spawn-resume.mjs` 走的就是这条路。修这个跟 panel 起不来是 trade-off，**不要主动 rebuild**。

@@ -25,17 +25,26 @@
  * with mentor-tick LLM helpers), stream_events.jsonl (raw events for
  * panel introspection), run.json status writes, watchdog timer.
  *
- * Phase 1 scope (this commit): basic streaming + NDJSON parse + file
- * writes. Phase 2 (next): --resume session_id thread-through. Phase 3:
- * --mcp-config temp file.
+ * Phase 1 (2026-05-14 d51349c): basic streaming + NDJSON parse + file writes.
+ * Phase 3 (this commit): per-spawn --mcp-config temp file. Reads project
+ *   `.mcp.json`, overrides with canonical cairn-wedge entry, writes to
+ *   `os.tmpdir()/cairn-mcp-<runId>.json`. Spawn argv carries
+ *   `--mcp-config <path> --strict-mcp-config`. Temp file cleaned up
+ *   on child exit. This unblocks Phase 2 (resume across plan steps
+ *   needs stable MCP attachment).
+ * Phase 2 (this commit): --resume <sessionId> argv thread-through.
+ *   Caller passes `input.resumeSessionId` if continuing a prior run;
+ *   stream-launcher captures `session_id` from `result` events (already
+ *   in meta.session_id from Phase 1) — caller (mode-a-spawner) persists
+ *   it to scratchpad on its side.
  *
  * Public API:
  *   launchStreamWorker(input, opts) → { ok, run_id, run } | { ok:false, error }
  *
  * Input:
- *   { cwd, prompt, project_id, iteration_id, env? }
+ *   { cwd, prompt, project_id, iteration_id, env?, resumeSessionId? }
  * Opts:
- *   { home?, onLine?, onEvent?, idleTimeoutMs? }
+ *   { home?, onLine?, onEvent?, idleTimeoutMs?, mcpConfigTmpDir? }
  */
 
 const fs = require('node:fs');
@@ -45,6 +54,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { createNdjsonStream } = require('./ndjson-stream.cjs');
 const cairnLog = require('./cairn-log.cjs');
+const mcpConfigBuilder = require('./claude-mcp-config.cjs');
 
 const RUN_DIR_NAME = 'worker-runs';
 const MAX_TAIL_BYTES = 128 * 1024; // 128 KB — matches worker-launcher
@@ -227,12 +237,42 @@ function launchStreamWorker(input, opts) {
     return { ok: false, error: 'prompt_write_failed' };
   }
 
+  // Phase 3: build per-spawn MCP config file. Read project .mcp.json,
+  // override with canonical cairn-wedge entry, write to tmp. Failure
+  // here is fatal — we want a loud failure rather than a CC spawn that
+  // can't talk to cairn-wedge.
+  const mcpRes = mcpConfigBuilder.buildMcpConfigFile({
+    projectRoot: input.cwd,
+    runId,
+    tmpDir: o.mcpConfigTmpDir,
+  });
+  if (!mcpRes.ok) {
+    cairnLog.error('claude-stream-launcher', 'mcp_config_failed', {
+      run_id: runId,
+      error: mcpRes.error,
+    });
+    return { ok: false, error: 'mcp_config_failed', detail: mcpRes.error };
+  }
+
   const argv = [
     '--output-format', 'stream-json',
     '--input-format', 'stream-json',
     '--verbose',
     '--permission-mode', 'bypassPermissions',
+    '--mcp-config', mcpRes.tempPath,
+    '--strict-mcp-config',
   ];
+
+  // Phase 2: --resume <sessionId> if caller is continuing a prior run.
+  // Validate non-empty string — silently dropping a bad value would
+  // turn a resume into a fresh spawn and break the state machine.
+  if (input.resumeSessionId != null) {
+    if (typeof input.resumeSessionId !== 'string' || !input.resumeSessionId.trim()) {
+      mcpRes.cleanup();
+      return { ok: false, error: 'resumeSessionId_must_be_nonempty_string' };
+    }
+    argv.push('--resume', input.resumeSessionId);
+  }
 
   // Per CLAUDE.md push section: spawn .cmd via cmd.exe on Windows.
   let exec = claudeExe;
@@ -255,7 +295,10 @@ function launchStreamWorker(input, opts) {
     pid: null,
     resolved_exe: claudeExe,
     argv,
-    session_id: null,        // Phase 2 will populate from result events.
+    session_id: null,                            // populated from result event
+    resume_session_id: input.resumeSessionId || null, // what we asked CC to resume
+    mcp_config_path: mcpRes.tempPath,
+    mcp_server_count: mcpRes.serverCount,
     last_event_at: null,
     event_count: 0,
   };
@@ -275,6 +318,7 @@ function launchStreamWorker(input, opts) {
     meta.ended_at = Date.now();
     meta.error = 'spawn_threw: ' + ((e && e.message) || String(e));
     writeRunMeta(runId, meta, home);
+    mcpRes.cleanup();
     return { ok: false, error: 'spawn_threw', run_id: runId };
   }
 
@@ -283,6 +327,7 @@ function launchStreamWorker(input, opts) {
     meta.ended_at = Date.now();
     meta.error = 'no_pid';
     writeRunMeta(runId, meta, home);
+    mcpRes.cleanup();
     return { ok: false, error: 'no_pid', run_id: runId };
   }
 
@@ -387,6 +432,10 @@ function launchStreamWorker(input, opts) {
     m.ended_at = Date.now();
     m.error = 'spawn_error: ' + ((err && err.message) || String(err));
     writeRunMeta(runId, m, home);
+    // Defense-in-depth: 'error' usually precedes 'exit' so the exit
+    // handler covers cleanup, but if an OS-level error skips 'exit'
+    // the temp mcp-config file would leak until tmp GC. Idempotent.
+    try { mcpRes.cleanup(); } catch (_e) {}
     cairnLog.error('claude-stream-launcher', 'spawn_error', {
       run_id: runId,
       message: (err && err.message) || String(err),
@@ -395,6 +444,9 @@ function launchStreamWorker(input, opts) {
 
   child.on('exit', (code, signal) => {
     if (watchdog) clearTimeout(watchdog);
+    // Phase 3: drop the temp MCP config file. Safe to call even if it's
+    // already gone (cleanup() swallows ENOENT).
+    try { mcpRes.cleanup(); } catch (_e) {}
     // Source of truth for run-state-during-life is the in-memory `meta`
     // (event_count, last_event_at, session_id, result_subtype etc.
     // are mutated there as events flow). The disk-resident run.json
