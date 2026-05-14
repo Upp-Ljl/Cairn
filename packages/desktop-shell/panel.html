@@ -1873,12 +1873,31 @@
     border-top: 2px solid #ff5555;
   }
   .cockpit-mentor-module.active .cockpit-section-title { color: #ff7070; }
-  /* Mode A/B header row + toggle pills (CEO 2026-05-14). */
-  .cockpit-mentor-header-row {
+  /* Project-level run mode row (relocated from Mentor module 2026-05-14
+     — top of the state strip, alongside Whole / Mentor saved / status). */
+  .cockpit-run-mode {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    background: #1a1a1c;
+    border-left: 3px solid #4a2d20;
+    border-radius: 3px;
+    font-size: 0.82em;
+  }
+  .cockpit-run-mode-label {
+    color: #aac;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    font-size: 0.85em;
+  }
+  .cockpit-run-mode-hint {
+    color: #888;
+    font-size: 0.9em;
+    margin-left: auto;
+    font-style: italic;
   }
   .cockpit-mode-toggle {
     display: inline-flex;
@@ -1891,11 +1910,12 @@
     background: #222;
     color: #aaa;
     border: 0;
-    padding: 2px 10px;
+    padding: 3px 12px;
     cursor: pointer;
     font-weight: 600;
-    line-height: 1.6;
+    line-height: 1.5;
     font-family: inherit;
+    white-space: nowrap;
   }
   .cockpit-mode-toggle .mode-pill + .mode-pill { border-left: 1px solid #444; }
   .cockpit-mode-toggle .mode-pill:hover { background: #2a2a2e; color: #ddd; }
@@ -3390,6 +3410,27 @@
 
     <!-- Module 1: STATE STRIP -->
     <div class="cockpit-state" id="cockpit-state">
+      <!-- Project run mode (CEO 2026-05-14 reframe).
+           Toggle relocated here from the Mentor module header — the
+           previous placement competed with the "Mode B · Lanes" section
+           below for the user's attention and made "Mode" ambiguous.
+           This is project-LEVEL state (how the whole project runs),
+           not a Mentor-local setting, so it lives at the top of the
+           project state strip. -->
+      <div class="cockpit-run-mode" id="cockpit-run-mode">
+        <span class="cockpit-run-mode-label">运行模式</span>
+        <div class="cockpit-mode-toggle" id="cockpit-mode-toggle" role="group" aria-label="项目运行模式 A / B">
+          <button type="button" class="mode-pill" data-mode="A" id="cockpit-mode-A"
+                  title="A · Mentor 主驱动 — Cairn 起草计划 + 自动答疑 + 推进任务（小白模式 / 长程任务）">
+            A · 自动驾驶
+          </button>
+          <button type="button" class="mode-pill active" data-mode="B" id="cockpit-mode-B"
+                  title="B · 用户主驱动 — Mentor 给排序建议，你主动选择委派（默认）">
+            B · 手动驾驶
+          </button>
+        </div>
+        <span class="cockpit-run-mode-hint" id="cockpit-run-mode-hint"></span>
+      </div>
       <!-- CAIRN.md ## Whole — Mentor's stable north-star sentence (schema v2, 2026-05-14).
            Hidden when the project has no CAIRN.md or no Whole line. -->
       <div class="cockpit-whole" id="cockpit-whole" hidden>
@@ -3434,20 +3475,10 @@
          bottom. Status header (always visible) + escalations + Ack.
          CEO grill约定 3+7+11: Mentor 上移到 M2 位置. -->
     <div class="cockpit-mentor-module" id="cockpit-mentor-module">
-      <div class="cockpit-mentor-header-row">
-        <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
-        <!-- Mode A/B toggle (CEO 2026-05-14 命题).
-             A = 长程 mentor-driven loop (小白模式) — opt-in per project.
-             B = 短期模块化 / 用户主导 — default, current behavior.
-             Default 'B' guarantees existing projects don't get auto-mentor
-             behavior they didn't ask for. -->
-        <div class="cockpit-mode-toggle" id="cockpit-mode-toggle" role="group" aria-label="Mode A / B">
-          <button type="button" class="mode-pill" data-mode="A" id="cockpit-mode-A"
-                  title="Mode A — Mentor drives long-running tasks (opt-in)">A</button>
-          <button type="button" class="mode-pill active" data-mode="B" id="cockpit-mode-B"
-                  title="Mode B — Mentor suggests, you dispatch (default)">B</button>
-        </div>
-      </div>
+      <!-- Mode toggle moved to project state strip (top) on 2026-05-14:
+           it's project-level state, not Mentor-local; competed with the
+           "Mode B · Lanes" section title here. -->
+      <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
       <div class="cockpit-mentor-status" id="cockpit-mentor-status">
         <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
         <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
@@ -3491,7 +3522,7 @@
          Mode B feature exists. -->
     <div class="cockpit-lane" id="cockpit-lane">
       <div class="cockpit-lane-header">
-        <div class="cockpit-section-title">🛤 Mode B · Lanes</div>
+        <div class="cockpit-section-title">🛤 Lanes（连续迭代）</div>
         <button id="cockpit-lane-new-btn" type="button" title="Authorize a new lane chain (Continuous Iteration)">+ New lane</button>
       </div>
       <div class="cockpit-lane-list" id="cockpit-lane-list">
@@ -3578,7 +3609,7 @@
       <p>
         Cairn 内置 Mentor 是<em>引导员</em>，不是<em>决策者</em>。战略决策（"下一个 feature 是啥"）走外部 coding agent；Mentor 只做监督 + 引导 + 辅助提效。
       </p>
-      <h3>🛤 Mode B Continuous Iteration（"走开就行"）</h3>
+      <h3>🛤 Lanes — 连续迭代（"走开就行"）</h3>
       <p>
         在 Mentor 建议清单里勾选 N 个 agent 自荐项 → 点 "Authorize N as lane" → Cairn 把它们排成 lane，逐个跑。每个 task 跑到 WAITING_REVIEW，Cairn 自动停下来 + Mentor 给你一句通知 + 等你点 Advance。<strong>永远不替你 accept</strong>（PRODUCT.md §1.3 #4a 守住）。这就是"走开就行"——但你回来才是决策者。
       </p>
