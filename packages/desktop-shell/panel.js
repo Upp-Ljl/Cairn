@@ -4227,29 +4227,51 @@ function renderCockpit(state) {
       ? 'Mentor 自动起草计划 + 派单 + 答疑'
       : 'Mentor 给建议，你主动派单';
   }
-  // MA-2b: Mode A plan widget — only visible when mode=A AND plan exists.
+  // MA-2b: Mode A plan widget — visible whenever mode=A (so the user
+  // sees diagnostic state, not just successful runs). Three visible
+  // sub-states:
+  //   (a) goal has no success_criteria  → big "needs criteria" hint
+  //   (b) plan drafted, ≥1 steps        → list + progress
+  //   (c) mode=A but plan not yet drafted (rare; <30s window) → "等待 mentor-tick"
   const planRoot = document.getElementById('cockpit-mode-a-plan');
   const planStepsEl = document.getElementById('cockpit-mode-a-plan-steps');
   const planProgressEl = document.getElementById('cockpit-mode-a-plan-progress');
   const plan = state.mode_a_plan;
   if (planRoot) {
-    const visible = currentMode === 'A' && plan && Array.isArray(plan.steps);
-    planRoot.hidden = !visible;
-    if (visible && planStepsEl && planProgressEl) {
-      const steps = plan.steps || [];
-      const total = steps.length;
-      const doneCount = steps.filter(s => s.state === 'DONE').length;
-      const currentIdx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
-      planProgressEl.textContent = total > 0
-        ? `${doneCount}/${total} · 当前 #${Math.min(currentIdx + 1, total)}`
-        : '尚无步骤（goal 没填 success criteria）';
-      if (total === 0) {
-        planStepsEl.innerHTML = '<li class="cockpit-mode-a-plan-empty">add success_criteria to the goal to populate the plan</li>';
-      } else {
+    planRoot.hidden = currentMode !== 'A';
+    if (currentMode === 'A' && planStepsEl && planProgressEl) {
+      const goal = state.goal;
+      const criteria = goal && Array.isArray(goal.success_criteria)
+        ? goal.success_criteria.filter(s => typeof s === 'string' && s.trim().length > 0)
+        : [];
+      const hasCriteria = criteria.length > 0;
+      if (!hasCriteria) {
+        // (a) — most common "why no reaction" cause. Make it loud.
+        planProgressEl.textContent = '⚠ 缺 success_criteria';
+        planStepsEl.innerHTML =
+          '<li class="cockpit-mode-a-plan-empty">' +
+          'Mode A 计划从 goal 的 <code>success_criteria</code> 派生 — 当前为空，' +
+          '所以没步骤可派。点上方 <strong>✎ 编辑</strong> goal，' +
+          '在 "Success criteria" 一栏填几条可验收的子目标（每行一条），' +
+          'Save 后 30 秒内 Mentor 会起草计划并自动派单。' +
+          '</li>';
+      } else if (plan && Array.isArray(plan.steps) && plan.steps.length > 0) {
+        // (b) — happy path.
+        const steps = plan.steps;
+        const total = steps.length;
+        const doneCount = steps.filter(s => s.state === 'DONE').length;
+        const currentIdx = typeof plan.current_idx === 'number' ? plan.current_idx : 0;
+        planProgressEl.textContent =
+          `${doneCount}/${total} · 当前 #${Math.min(currentIdx + 1, total)}`;
         planStepsEl.innerHTML = steps.map((s, idx) => {
           const cls = s.state === 'DONE' ? 'done' : (idx === currentIdx ? 'current' : '');
           return `<li class="${cls}">${escapeHtml(s.label || '(unnamed step)')}</li>`;
         }).join('');
+      } else {
+        // (c) — has criteria but plan not yet drafted; transient.
+        planProgressEl.textContent = `${criteria.length} 条 criteria · 等待 Mentor 起草…`;
+        planStepsEl.innerHTML = criteria.map(c =>
+          `<li>${escapeHtml(c)}</li>`).join('');
       }
     }
   }
