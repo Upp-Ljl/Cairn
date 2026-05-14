@@ -951,7 +951,12 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
   // Inject leader from cockpit settings (Phase 6) so cockpit-state can
   // surface it in the State Strip + use it for the "talk to leader" path.
   const settings = registry.getCockpitSettings(reg, projectId);
-  const projForCockpit = Object.assign({}, proj, { leader: settings.leader });
+  const projForCockpit = Object.assign({}, proj, {
+    leader: settings.leader,
+    // Mode A/B (CEO 2026-05-14): expose current mode so panel header
+    // can render the A|B toggle without an extra IPC roundtrip.
+    mode: settings.mode,
+  });
   return cockpitState.buildCockpitState(
     entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
   );
@@ -1167,7 +1172,9 @@ ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
   const result = registry.setCockpitSettings(reg, projectId, input || {});
   if (result.error) return { ok: false, error: result.error };
   reg = result.reg;
-  try { registry.writeRegistry(reg); } catch (_e) {}
+  // 2026-05-14: was `registry.writeRegistry(reg)` — undefined fn, silently
+  // ate by catch. Pre-existing bug, surfaced by MA-1 subagent审查.
+  try { registry.saveRegistry(reg); } catch (_e) {}
   return { ok: true, settings: result.settings };
 });
 

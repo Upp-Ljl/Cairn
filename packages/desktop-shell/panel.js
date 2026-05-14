@@ -4209,6 +4209,15 @@ function renderCockpit(state) {
   if (mentorContainer) {
     mentorContainer.classList.toggle('active', pendingEscs.length > 0);
   }
+  // Mode A/B toggle reflect current mode (CEO 2026-05-14).
+  // state.mode comes from registry.cockpit_settings.mode → 'A' or 'B'.
+  const currentMode = (state.mode === 'A' || state.mode === 'B') ? state.mode : 'B';
+  const modeBtnA = document.getElementById('cockpit-mode-A');
+  const modeBtnB = document.getElementById('cockpit-mode-B');
+  if (modeBtnA && modeBtnB) {
+    modeBtnA.classList.toggle('active', currentMode === 'A');
+    modeBtnB.classList.toggle('active', currentMode === 'B');
+  }
   // Mentor status header (always render — Mentor is primary, not hidden)
   const stateEl = document.getElementById('cockpit-mentor-state');
   const lastCheckEl = document.getElementById('cockpit-mentor-last-check');
@@ -4583,6 +4592,49 @@ function setupCockpit() {
       }
     });
   }
+
+  // Mode A/B toggle (CEO 2026-05-14). Click → setCockpitSettings({mode}).
+  // Server validates against KNOWN_MODES; render reflects on next poll.
+  // Disable buttons during in-flight call to avoid double-toggle races.
+  ['cockpit-mode-A', 'cockpit-mode-B'].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const mode = btn.getAttribute('data-mode');
+      if (!selectedProject) return;
+      if (btn.classList.contains('active')) return; // already this mode
+      const btnA = document.getElementById('cockpit-mode-A');
+      const btnB = document.getElementById('cockpit-mode-B');
+      try {
+        if (btnA) btnA.disabled = true;
+        if (btnB) btnB.disabled = true;
+        if (window.cairn && typeof window.cairn.log === 'function') {
+          window.cairn.log('panel', 'mode_toggle_clicked', {
+            project_id: selectedProject.id, to_mode: mode,
+          });
+        }
+        const res = await window.cairn.cockpitSetMode(selectedProject.id, mode);
+        if (!res || !res.ok) {
+          if (window.cairn && typeof window.cairn.log === 'function') {
+            window.cairn.log('panel', 'mode_toggle_failed', {
+              project_id: selectedProject.id, to_mode: mode,
+              error: (res && res.error) || 'unknown',
+            }, 'warn');
+          }
+        } else {
+          // Optimistic UI: paint active immediately, poll will confirm.
+          if (btnA) btnA.classList.toggle('active', mode === 'A');
+          if (btnB) btnB.classList.toggle('active', mode === 'B');
+        }
+      } catch (_e) {
+        // Silent — next poll renders authoritative state.
+      } finally {
+        if (btnA) btnA.disabled = false;
+        if (btnB) btnB.disabled = false;
+        poll().catch(() => {});
+      }
+    });
+  });
 
   // M2 Todolist add-input wiring (A2.1). Writes user_todo/<project_id>/<ulid>
   // via IPC cockpit-todo-add. Tier-A mutation (writes scratchpad only).

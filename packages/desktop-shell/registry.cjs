@@ -809,6 +809,11 @@ module.exports = {
  */
 const COCKPIT_SETTINGS_DEFAULT = Object.freeze({
   leader: 'claude-code',
+  // Mode A/B reframe (CEO 2026-05-14). 'B' = user-driven, ranked
+  // suggestions + manual dispatch (the existing v0.2.0 behavior — this
+  // is the safe default). 'A' = mentor-driven long-running loop. Per
+  // PRODUCT.md/plan §2.4 Mode A is opt-in per project; default = 'B'.
+  mode: 'B',
   llm_helpers: {
     tail_summary_enabled: true,         // low-cost, default ON
     conflict_explainer_enabled: true,    // low-cost, default ON
@@ -822,6 +827,8 @@ const COCKPIT_SETTINGS_DEFAULT = Object.freeze({
   },
 });
 
+const KNOWN_MODES = ['A', 'B'];
+
 function getCockpitSettings(reg, projectId) {
   if (!reg || !Array.isArray(reg.projects)) return COCKPIT_SETTINGS_DEFAULT;
   const p = reg.projects.find(x => x.id === projectId);
@@ -830,6 +837,7 @@ function getCockpitSettings(reg, projectId) {
   // Merge against defaults so newly added fields don't break.
   return {
     leader: typeof s.leader === 'string' ? s.leader : COCKPIT_SETTINGS_DEFAULT.leader,
+    mode: KNOWN_MODES.includes(s.mode) ? s.mode : COCKPIT_SETTINGS_DEFAULT.mode,
     llm_helpers: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.llm_helpers, s.llm_helpers || {}),
     escalation_thresholds: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.escalation_thresholds, s.escalation_thresholds || {}),
   };
@@ -837,8 +845,8 @@ function getCockpitSettings(reg, projectId) {
 
 /**
  * Set partial cockpit settings (deep-merge for nested fields).
- * Validates input and writes via writeRegistry (caller-injected at the
- * IPC layer).
+ * Validates input. Returns the next reg; caller must persist via
+ * saveRegistry (the IPC layer in main.cjs does this).
  *
  * Returns { reg, settings } on success, { error } on validation fail.
  */
@@ -849,6 +857,7 @@ function setCockpitSettings(reg, projectId, input) {
   const cur = getCockpitSettings(reg, projectId);
   const next = {
     leader: typeof input.leader === 'string' ? input.leader : cur.leader,
+    mode: typeof input.mode === 'string' ? input.mode : cur.mode,
     llm_helpers: Object.assign({}, cur.llm_helpers, input.llm_helpers || {}),
     escalation_thresholds: Object.assign({}, cur.escalation_thresholds, input.escalation_thresholds || {}),
   };
@@ -856,6 +865,9 @@ function setCockpitSettings(reg, projectId, input) {
   const KNOWN_LEADERS = ['claude-code', 'cursor', 'codex', 'aider', 'cline'];
   if (!KNOWN_LEADERS.includes(next.leader)) {
     return { error: `unknown_leader: ${next.leader}` };
+  }
+  if (!KNOWN_MODES.includes(next.mode)) {
+    return { error: `unknown_mode: ${next.mode}` };
   }
   const newProjects = reg.projects.slice();
   newProjects[idx] = Object.assign({}, newProjects[idx], { cockpit_settings: next });
@@ -867,6 +879,7 @@ function setCockpitSettings(reg, projectId, input) {
 module.exports.getCockpitSettings = getCockpitSettings;
 module.exports.setCockpitSettings = setCockpitSettings;
 module.exports.COCKPIT_SETTINGS_DEFAULT = COCKPIT_SETTINGS_DEFAULT;
+module.exports.KNOWN_MODES = KNOWN_MODES;
 
 // ---------------------------------------------------------------------------
 // B4 Onboarding wizard — first-launch flag
