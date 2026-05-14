@@ -238,6 +238,28 @@ cd packages/mcp-server && npm test && npx tsc --noEmit
 
 两个都要绿。
 
+### Mode A "看不出哪里卡了" — 跑诊断脚本
+
+Mode A 切到 A 之后看上去没反应？**先跑这个再来 debug**：
+
+```bash
+node packages/desktop-shell/scripts/diagnose-mode-a.mjs              # 检查所有项目
+node packages/desktop-shell/scripts/diagnose-mode-a.mjs <project_id> # 单个项目
+```
+
+Read-only（DB 只读模式打开，绝不写）。挨个 ✓/✗ 检查 8 个 gate：
+
+1. `cockpit_settings.mode === 'A'`
+2. `goal` 已设 + `success_criteria` 非空（**鸭总 2026-05-14 踩的就是这个**：goal 只填 title 没填 success_criteria → Mode A 计划 0 步 → 看上去"没反应"）
+3. DB 文件存在（`/dev/null` / `(unknown)` sentinel 回落到 `~/.cairn/cairn.db`）
+4. `agent_id_hints` 能 resolve 到 ≥1 个 agent
+5. **至少 1 个 `processes.status='ACTIVE'`**（IDLE / STALE 不算 — Mode A dispatch 需要 ACTIVE）
+6. `scratchpad/mode_a_plan/<project_id>` 已起草（首次 tick ≤ 30s 后）
+7. `dispatch_requests` 有 `source='mode-a-loop'` 的行
+8. 当天 `~/.cairn/logs/cairn-<date>.jsonl` 里有 `mentor-tick` / `mode-a-loop` / `mode-a-auto-answer` 的事件
+
+每个 ✗ 都附了"修法"提示。比直接 grep DB / 看 log 快得多。
+
 ## 风格约定
 
 - 与用户对话主要用中文，代码 / 命令 / 文件路径英文
