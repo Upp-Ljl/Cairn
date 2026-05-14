@@ -4238,17 +4238,20 @@ function renderCockpit(state) {
   const goalRow = document.getElementById('cockpit-goal-row');
   const goalTitleEl = document.getElementById('cockpit-goal-title');
   if (goalRow && goalTitleEl) {
-    const goalObj = state.goal;
-    const goalTitle = goalObj && typeof goalObj === 'object' && typeof goalObj.title === 'string'
-                    ? goalObj.title
-                    : (typeof goalObj === 'string' ? goalObj : null);
+    // 2026-05-14 fix: state.goal is the TITLE STRING (existing
+    // contract). The full object — needed to pre-fill the editor —
+    // is now in state.goal_full. Prefer that; fall back to title
+    // string for display only.
+    const goalFull = state.goal_full && typeof state.goal_full === 'object' ? state.goal_full : null;
+    const goalTitle = goalFull && typeof goalFull.title === 'string'
+                    ? goalFull.title
+                    : (typeof state.goal === 'string' ? state.goal : null);
     if (goalTitle) {
       goalRow.hidden = false;
       goalTitleEl.textContent = goalTitle;
-      // Sync lastGoal so the editor opens with all fields pre-filled.
-      if (goalObj && typeof goalObj === 'object') {
-        lastGoal = goalObj;
-      }
+      // Sync lastGoal so the editor opens with ALL fields pre-filled
+      // (title + desired_outcome + success_criteria + non_goals).
+      if (goalFull) lastGoal = goalFull;
     } else {
       goalRow.hidden = true;
     }
@@ -4266,9 +4269,13 @@ function renderCockpit(state) {
   if (planRoot) {
     planRoot.hidden = currentMode !== 'A';
     if (currentMode === 'A' && planStepsEl && planProgressEl) {
-      const goal = state.goal;
-      const criteria = goal && Array.isArray(goal.success_criteria)
-        ? goal.success_criteria.filter(s => typeof s === 'string' && s.trim().length > 0)
+      // 2026-05-14 fix: state.goal is the title string, success_criteria
+      // lives on the full object (state.goal_full). Reading state.goal
+      // .success_criteria here always returned undefined → widget
+      // stuck at "缺 success_criteria" even after user filled criteria.
+      const goalFull = state.goal_full && typeof state.goal_full === 'object' ? state.goal_full : null;
+      const criteria = goalFull && Array.isArray(goalFull.success_criteria)
+        ? goalFull.success_criteria.filter(s => typeof s === 'string' && s.trim().length > 0)
         : [];
       const hasCriteria = criteria.length > 0;
       if (!hasCriteria) {

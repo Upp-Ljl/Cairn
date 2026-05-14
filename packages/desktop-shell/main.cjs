@@ -997,9 +997,21 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
     // can render the A|B toggle without an extra IPC roundtrip.
     mode: settings.mode,
   });
-  return cockpitState.buildCockpitState(
+  const payload = cockpitState.buildCockpitState(
     entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
   );
+  // 2026-05-14 fix: surface the FULL goal object so the panel's "✎ 编辑"
+  // entry point can pre-fill the editor with title + desired_outcome
+  // + success_criteria + non_goals. state.goal is the title string
+  // (existing contract; many panel render paths depend on its shape);
+  // state.goal_full is the new object-shaped sibling. Without this,
+  // openGoalEditModal(lastGoal) opens with lastGoal=null → empty form
+  // → Save would wipe the existing fields. That's why 鸭总 reported
+  // "再点开编辑变空" — the previous lastGoal sync code checked
+  // `typeof goalObj === 'object'` but state.goal was a string, so the
+  // sync never fired.
+  payload.goal_full = goal || null;
+  return payload;
 });
 
 // Mode B Continuous Iteration — lane data layer (slice 1, 2026-05-14).
