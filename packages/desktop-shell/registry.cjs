@@ -825,6 +825,17 @@ const COCKPIT_SETTINGS_DEFAULT = Object.freeze({
     outcomes_retry_cap: 1,
     time_budget_fraction: 0.80,
   },
+  // Mode A auto-ship (CEO 2026-05-14). When enabled, mentor-tick will
+  // git commit + push each time a plan step advances to DONE. Defaults
+  // off; add-project handler probes for a PAT path and remote URL to
+  // populate pat_path / remote_url, but `enabled` requires explicit
+  // user opt-in (since push is irreversible to the remote).
+  auto_ship: {
+    enabled: false,
+    remote_url: null,
+    default_branch: 'main',
+    pat_path: null,
+  },
 });
 
 const KNOWN_MODES = ['A', 'B'];
@@ -840,6 +851,7 @@ function getCockpitSettings(reg, projectId) {
     mode: KNOWN_MODES.includes(s.mode) ? s.mode : COCKPIT_SETTINGS_DEFAULT.mode,
     llm_helpers: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.llm_helpers, s.llm_helpers || {}),
     escalation_thresholds: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.escalation_thresholds, s.escalation_thresholds || {}),
+    auto_ship: Object.assign({}, COCKPIT_SETTINGS_DEFAULT.auto_ship, s.auto_ship || {}),
   };
 }
 

@@ -1374,6 +1374,53 @@ ipcMain.handle('add-project', async (_e, input) => {
   reg = result.reg;
   const dbEntry = ensureDbHandle(db_path); // open the handle eagerly so L1 can render
 
+  // 2026-05-14 Mode A auto-ship pre-probe: at add-project time, detect
+  // git remote URL + default branch + project-local PAT file. Stored in
+  // cockpit_settings.auto_ship for later use by mentor-tick's ship hook.
+  // `enabled` starts false — user explicitly opts in (push is
+  // irreversible). All probes are 2s-timeout, failure → leave null.
+  try {
+    const autoShip = {
+      enabled: false,
+      remote_url: null,
+      default_branch: 'main',
+      pat_path: null,
+    };
+    try {
+      const r = execFileSync('git', ['-C', project_root, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8', timeout: 2000, windowsHide: true,
+      }).trim();
+      if (r) autoShip.remote_url = r;
+    } catch (_e) { /* no remote configured */ }
+    try {
+      const r = execFileSync('git', ['-C', project_root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+        encoding: 'utf8', timeout: 2000, windowsHide: true,
+      }).trim();
+      // r is like "origin/main" — strip prefix.
+      const parts = r.split('/');
+      if (parts.length === 2 && parts[1]) autoShip.default_branch = parts[1];
+    } catch (_e) { /* fallback to 'main' */ }
+    const patProbe = [
+      path.join(project_root, '.token', 'ljl.txt'),
+      path.join(project_root, '.cairn-push-token', 'ljl-token.txt'),
+      path.join(project_root, '.cairn-push-token', 'token.txt'),
+      path.join(project_root, '.git-token'),
+    ];
+    for (const p of patProbe) {
+      if (fs.existsSync(p)) { autoShip.pat_path = p; break; }
+    }
+    // Merge into cockpit_settings without clobbering other fields.
+    const cur = registry.getCockpitSettings(reg, result.entry.id);
+    const setRes = registry.setCockpitSettings(reg, result.entry.id, Object.assign({}, cur, { auto_ship: autoShip }));
+    if (setRes && setRes.reg) {
+      reg = setRes.reg;
+      try { registry.saveRegistry(reg); } catch (_e) {}
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('add-project: auto_ship probe failed:', e && e.message);
+  }
+
   // ------------------------------------------------------------------
   // Bootstrap pipeline (Phase 1 / 2026-05-14):
   //   1. spawn `cairn install --json` → writes .mcp.json + pre-commit

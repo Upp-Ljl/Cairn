@@ -490,6 +490,52 @@ function runOnce(deps) {
           }
           if (decision && decision.advance && decision.advance.action === 'advanced') {
             out.decisions++;
+            // 2026-05-14 Mode A auto-ship (CEO 鸭总): when a step
+            // advances to DONE, optionally git commit + push the
+            // CC-produced changes. Uses outcome.evaluation_summary as
+            // the commit message (CC fills it via cairn.outcomes.evaluate),
+            // falls back to "step N done: <label>". Off by default
+            // (push is irreversible; user opts in per project via
+            // cockpit_settings.auto_ship.enabled). All failures are
+            // non-fatal — kernel state is authoritative, commit/push
+            // are best-effort side effects.
+            try {
+              if (cockpitSettings && cockpitSettings.auto_ship && cockpitSettings.auto_ship.enabled) {
+                const autoShip = require('./mode-a-auto-ship.cjs');
+                const taskId = decision.advance.task_id;
+                let summary = null;
+                try {
+                  const row = entry.db.prepare(
+                    "SELECT evaluation_summary FROM outcomes WHERE task_id = ? AND status = 'PASS'"
+                  ).get(taskId);
+                  if (row && row.evaluation_summary) summary = row.evaluation_summary;
+                } catch (_e) { /* table missing or stale; fall through */ }
+                const stepIdx = decision.advance.step_idx;
+                const stepLabel = decision.plan && decision.plan.steps && decision.plan.steps[stepIdx]
+                  ? decision.plan.steps[stepIdx].label : null;
+                const message = summary || (stepLabel ? 'step ' + stepIdx + ' done: ' + stepLabel : 'Mode A step ' + stepIdx + ' done');
+                const shipRes = autoShip.autoShip(project.project_root, message, {
+                  patPath: cockpitSettings.auto_ship.pat_path,
+                  branch: cockpitSettings.auto_ship.default_branch,
+                  remoteUrl: cockpitSettings.auto_ship.remote_url,
+                });
+                cairnLog.info('mode-a-auto-ship', shipRes.ok ? 'ship_ok' : 'ship_skipped_or_failed', {
+                  project_id: project.id,
+                  step_idx: stepIdx,
+                  task_id: taskId,
+                  ok: !!shipRes.ok,
+                  commit_sha: shipRes.commit_sha,
+                  push_backend: shipRes.push_backend,
+                  reason: shipRes.reason,
+                  error_preview: shipRes.error ? String(shipRes.error).slice(0, 200) : undefined,
+                });
+              }
+            } catch (e) {
+              cairnLog.error('mode-a-auto-ship', 'hook_threw', {
+                project_id: project.id,
+                message: (e && e.message) || String(e),
+              });
+            }
           }
           if (decision && (decision.action === 'drafted' || decision.action === 'superseded')) {
             out.decisions++;
