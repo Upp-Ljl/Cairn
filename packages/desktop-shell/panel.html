@@ -25,6 +25,8 @@ html[data-cairn-theme="dark"] {
   --accent:       #5b9aff;
   --accent-muted: #3d6ab3;
   --accent-bg:    rgba(91, 154, 255, 0.08);
+  --accent-hover-bg: rgba(91, 154, 255, 0.18);
+  --on-accent:    #ffffff;
   --alert:        #e85545;
   --alert-bg:     rgba(232, 85, 69, 0.08);
   --shadow: 0 1px 3px rgba(0,0,0,0.3);
@@ -33,17 +35,19 @@ html[data-cairn-theme="light"] {
   --bg-base:      #f0f0f3;
   --bg-surface:   #fafafa;
   --bg-elevated:  #ffffff;
-  --border:       #e2e2e8;
-  --border-focus: #c8c8d2;
+  --border:       #d4d4dc;
+  --border-focus: #aaaab8;
   --text-primary:   #1c1c22;
-  --text-secondary: #55556a;
-  --text-muted:     #8e8ea0;
+  --text-secondary: #3a3a4c;
+  --text-muted:     #6e6e80;
   --accent:       #2e6ed8;
-  --accent-muted: #6a9be6;
-  --accent-bg:    rgba(46, 110, 216, 0.07);
+  --accent-muted: #5586d5;
+  --accent-bg:    rgba(46, 110, 216, 0.10);
+  --accent-hover-bg: rgba(46, 110, 216, 0.22);
+  --on-accent:    #ffffff;
   --alert:        #c42828;
-  --alert-bg:     rgba(196, 40, 40, 0.05);
-  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.03);
+  --alert-bg:     rgba(196, 40, 40, 0.08);
+  --shadow: 0 1px 3px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.05);
 }
 :root {
   --font: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
@@ -345,6 +349,15 @@ body {
   border-color: var(--accent-muted);
   color: var(--accent);
   font-weight: 600;
+  z-index: 1;
+}
+/* TOP-2 audit: mode-pill had no :hover rule. Make inactive pill brighten
+   border to accent on hover so it's discoverable as clickable. */
+.mode-pill:hover:not(.active),
+#cockpit-mode-A:hover:not(.active),
+#cockpit-mode-B:hover:not(.active) {
+  border-color: var(--accent-muted);
+  color: var(--text-primary);
   z-index: 1;
 }
 .cockpit-run-mode-hint {
@@ -806,8 +819,13 @@ body {
   color: var(--accent);
   background: var(--accent-bg);
 }
+/* TOP-2 audit: Go button hover went from accent-bg (8%) to (15%) —
+   indistinguishable. Now filled-accent + on-accent text so the
+   primary action is unmistakable. */
 .cockpit-todo-action-btn.approve:hover, .cockpit-todo-action-btn.dispatch:hover {
-  background: rgba(91, 154, 255, 0.15);
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
 }
 .cockpit-todolist-footer {
   margin-top: 6px;
@@ -863,7 +881,7 @@ body {
   cursor: pointer;
   transition: all var(--dur-short) var(--ease-out);
 }
-#cockpit-todo-add-send:hover { background: rgba(91, 154, 255, 0.15); }
+#cockpit-todo-add-send:hover { background: var(--accent-hover-bg); }
 .cockpit-todo-add-status { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
 
 /* ============================================================
@@ -1011,7 +1029,7 @@ body {
   cursor: pointer;
   transition: all var(--dur-short) var(--ease-out);
 }
-#cockpit-steer-send:hover:not(:disabled) { background: rgba(91, 154, 255, 0.15); }
+#cockpit-steer-send:hover:not(:disabled) { background: var(--accent-hover-bg); }
 .cockpit-steer-status { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
 
 /* ============================================================
@@ -1417,7 +1435,7 @@ body {
   align-self: flex-end;
   transition: all var(--dur-short) var(--ease-out);
 }
-.mentor-ask-btn:hover { background: rgba(91, 154, 255, 0.15); }
+.mentor-ask-btn:hover { background: var(--accent-hover-bg); }
 
 /* ============================================================
    Coordination / Pulse strips
@@ -1683,7 +1701,7 @@ body {
   cursor: pointer;
   transition: all var(--dur-short) var(--ease-out);
 }
-.flw-btn-primary:hover { background: rgba(91, 154, 255, 0.15); }
+.flw-btn-primary:hover { background: var(--accent-hover-bg); }
 .flw-btn-secondary {
   padding: 6px 14px;
   font-size: 11px;
