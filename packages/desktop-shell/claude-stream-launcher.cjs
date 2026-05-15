@@ -679,6 +679,17 @@ function launchStreamWorker(input, opts) {
     /**
      * Send a follow-up user turn to the running CC session.
      * Used by Agent Pool for multi-step-in-one-session.
+     *
+     * TODO (Architecture B): bump `_hookState.turn_index` here and
+     * reset `_hookState.fired_for_turn = turn_index - 1` so the Stop
+     * hook + result-event dedupe gate fires once per *new* turn, not
+     * once per spawn. Without this, multi-turn callers see onTurnDone
+     * fire exactly once (for turn 0) and subsequent Stop events on
+     * later turns get suppressed as duplicates. The `turn_index` field
+     * is already on the wire shape — only the producer wiring is
+     * missing. Smoke coverage: a new `hooks_multi_turn` scenario in
+     * `smoke-hooks-turn-protocol.mjs` should accompany the wiring.
+     *
      * @param {string} prompt
      * @returns {boolean} true if written, false if child stdin is gone
      */

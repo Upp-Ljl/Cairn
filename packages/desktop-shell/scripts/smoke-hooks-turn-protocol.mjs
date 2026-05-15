@@ -140,6 +140,26 @@ const eventsByScenario = {
     { type: 'system', subtype: 'hook_response', hook_id: 'h_mf', hook_name: 'Stop', hook_event: 'Stop', session_id: sessionId, stdout: JSON.stringify(hookPayload({ stop_hook_active: false, transcript_path: null, last_assistant_message: 'partial' })), exit_code: 0, outcome: 'success' },
     { type: 'result', subtype: 'success', session_id: sessionId, is_error: false },
   ],
+  // Malformed hook payload — JSON.parse throws in launcher. Reviewer
+  // gap #2: covers the try/catch around JSON.parse(ev.stdout). Stop
+  // hook fires but payload is null → onTurnDone fires with envelope
+  // session_id and null payload fields (graceful degrade, not crash).
+  hooks_malformed_stdout: [
+    { type: 'system', subtype: 'init', session_id: sessionId, tools: ['Read'] },
+    { type: 'system', subtype: 'hook_response', hook_id: 'h_mal', hook_name: 'Stop', hook_event: 'Stop', session_id: sessionId, stdout: '{not_valid_json', exit_code: 0, outcome: 'success' },
+    { type: 'result', subtype: 'success', session_id: sessionId, is_error: false },
+  ],
+  // Two Stop events both with stop_hook_active=false. NOT the reentry
+  // case (which is active=true → active=false). This is "CC emitted
+  // Stop twice for the same turn, both signalled real-done." Should
+  // be deduped via fired_for_turn === turn_index gate. Reviewer gap
+  // #3 — exercises launcher's stop_hook_dup_suppressed log path.
+  hooks_double_stop: [
+    { type: 'system', subtype: 'init', session_id: sessionId, tools: ['Read'] },
+    { type: 'system', subtype: 'hook_response', hook_id: 'h_d1', hook_name: 'Stop', hook_event: 'Stop', session_id: sessionId, stdout: JSON.stringify(hookPayload({ stop_hook_active: false, last_assistant_message: 'first done' })), exit_code: 0, outcome: 'success' },
+    { type: 'system', subtype: 'hook_response', hook_id: 'h_d2', hook_name: 'Stop', hook_event: 'Stop', session_id: sessionId, stdout: JSON.stringify(hookPayload({ stop_hook_active: false, last_assistant_message: 'dup ignore me' })), exit_code: 0, outcome: 'success' },
+    { type: 'result', subtype: 'success', session_id: sessionId, is_error: false },
+  ],
 };
 
 const events = eventsByScenario[scenario] || eventsByScenario.hooks_normal;
@@ -269,6 +289,26 @@ section('D hooks_missing_field — field-defensive: undefined transcript_path be
   ok(p.transcript_path === null, 'missing transcript_path → null (not undefined)');
   ok(p.last_assistant_text === 'partial', 'other fields still propagate');
   ok(typeof p.session_id === 'string' && p.session_id.length > 0, 'session_id still present');
+}
+
+section('D2 hooks_malformed_stdout — JSON.parse fails, graceful degrade');
+{
+  const { turnDoneCalls } = await runScenario('hooks_malformed_stdout');
+  ok(turnDoneCalls.length === 1, `onTurnDone fired once even with malformed payload (got ${turnDoneCalls.length})`);
+  const p = turnDoneCalls[0] || {};
+  ok(p.source === 'hook', `source = 'hook' (got ${p.source}) — launcher proceeded past parse error`);
+  ok(p.raw === null, `raw payload = null when parse fails (got ${JSON.stringify(p.raw)})`);
+  ok(p.transcript_path === null, 'transcript_path = null after parse fail');
+  ok(p.last_assistant_text === null, 'last_assistant_text = null after parse fail');
+  ok(typeof p.session_id === 'string' && p.session_id.length > 0, 'session_id from envelope (not payload) still present');
+}
+
+section('D3 hooks_double_stop — two Stop active=false events → dedupe to one fire');
+{
+  const { turnDoneCalls } = await runScenario('hooks_double_stop');
+  ok(turnDoneCalls.length === 1, `onTurnDone fired exactly once across two real-done Stops (got ${turnDoneCalls.length})`);
+  const p = turnDoneCalls[0] || {};
+  ok(p.last_assistant_text === 'first done', `payload from the FIRST Stop (got ${p.last_assistant_text}) — dup suppressed`);
 }
 
 section('E cleanup behaviour — runs even if launcher returns ok:false');
