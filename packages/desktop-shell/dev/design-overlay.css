@@ -1,0 +1,453 @@
+/* =============================================================
+   Cairn Design System v1 — Web Overlay
+   Injected on top of panel.html via dev/serve.mjs.
+   Goal: recolor + restyle the real panel.html to match
+   DESIGN.md while keeping the DOM structure untouched.
+   ============================================================= */
+
+/* ---- Theme tokens ---- */
+:root,
+html[data-cairn-theme="dark"] {
+  --bg-base:      #0f0f0f;
+  --bg-surface:   #161618;
+  --bg-elevated:  #1e1e22;
+  --border:       #2a2a2e;
+  --border-focus: #3a3a40;
+  --text-primary:   #e8e8ec;
+  --text-secondary: #8888a0;
+  --text-muted:     #555566;
+  --accent:       #5b9aff;
+  --accent-muted: #3d6ab3;
+  --accent-bg:    rgba(91, 154, 255, 0.08);
+  --alert:        #e85545;
+  --alert-bg:     rgba(232, 85, 69, 0.08);
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --font: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 80ms;
+  --dur-short: 150ms;
+  --dur-medium: 250ms;
+  --dur-long: 400ms;
+}
+
+html[data-cairn-theme="light"] {
+  --bg-base:      #f0f0f3;
+  --bg-surface:   #fafafa;
+  --bg-elevated:  #ffffff;
+  --border:       #e2e2e8;
+  --border-focus: #c8c8d2;
+  --text-primary:   #1c1c22;
+  --text-secondary: #55556a;
+  --text-muted:     #8e8ea0;
+  --accent:       #2e6ed8;
+  --accent-muted: #6a9be6;
+  --accent-bg:    rgba(46, 110, 216, 0.07);
+  --alert:        #c42828;
+  --alert-bg:     rgba(196, 40, 40, 0.05);
+  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.03);
+}
+
+/* ---- Base body / app shell ---- */
+body {
+  background: var(--bg-base) !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  border-left: 1px solid var(--border) !important;
+  transition: background var(--dur-medium) var(--ease-out),
+              color var(--dur-medium) var(--ease-out) !important;
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 6px !important; height: 6px !important; }
+::-webkit-scrollbar-track { background: transparent !important; }
+::-webkit-scrollbar-thumb {
+  background: var(--border) !important;
+  border-radius: 3px !important;
+  border: none !important;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-focus) !important; }
+::-webkit-scrollbar-thumb:active { background: var(--accent-muted) !important; }
+::-webkit-scrollbar-corner { background: transparent !important; }
+
+/* ---- Header ---- */
+#header {
+  background: var(--bg-surface) !important;
+  border-bottom: 1px solid var(--border) !important;
+  transition: background var(--dur-medium) var(--ease-out),
+              border-color var(--dur-medium) var(--ease-out) !important;
+}
+#workspace-label {
+  color: var(--accent) !important;
+  font-weight: 600 !important;
+}
+#db-path { color: var(--text-muted) !important; }
+#menu-btn, #close-btn {
+  border: 1px solid var(--border) !important;
+  color: var(--text-secondary) !important;
+  border-radius: var(--radius-sm) !important;
+  background: none !important;
+  transition: all var(--dur-micro) var(--ease-out) !important;
+}
+#menu-btn:hover, #close-btn:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+/* ---- Menu pop ---- */
+#menu-pop {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow);
+}
+#menu-pop button {
+  color: var(--text-secondary) !important;
+  background: none !important;
+  border: none !important;
+  transition: all var(--dur-micro) var(--ease-out) !important;
+}
+#menu-pop button:hover {
+  background: var(--bg-base) !important;
+  color: var(--accent) !important;
+}
+
+/* ---- Footer ---- */
+#footer {
+  background: var(--bg-surface) !important;
+  border-top: 1px solid var(--border) !important;
+  color: var(--text-muted) !important;
+  font-size: 10px !important;
+  transition: background var(--dur-medium) var(--ease-out),
+              border-color var(--dur-medium) var(--ease-out) !important;
+}
+
+/* ---- L1 Project list cards ---- */
+.project-card, .pl-row, [class*="project-row"] {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  transition: border-color var(--dur-micro) var(--ease-out),
+              background var(--dur-micro) var(--ease-out) !important;
+}
+.project-card:hover, .pl-row:hover {
+  border-color: var(--border-focus) !important;
+  background: var(--bg-elevated) !important;
+}
+.pl-add {
+  border: 1px dashed var(--border) !important;
+  color: var(--text-muted) !important;
+  border-radius: var(--radius-md) !important;
+  transition: all var(--dur-short) var(--ease-out) !important;
+}
+.pl-add:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--accent-bg) !important;
+}
+
+/* ---- Cockpit tabs ---- */
+.cockpit-tab, [class*="cockpit-tabs"] [class*="tab"] {
+  color: var(--text-muted) !important;
+  border-bottom: 2px solid transparent !important;
+  transition: all var(--dur-short) var(--ease-out) !important;
+}
+.cockpit-tab:hover { color: var(--text-secondary) !important; }
+.cockpit-tab.active {
+  color: var(--text-primary) !important;
+  border-bottom-color: var(--accent) !important;
+  background: none !important;
+}
+
+/* ---- Mode A/B buttons ---- */
+#cockpit-mode-A, #cockpit-mode-B,
+[id^="cockpit-mode-"] {
+  border: 1px solid var(--border) !important;
+  background: none !important;
+  color: var(--text-secondary) !important;
+  border-radius: var(--radius-sm) !important;
+  font-family: var(--font) !important;
+  transition: all var(--dur-short) var(--ease-out) !important;
+}
+#cockpit-mode-A.active, #cockpit-mode-B.active {
+  background: var(--accent-bg) !important;
+  border-color: var(--accent-muted) !important;
+  color: var(--accent) !important;
+}
+
+/* ---- Cards (goal / rules / interp / pre-pr / etc) ---- */
+.goal-card, .rules-card, .interp-card, .pre-pr-card,
+.prompt-pack-card, .recovery-card, .managed-card,
+.cockpit-mentor-module, .cockpit-needs, .cockpit-todolist,
+.cockpit-lane, .cockpit-sessions, .cockpit-checkpoints,
+.cockpit-activity, .cockpit-mode-a-plan {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  transition: background var(--dur-medium) var(--ease-out),
+              border-color var(--dur-medium) var(--ease-out) !important;
+}
+
+/* ---- Section titles (only the actual labels, not all -label selectors) ---- */
+.goal-label, .rules-label, .recovery-label, .managed-label,
+.prompt-pack-label, .cockpit-section-title,
+.cockpit-mode-a-plan-label,
+.coord-strip-top, .cockpit-mentor-saved-text {
+  color: var(--accent) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+  background: none !important;
+}
+
+/* ---- Section title — NEEDS YOU exception (only when ".active") ---- */
+.cockpit-needs.active .cockpit-section-title,
+.cockpit-mentor-module.active .cockpit-section-title {
+  color: var(--alert) !important;
+}
+
+/* ---- Buttons everywhere ---- */
+button, .btn, [class*="-btn"]:not([class*="m-header-btn"]) {
+  font-family: var(--font) !important;
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--dur-short) var(--ease-out) !important;
+}
+
+/* Primary-ish buttons (ship now, send, approve) */
+.cockpit-ship-now-btn, .cockpit-steer-send,
+button[type="submit"], button.primary {
+  background: var(--accent-bg) !important;
+  border: 1px solid var(--accent-muted) !important;
+  color: var(--accent) !important;
+}
+.cockpit-ship-now-btn:hover, .cockpit-steer-send:hover {
+  background: rgba(91, 154, 255, 0.15) !important;
+}
+
+/* Ghost buttons */
+button:not(.primary):not([class*="active"]):not([id^="cockpit-mode-"]) {
+  border: 1px solid var(--border) !important;
+  background: none !important;
+  color: var(--text-secondary) !important;
+}
+button:not(.primary):not([class*="active"]):not([id^="cockpit-mode-"]):hover:not(:disabled) {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--accent-bg) !important;
+}
+button:disabled {
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
+}
+
+/* ---- Inputs / Textareas ---- */
+input[type="text"], input[type="search"], textarea, select {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font) !important;
+  border-radius: var(--radius-sm) !important;
+  outline: none !important;
+  transition: border-color var(--dur-micro) var(--ease-out) !important;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent) !important;
+}
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted) !important;
+}
+
+/* ---- Goal / Rules / Interp / Status chips ---- */
+.goal-meta, .rules-counts, .interp-meta, .managed-meta,
+.recovery-counts, .pre-pr-meta {
+  color: var(--text-muted) !important;
+  font-size: 11px !important;
+}
+
+/* ---- Progress bar ---- */
+.cockpit-progress-bar, [class*="progress-bar"]:not([class*="-text"]) {
+  background: linear-gradient(90deg, var(--accent), var(--accent-muted)) !important;
+  border-radius: 2px !important;
+  position: relative;
+  overflow: hidden;
+  transition: width var(--dur-long) var(--ease-out) !important;
+}
+.cockpit-progress-bar::after, [class*="progress-bar"]:not([class*="-text"])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%);
+  animation: cairnShimmer 2s ease-in-out infinite;
+}
+@keyframes cairnShimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+/* ---- Status dots — only accent + alert + muted ---- */
+.cockpit-status-dot, .pulse-dot {
+  color: var(--text-muted) !important;
+  transition: color var(--dur-short) var(--ease-out) !important;
+}
+.cockpit-status-dot.active, .cockpit-status-dot.green,
+.pulse-dot.active, .pulse-dot.green {
+  color: var(--accent) !important;
+  text-shadow: 0 0 6px var(--accent);
+  animation: cairnDotPulse 2s ease-in-out infinite;
+}
+.cockpit-status-dot.alert, .cockpit-status-dot.red,
+.pulse-dot.alert, .pulse-dot.red {
+  color: var(--alert) !important;
+  text-shadow: 0 0 6px var(--alert);
+}
+.cockpit-status-dot.amber, .pulse-dot.amber {
+  color: var(--text-secondary) !important;
+}
+.cockpit-status-dot.purple, .pulse-dot.purple {
+  color: var(--accent-muted) !important;
+}
+@keyframes cairnDotPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ---- NEEDS YOU — alert stripe + glow when active ---- */
+.cockpit-needs.active, .cockpit-mentor-module.active {
+  border-left: 3px solid var(--alert) !important;
+  box-shadow: -2px 0 8px rgba(232, 85, 69, 0.15);
+  animation: cairnAlertGlow 2.5s ease-in-out infinite;
+}
+@keyframes cairnAlertGlow {
+  0%, 100% { box-shadow: -2px 0 6px rgba(232, 85, 69, 0.12); }
+  50% { box-shadow: -2px 0 14px rgba(232, 85, 69, 0.22); }
+}
+
+/* ---- Tags / Pills (state labels, agent ids, etc) ---- */
+.cockpit-session-state, .cockpit-todo-source-pill,
+.cockpit-mode-a-plan-phase-pill,
+.interp-mode, .rules-default-tag {
+  font-size: 10px !important;
+  padding: 1px 6px !important;
+  border-radius: var(--radius-sm) !important;
+  font-weight: 500 !important;
+  background: var(--accent-bg) !important;
+  color: var(--accent) !important;
+  border: none !important;
+}
+/* "working" / "active" state stays accent — already default above */
+/* "blocked" / "alert" state */
+.cockpit-session-state.blocked,
+[class*="-state"].blocked,
+.cockpit-mode-a-plan-phase-pill.blocked {
+  background: var(--alert-bg) !important;
+  color: var(--alert) !important;
+}
+/* idle / stale / waiting — muted */
+.cockpit-session-state.idle, .cockpit-session-state.stale,
+[class*="-state"].idle, [class*="-state"].stale,
+.cockpit-mode-a-plan-phase-pill.idle,
+.cockpit-mode-a-plan-phase-pill.paused {
+  background: var(--bg-elevated) !important;
+  color: var(--text-muted) !important;
+}
+
+/* ---- Activity / list rows hover ---- */
+.cockpit-session-row, .cockpit-checkpoint-row,
+.cockpit-todo-row, .cockpit-needs-row, .cockpit-lane-row,
+[class*="-row"]:not(.cockpit-status-line) {
+  transition: background var(--dur-micro) var(--ease-out) !important;
+  border-radius: var(--radius-sm);
+}
+.cockpit-session-row:hover, .cockpit-checkpoint-row:hover,
+.cockpit-todo-row:hover, [class*="-row"]:not(.cockpit-status-line):hover {
+  background: var(--bg-elevated) !important;
+}
+
+/* ---- Activity feed: stagger fade-in ---- */
+.cockpit-activity-row, .pulse-row,
+[class*="activity"] > [class*="-row"],
+[class*="run-log"] > [class*="-row"] {
+  animation: cairnFadeSlide var(--dur-medium) var(--ease-out) both;
+}
+@keyframes cairnFadeSlide {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Text colors throughout ---- */
+.placeholder, [class*="-empty"], [class*="-muted"],
+.cockpit-todolist-empty, .cockpit-needs-empty {
+  color: var(--text-muted) !important;
+  font-style: italic !important;
+}
+[class*="-meta"], [class*="-time"], [class*="-ts"],
+.cockpit-current-task, .cockpit-mentor-nudge {
+  color: var(--text-muted) !important;
+}
+
+/* ---- Links ---- */
+a, [class*="-link"] {
+  color: var(--accent) !important;
+  text-decoration: none !important;
+  transition: color var(--dur-micro) var(--ease-out) !important;
+}
+a:hover, [class*="-link"]:hover {
+  color: var(--accent-muted) !important;
+  text-decoration: underline !important;
+}
+
+/* ---- Strong / bold text ---- */
+strong, b { color: var(--text-primary) !important; }
+
+/* ---- Modal ---- */
+#modal-overlay {
+  background: rgba(0,0,0,0.5) !important;
+}
+.modal-box {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5) !important;
+  color: var(--text-primary) !important;
+}
+.modal-title {
+  color: var(--accent) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+/* ---- Light theme: cards use box-shadow instead of borders ---- */
+html[data-cairn-theme="light"] .goal-card,
+html[data-cairn-theme="light"] .rules-card,
+html[data-cairn-theme="light"] .interp-card,
+html[data-cairn-theme="light"] .pre-pr-card,
+html[data-cairn-theme="light"] .cockpit-mentor-module,
+html[data-cairn-theme="light"] .cockpit-needs,
+html[data-cairn-theme="light"] .cockpit-todolist,
+html[data-cairn-theme="light"] .cockpit-lane,
+html[data-cairn-theme="light"] .cockpit-sessions,
+html[data-cairn-theme="light"] .cockpit-checkpoints,
+html[data-cairn-theme="light"] [class*="-card"] {
+  box-shadow: var(--shadow);
+}
+html[data-cairn-theme="light"] #header {
+  background: var(--bg-elevated) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+html[data-cairn-theme="light"] button:not(.primary):hover:not(:disabled) {
+  background: rgba(0,0,0,0.04) !important;
+}
+
+/* ---- View transitions ---- */
+#view-projects-list, #view-project,
+[id^="view-"]:not([hidden]) {
+  animation: cairnViewEnter var(--dur-medium) var(--ease-out) both;
+}
+@keyframes cairnViewEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

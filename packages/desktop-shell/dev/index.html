@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cairn Panel — Dev Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #111; overflow: hidden; }
+  body {
+    display: flex;
+    font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+
+  /* Left workspace */
+  #workspace {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #444;
+    font-size: 14px;
+    user-select: none;
+    gap: 12px;
+    position: relative;
+  }
+  #workspace .hint { color: #555; font-size: 11px; }
+  #workspace kbd {
+    background: #222; border: 1px solid #444; border-radius: 3px;
+    padding: 1px 6px; font-size: 11px; color: #888;
+  }
+
+  /* Pet container — floats in the workspace, draggable */
+  #pet-container {
+    position: absolute;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    cursor: grab;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+  #pet-container.hidden {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.5);
+    pointer-events: none;
+  }
+  #pet-container:active { cursor: grabbing; }
+  #pet-canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    display: block;
+  }
+  #pet-status {
+    text-align: center;
+    font-size: 10px;
+    color: #555;
+    margin-top: 4px;
+  }
+
+  /* Settings gear button */
+  #settings-btn {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #666;
+    width: 32px; height: 32px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    z-index: 100;
+  }
+  #settings-btn:hover { border-color: #7af; color: #7af; }
+  #settings-btn.open { border-color: #7af; color: #7af; background: #222; }
+
+  /* Settings panel */
+  #settings-panel {
+    position: fixed;
+    top: 52px;
+    left: 12px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    width: 260px;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  #settings-panel.open { display: block; }
+  .settings-title {
+    font-size: 11px;
+    color: #7af;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .settings-group {
+    margin-bottom: 14px;
+  }
+  .settings-group:last-child { margin-bottom: 0; }
+  .settings-label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* Toggle switch */
+  .toggle {
+    position: relative;
+    width: 36px; height: 20px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .toggle input { display: none; }
+  .toggle-track {
+    position: absolute;
+    inset: 0;
+    background: #333;
+    border-radius: 10px;
+    transition: background 0.2s ease;
+  }
+  .toggle input:checked + .toggle-track { background: #4a7; }
+  .toggle-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    background: #ccc;
+    border-radius: 50%;
+    transition: transform 0.2s ease;
+    pointer-events: none;
+  }
+  .toggle input:checked ~ .toggle-thumb { transform: translateX(16px); }
+
+  /* Select */
+  .settings-select {
+    width: 100%;
+    background: #222;
+    color: #ccc;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    outline: none;
+  }
+  .settings-select:hover { border-color: #666; }
+  .settings-select:focus { border-color: #7af; }
+
+  /* Pet state selector in settings */
+  .pet-state-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .pet-state-row .settings-select { flex: 1; }
+
+  /* Right: panel iframe */
+  #panel-frame {
+    flex: 0 0 420px;
+    width: 420px;
+    height: 100vh;
+    border: none;
+    border-left: 1px solid #2a2a2a;
+  }
+
+  /* Bottom controls */
+  #width-controls {
+    position: fixed;
+    bottom: 12px;
+    left: 12px;
+    display: flex;
+    gap: 6px;
+    z-index: 100;
+  }
+  #width-controls button {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #666;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+  }
+  #width-controls button:hover { background: #222; color: #ccc; }
+  #width-controls button.active { border-color: #7af; color: #7af; }
+</style>
+</head>
+<body>
+
+<!-- Settings gear -->
+<button id="settings-btn" title="Settings">&#9881;</button>
+
+<!-- Settings panel -->
+<div id="settings-panel">
+  <div class="settings-title">Dev Settings</div>
+
+  <div class="settings-group">
+    <div class="settings-label">
+      <span>Desktop Pet</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-pet" checked>
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+    </div>
+    <div class="pet-state-row">
+      <select class="settings-select" id="pet-state-select">
+        <option value="auto">Auto (from mock data)</option>
+        <option value="idle">idle</option>
+        <option value="running-right">running-right</option>
+        <option value="running-left">running-left</option>
+        <option value="waving">waving</option>
+        <option value="jumping">jumping</option>
+        <option value="failed">failed</option>
+        <option value="waiting">waiting</option>
+        <option value="running">running</option>
+        <option value="review">review</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label"><span>Language</span></div>
+    <select class="settings-select" id="lang-select">
+      <option value="en">English</option>
+      <option value="zh">&#20013;&#25991; (Chinese)</option>
+      <option value="ja">&#26085;&#26412;&#35486; (Japanese)</option>
+    </select>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label"><span>Panel Width</span></div>
+    <select class="settings-select" id="width-select">
+      <option value="320">320px — Narrow</option>
+      <option value="420" selected>420px — Default</option>
+      <option value="520">520px — Wide</option>
+    </select>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label">
+      <span>Show Pet Status</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-pet-status">
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+    </div>
+  </div>
+</div>
+
+<div id="workspace">
+  <div>Cairn Panel — Dev Preview</div>
+  <div class="hint">Panel renders on the right. Edit panel.html / panel.js, then refresh.</div>
+  <div class="hint">
+    <kbd>N</kbd> narrow &nbsp; <kbd>D</kbd> default &nbsp; <kbd>W</kbd> wide &nbsp; <kbd>S</kbd> settings
+  </div>
+
+  <!-- Pet floating in workspace -->
+  <div id="pet-container">
+    <canvas id="pet-canvas" width="96" height="104"></canvas>
+    <div id="pet-status"></div>
+  </div>
+</div>
+
+<iframe id="panel-frame" src="panel-dev.html"></iframe>
+
+<div id="width-controls">
+  <button onclick="setWidth(320)">320</button>
+  <button onclick="setWidth(420)" class="active">420</button>
+  <button onclick="setWidth(520)">520</button>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Settings persistence (localStorage)
+// ---------------------------------------------------------------------------
+const STORE_KEY = 'cairn-dev-settings';
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+}
+function saveSettings(patch) {
+  const s = { ...loadSettings(), ...patch };
+  localStorage.setItem(STORE_KEY, JSON.stringify(s));
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// Panel width
+// ---------------------------------------------------------------------------
+function setWidth(w) {
+  const frame = document.getElementById('panel-frame');
+  frame.style.flex = '0 0 ' + w + 'px';
+  frame.style.width = w + 'px';
+  document.querySelectorAll('#width-controls button').forEach(b =>
+    b.classList.toggle('active', b.textContent.trim() === String(w)),
+  );
+  document.getElementById('width-select').value = String(w);
+  saveSettings({ panelWidth: w });
+}
+
+// ---------------------------------------------------------------------------
+// Settings toggle
+// ---------------------------------------------------------------------------
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+settingsBtn.addEventListener('click', () => {
+  const open = settingsPanel.classList.toggle('open');
+  settingsBtn.classList.toggle('open', open);
+});
+document.addEventListener('click', (e) => {
+  if (!settingsPanel.contains(e.target) && e.target !== settingsBtn) {
+    settingsPanel.classList.remove('open');
+    settingsBtn.classList.remove('open');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Pet sprite engine (standalone, no preview.js dependency)
+// ---------------------------------------------------------------------------
+const SHEET_W = 1536, SHEET_H = 1872;
+const CELL_W = 192, CELL_H = 208;
+const COLS = 8;
+const SCALE = 0.5;
+const DST_W = CELL_W * SCALE;
+const DST_H = CELL_H * SCALE;
+const PET_FPS = 8;
+
+const PET_STATES = [
+  { name: 'idle',          row: 0, frames: 6 },
+  { name: 'running-right', row: 1, frames: 8 },
+  { name: 'running-left',  row: 2, frames: 8 },
+  { name: 'waving',        row: 3, frames: 4 },
+  { name: 'jumping',       row: 4, frames: 5 },
+  { name: 'failed',        row: 5, frames: 8 },
+  { name: 'waiting',       row: 6, frames: 6 },
+  { name: 'running',       row: 7, frames: 6 },
+  { name: 'review',        row: 8, frames: 6 },
+];
+
+const petCanvas = document.getElementById('pet-canvas');
+const petCtx = petCanvas.getContext('2d');
+petCanvas.width = DST_W;
+petCanvas.height = DST_H;
+petCtx.imageSmoothingEnabled = false;
+
+let petSheet = null;
+let petChroma = null;
+let petStateIdx = 0;
+let petFrame = 0;
+let petLastTs = 0;
+let petManualState = 'auto';
+
+function petStateByName(name) {
+  const i = PET_STATES.findIndex(s => s.name === name);
+  return i >= 0 ? i : 0;
+}
+
+function petDraw() {
+  if (!petChroma) return;
+  const st = PET_STATES[petStateIdx];
+  const col = petFrame % COLS;
+  petCtx.clearRect(0, 0, DST_W, DST_H);
+  petCtx.drawImage(petChroma, col * CELL_W, st.row * CELL_H, CELL_W, CELL_H, 0, 0, DST_W, DST_H);
+}
+
+function petLoop(ts) {
+  requestAnimationFrame(petLoop);
+  if (!petSheet) return;
+  if (ts - petLastTs < 1000 / PET_FPS) return;
+  petLastTs = ts;
+  const st = PET_STATES[petStateIdx];
+  petFrame = (petFrame + 1) % st.frames;
+  petDraw();
+}
+
+function petSetState(name) {
+  const idx = petStateByName(name);
+  if (idx !== petStateIdx) { petStateIdx = idx; petFrame = 0; }
+  const statusEl = document.getElementById('pet-status');
+  if (statusEl) statusEl.textContent = name;
+}
+
+// Auto-cycle through states to show off the pet
+let autoCycleIdx = 0;
+const AUTO_STATES = ['idle', 'running', 'running-right', 'waiting', 'waving', 'review', 'jumping', 'running-left'];
+function petAutoCycle() {
+  if (petManualState !== 'auto') return;
+  petSetState(AUTO_STATES[autoCycleIdx % AUTO_STATES.length]);
+  autoCycleIdx++;
+}
+
+function buildChromaCanvas(img) {
+  const off = document.createElement('canvas');
+  off.width = SHEET_W; off.height = SHEET_H;
+  const c = off.getContext('2d');
+  c.imageSmoothingEnabled = false;
+  c.drawImage(img, 0, 0);
+  try {
+    const d = c.getImageData(0, 0, SHEET_W, SHEET_H);
+    const px = d.data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i] > 200 && px[i+1] > 200 && px[i+2] < 120) px[i+3] = 0;
+    }
+    c.putImageData(d, 0, 0);
+  } catch {}
+  return off;
+}
+
+const petImg = new Image();
+petImg.onload = () => {
+  petSheet = petImg;
+  petChroma = buildChromaCanvas(petImg);
+  petDraw();
+  requestAnimationFrame(petLoop);
+  // Auto-cycle every 4s
+  petAutoCycle();
+  setInterval(petAutoCycle, 4000);
+};
+petImg.src = 'spritesheet.webp';
+
+// Pet drag
+let petDragData = null;
+const petContainer = document.getElementById('pet-container');
+petCanvas.addEventListener('pointerdown', (e) => {
+  petDragData = {
+    startX: e.clientX, startY: e.clientY,
+    origLeft: petContainer.offsetLeft, origTop: petContainer.offsetTop,
+  };
+  // Switch to absolute positioning on first drag
+  if (petContainer.style.position !== 'absolute' || !petContainer.style.left) {
+    const r = petContainer.getBoundingClientRect();
+    petContainer.style.position = 'absolute';
+    petContainer.style.left = r.left + 'px';
+    petContainer.style.top = r.top + 'px';
+    petContainer.style.bottom = 'auto';
+    petContainer.style.transform = 'none';
+    petDragData.origLeft = r.left;
+    petDragData.origTop = r.top;
+  }
+  petCanvas.setPointerCapture(e.pointerId);
+});
+petCanvas.addEventListener('pointermove', (e) => {
+  if (!petDragData) return;
+  const dx = e.clientX - petDragData.startX;
+  const dy = e.clientY - petDragData.startY;
+  petContainer.style.left = (petDragData.origLeft + dx) + 'px';
+  petContainer.style.top = (petDragData.origTop + dy) + 'px';
+});
+petCanvas.addEventListener('pointerup', () => { petDragData = null; });
+
+// ---------------------------------------------------------------------------
+// Settings controls wiring
+// ---------------------------------------------------------------------------
+
+// Pet toggle
+const togglePet = document.getElementById('toggle-pet');
+togglePet.addEventListener('change', () => {
+  petContainer.classList.toggle('hidden', !togglePet.checked);
+  saveSettings({ petVisible: togglePet.checked });
+});
+
+// Pet status toggle
+const togglePetStatus = document.getElementById('toggle-pet-status');
+togglePetStatus.addEventListener('change', () => {
+  document.getElementById('pet-status').style.display = togglePetStatus.checked ? 'block' : 'none';
+  saveSettings({ petStatusVisible: togglePetStatus.checked });
+});
+
+// Pet state selector
+const petStateSelect = document.getElementById('pet-state-select');
+petStateSelect.addEventListener('change', () => {
+  petManualState = petStateSelect.value;
+  if (petManualState !== 'auto') {
+    petSetState(petManualState);
+  }
+  saveSettings({ petState: petManualState });
+});
+
+// Language selector
+const langSelect = document.getElementById('lang-select');
+langSelect.addEventListener('change', () => {
+  const lang = langSelect.value;
+  saveSettings({ language: lang });
+  // Notify panel iframe about language change
+  const frame = document.getElementById('panel-frame');
+  if (frame.contentWindow) {
+    frame.contentWindow.postMessage({ type: 'cairn-dev-lang', lang }, '*');
+  }
+  updateDevLabels(lang);
+});
+
+// Width selector (in settings)
+const widthSelect = document.getElementById('width-select');
+widthSelect.addEventListener('change', () => {
+  setWidth(parseInt(widthSelect.value, 10));
+});
+
+// ---------------------------------------------------------------------------
+// i18n for dev chrome labels
+// ---------------------------------------------------------------------------
+const DEV_I18N = {
+  en: {
+    title: 'Cairn Panel — Dev Preview',
+    hint1: 'Panel renders on the right. Edit panel.html / panel.js, then refresh.',
+    petLabel: 'Desktop Pet',
+    langLabel: 'Language',
+    widthLabel: 'Panel Width',
+    petStatusLabel: 'Show Pet Status',
+    settingsTitle: 'Dev Settings',
+  },
+  zh: {
+    title: 'Cairn \u9762\u677F — \u5F00\u53D1\u9884\u89C8',
+    hint1: '\u9762\u677F\u5728\u53F3\u4FA7\u6E32\u67D3\u3002\u7F16\u8F91 panel.html / panel.js \u540E\u5237\u65B0\u5373\u53EF\u3002',
+    petLabel: '\u684C\u5BA0',
+    langLabel: '\u8BED\u8A00',
+    widthLabel: '\u9762\u677F\u5BBD\u5EA6',
+    petStatusLabel: '\u663E\u793A\u684C\u5BA0\u72B6\u6001',
+    settingsTitle: '\u5F00\u53D1\u8BBE\u7F6E',
+  },
+  ja: {
+    title: 'Cairn \u30D1\u30CD\u30EB \u2014 \u958B\u767A\u30D7\u30EC\u30D3\u30E5\u30FC',
+    hint1: '\u30D1\u30CD\u30EB\u306F\u53F3\u5074\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002panel.html / panel.js \u3092\u7DE8\u96C6\u5F8C\u3001\u30EA\u30ED\u30FC\u30C9\u3057\u3066\u304F\u3060\u3055\u3044\u3002',
+    petLabel: '\u30C7\u30B9\u30AF\u30C8\u30C3\u30D7\u30DA\u30C3\u30C8',
+    langLabel: '\u8A00\u8A9E',
+    widthLabel: '\u30D1\u30CD\u30EB\u5E45',
+    petStatusLabel: '\u30DA\u30C3\u30C8\u30B9\u30C6\u30FC\u30BF\u30B9\u8868\u793A',
+    settingsTitle: '\u958B\u767A\u8A2D\u5B9A',
+  },
+};
+
+function updateDevLabels(lang) {
+  const t = DEV_I18N[lang] || DEV_I18N.en;
+  document.querySelector('#workspace > div:first-child').textContent = t.title;
+  document.querySelector('#workspace > .hint').textContent = t.hint1;
+  document.querySelector('.settings-title').textContent = t.settingsTitle;
+  // Settings labels
+  const labels = document.querySelectorAll('.settings-label span');
+  if (labels[0]) labels[0].textContent = t.petLabel;
+  if (labels[1]) labels[1].textContent = t.langLabel;
+  if (labels[2]) labels[2].textContent = t.widthLabel;
+  if (labels[3]) labels[3].textContent = t.petStatusLabel;
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'n' || e.key === 'N') setWidth(320);
+  if (e.key === 'd' || e.key === 'D') setWidth(420);
+  if (e.key === 'w' || e.key === 'W') setWidth(520);
+  if (e.key === 's' || e.key === 'S') settingsBtn.click();
+});
+
+// ---------------------------------------------------------------------------
+// Restore saved settings
+// ---------------------------------------------------------------------------
+const saved = loadSettings();
+if (saved.panelWidth) setWidth(saved.panelWidth);
+if (saved.petVisible === false) {
+  togglePet.checked = false;
+  petContainer.classList.add('hidden');
+}
+if (saved.petStatusVisible) {
+  togglePetStatus.checked = true;
+  document.getElementById('pet-status').style.display = 'block';
+} else {
+  document.getElementById('pet-status').style.display = 'none';
+}
+if (saved.petState && saved.petState !== 'auto') {
+  petManualState = saved.petState;
+  petStateSelect.value = saved.petState;
+  petSetState(saved.petState);
+}
+if (saved.language) {
+  langSelect.value = saved.language;
+  updateDevLabels(saved.language);
+}
+</script>
+
+</body>
+</html>
