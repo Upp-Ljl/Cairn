@@ -364,6 +364,10 @@ function spawnModeAWorker(input, opts) {
     // session_id persistence specifically, hook payload arrives slightly
     // earlier than `result` event, which closes a small race window
     // where the panel could miss a fresh session before exit.
+    // Tracks whether the Stop hook fired for this spawn + persisted the
+    // session_id. If yes, the result-event fallback below MUST NOT
+    // overwrite (see onEvent comment for full failure mode).
+    let sessionPersistedFromHook = false;
     const persistSessionIfNew = (sid) => {
       if (!sid || typeof sid !== 'string') return;
       if (!db || !planIdForResume) return;
@@ -413,6 +417,17 @@ function spawnModeAWorker(input, opts) {
           has_last_text: !!(turnPayload && turnPayload.last_assistant_text),
         });
         persistSessionIfNew(turnPayload && turnPayload.session_id);
+        // CEO 2026-05-15 fix: once a hook turn-done has authoritatively
+        // captured the session_id, the result-event fallback below
+        // MUST NOT overwrite. Otherwise: hook gives fresh session
+        // (e.g. dd0fe67f), then result event echoes back the OLD
+        // --resume id (e.g. 92c78a86 from yesterday) and clobbers
+        // session-store → next step's spawn resumes the wrong
+        // (often dead) session → CC's MCP detaches mid-session →
+        // CC自由发挥 instead of Mode A protocol → step never
+        // advances. Real-world repro: this run, step 1, log
+        // double-persist at 10:34:38.
+        sessionPersistedFromHook = !!(turnPayload && turnPayload.source === 'hook' && turnPayload.session_id);
       },
       onEvent: (ev) => {
         // --- Budget check (Harness Phase 1) ---
@@ -442,6 +457,10 @@ function spawnModeAWorker(input, opts) {
         // Primary path is onTurnDone above; this catches old-style
         // result events when hook events are unavailable (CC version
         // mismatch). Idempotent via persistSessionIfNew.
+        // CEO 2026-05-15 fix: skip if hook already captured. Result
+        // event's session_id can be the OLD --resume id (CC echoes
+        // it back) which would clobber the fresh hook id.
+        if (sessionPersistedFromHook) return;
         if (!ev || ev.type !== 'result') return;
         if (typeof ev.session_id !== 'string' || !ev.session_id) return;
         persistSessionIfNew(ev.session_id);
