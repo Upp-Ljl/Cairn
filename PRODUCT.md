@@ -111,6 +111,10 @@ Cairn 现在 = 5 层叠加，不是 5 个 phase。每层都可独立讨论，但
    - **v4 子句 #8c**：v0 形态明确是 *试验*：v2 才考虑全功能 multi-user（届时再评估 auth / sync / conflict）。Mode C 不引入"团队协作 SaaS 化"的任何要素。
    - 反定义内核**不松**：不做共享 daemon、不做 cross-machine auth、不做 PM SaaS 化、不做 cloud sync 默认开。
 9. **不是 v1 那种"用户的 agent 化身"**——floating marker 是 ambient 状态显示（schema → sprite 动画契约 §8.5），不接受开发对话、不替 agent 写代码
+10. **不是任何引擎的插件**——不是 Claude Code plugin、不是 Cursor extension、不是 Aider plugin、不是 VS Code 扩展（**v4.1 子句 · CEO 鸭总 2026-05-15 lock**）。Cairn 是 daemon-class 本机一等公民，坐在所有 agents **之下**而不是寄生在某个 agent **之上**。
+    - **判定**：如果一个设计提案让 Cairn 的 surface（panel / tray / MCP server / CLI）变成"装在 CC 里 / 装在 Cursor 里 / 装在 VS Code 里"才能用，直接 veto。Cairn 自己起一个 daemon，CC 关了 / Cursor 没装 / VS Code 卸了——Cairn 都还在跑，因为它管的是项目级 multi-agent 状态而不是某个 agent 的能力扩展。
+    - **反例**：`anthropics/knowledge-work-plugins` 系列的 product-management plugin (`/write-spec` / `/roadmap-update` / `/brainstorm` 等 slash commands) 是典型的 CC plugin 形态——state 在 CC session JSONL 里、surface 是 CC TUI、CC 重启状态丢。Cairn 是它的**反面**：state 在 `~/.cairn/cairn.db` 8 个 host-level objects、surface 是独立桌面 panel、CC 重启 Cairn 状态完整保留。功能层 zero overlap，positioning 不可拉近。
+    - 反定义内核**不松**：不分发到任何插件 marketplace、不依赖任何 agent 的 plugin/extension 机制运行、不把 Cairn 的核心能力（kernel state / panel / MCP server）藏进任何 agent 的容器里。
 
 ### 1.3.cockpit Mentor 精确边界（v4 cockpit patch · 2026-05-12）
 

@@ -16,7 +16,8 @@
 
 You write code in **Cursor / Codex / Claude Code / Kiro**. Cairn does **not** replace those — it's the surface next to them that organizes the agent activity they produce. Each agent assumes it's the only one running: they share no file locks, no state, no message bus, no cross-session memory. Cairn fills that gap with a coordination kernel underneath, and surfaces it to you through a side panel that reads like Activity Monitor or `journalctl --follow`, not like Jira / Linear / Cursor.
 
-- **Cairn does not write code.** It does not decompose tasks. It does not orchestrate a lead-subagent. It is not a Cursor clone, not a Jira/Linear clone, not a "plain MCP service".
+- **Cairn does not write code.** It does not decompose tasks. It does not orchestrate a lead-subagent. It is not a Cursor clone, not a Jira/Linear clone, not a "plain MCP service", **not any engine's plugin** (not a Claude Code plugin, not a Cursor extension, not a VS Code add-on — Cairn is daemon-class, runs whether or not any specific agent is installed; see PRODUCT.md §1.3 #10).
+- **Customize by editing text, not code.** Per-project behavior (Mode A mentor scope, plan-shape guidance, hard constraints) lives in a single `CAIRN.md` file at the project root. Cockpit settings (mode, escalation thresholds, auto-ship) live in `~/.cairn/projects.json`. Non-developers can shape Cairn without touching JS / SQL / configs scattered across the repo.
 - **Two layers, one product:**
   - **Product layer** — desktop side panel, tray status icon, ambient floating marker, Live Run Log. What the user sees.
   - **Kernel layer** — host-level multi-agent coordination kernel; 8 host-level state objects (`processes` / `tasks` / `dispatch_requests` / `scratchpad` / `checkpoints` / `conflicts` / `blockers` / `outcomes`); 29 MCP tools; agent-readable / agent-writable. The supporting infrastructure.
