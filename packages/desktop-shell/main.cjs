@@ -75,6 +75,8 @@ const recoverySummary    = require('./recovery-summary.cjs');
 const coordinationSignals = require('./coordination-signals.cjs');
 const managedLoopHandlers = require('./managed-loop-handlers.cjs');
 const mentorHandler = require('./mentor-handler.cjs');
+const mentorCollect = require('./mentor-collect.cjs');
+const mentorProjectProfile = require('./mentor-project-profile.cjs');
 // Bootstrap (Phase 1, 2026-05-14): install-bridge spawns `cairn install`
 // in --json mode; cairn-md-drafter produces a haiku-fallback CAIRN.md so
 // the panel's "＋ Add project" is one click end-to-end.
@@ -1020,7 +1022,14 @@ ipcMain.handle('get-projects-list', () => getProjectsList());
 // Cockpit redesign (panel-cockpit-redesign Phase 1) — single-project payload.
 // Strict read-only. Used by Module 1-5 renderers.
 // ---------------------------------------------------------------------------
-ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
+// Per-project TTL cache for mentor signal-pill collection. Panel polls
+// get-cockpit-state every ~1s; collectMentorSignals does git + fs ops
+// (~100-500ms on a warm repo). A 5s cache keeps the pills fresh-enough
+// while avoiding redundant git spawns each tick.
+const _mentorSignalsCache = new Map(); // projectId -> { result, expiresAt }
+const _MENTOR_SIGNALS_TTL_MS = 5000;
+
+ipcMain.handle('get-cockpit-state', async (_e, projectId, opts) => {
   if (!projectId || typeof projectId !== 'string') {
     return cockpitState.emptyCockpitState(null, null, 'projectId_required');
   }
@@ -1068,8 +1077,42 @@ ipcMain.handle('get-cockpit-state', (_e, projectId, opts) => {
     // pill (planning / plan_pending / running / paused).
     mode_a_phase: settings.mode_a && settings.mode_a.phase,
   });
+  // Signal-cat refactor commit A wiring (2026-05-15): collect mentor
+  // signals so cockpit-state.buildCockpitState can populate
+  // state.mentor_signals for the STATUS pill row. Cached per-project
+  // for 5s to keep the 1s panel poll cheap. Skipped for legacy/unknown
+  // project_root since collectMentorSignals needs a real path.
+  let mentorSignalsResult = null;
+  if (proj.project_root && proj.project_root !== '(unknown)') {
+    const cached = _mentorSignalsCache.get(projectId);
+    const nowMs = Date.now();
+    if (cached && cached.expiresAt > nowMs) {
+      mentorSignalsResult = cached.result;
+    } else {
+      try {
+        const profile = mentorProjectProfile.loadProfile(entry.db, proj);
+        mentorSignalsResult = await mentorCollect.collectMentorSignals(projectId, {
+          project_root: proj.project_root,
+          signal_overrides: (profile && profile.signal_overrides) || {},
+        });
+        _mentorSignalsCache.set(projectId, {
+          result: mentorSignalsResult,
+          expiresAt: nowMs + _MENTOR_SIGNALS_TTL_MS,
+        });
+      } catch (e) {
+        cairnLog.warn('main', 'cockpit_state_mentor_signals_failed', {
+          project_id: projectId,
+          message: (e && e.message) || String(e),
+        });
+        mentorSignalsResult = null;
+      }
+    }
+  }
+  const mergedOpts = Object.assign({}, opts || {}, {
+    mentor_signals_result: mentorSignalsResult,
+  });
   const payload = cockpitState.buildCockpitState(
-    entry.db, entry.tables, projForCockpit, goalText, agentIds, opts || {},
+    entry.db, entry.tables, projForCockpit, goalText, agentIds, mergedOpts,
   );
   // 2026-05-14 fix: surface the FULL goal object so the panel's "✎ 编辑"
   // entry point can pre-fill the editor with title + desired_outcome
