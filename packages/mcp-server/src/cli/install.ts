@@ -20,6 +20,13 @@ export interface InstallOptions {
   mcpServerEntry: string;  // absolute path to mcp-server/dist/index.js
   precommitScript: string; // absolute path to daemon/scripts/cairn-precommit-check.mjs
   petLauncherTarget: string; // absolute path to packages/desktop-shell
+  /**
+   * Optional override for the home directory used when bootstrapping
+   * `~/.cairn/skills/*.md` defaults (Phase 1 of skill externalisation,
+   * analysis 2026-05-15-mentor-pattern). Production leaves this unset —
+   * tests pass a tmpdir to keep HOME clean.
+   */
+  homeDir?: string;
   skipExistenceCheck?: boolean;
 }
 
@@ -39,6 +46,18 @@ export interface InstallResult {
    * means a non-cairn skill of the same name was found and left alone.
    */
   cairnAwareSkillAction: 'created' | 'replaced' | 'preserved' | 'skipped';
+  /**
+   * Phase 1 (2026-05-15): bootstrap `~/.cairn/skills/*.md` from the
+   * embedded defaults shipped in `packages/desktop-shell/skills-defaults`
+   * so non-developer users can edit Cairn's prompt rubrics without
+   * touching code. List of skill filenames written this run; empty if
+   * every default was already present (idempotent re-run).
+   */
+  skillsBootstrap: {
+    copied: string[];
+    skipped: string[];
+    errors: Array<{ name: string; error: string }>;
+  };
   warnings: string[];
 }
 
@@ -487,6 +506,7 @@ export function runInstall(opts: InstallOptions): InstallResult {
       petLauncherAction: 'preserved',
       cairnMdAction: 'skipped',
       cairnAwareSkillAction: 'skipped',
+      skillsBootstrap: { copied: [], skipped: [], errors: [] },
       warnings: [`Not a git repository: ${opts.targetDir}`],
     };
   }
@@ -664,6 +684,25 @@ export function runInstall(opts: InstallOptions): InstallResult {
     warnings.push(`Failed to install cairn-aware skill: ${(e as Error).message}`);
   }
 
+  // ------------------------------------------------------------------
+  // 8. Bootstrap `~/.cairn/skills/` from packages/desktop-shell/skills-defaults
+  //
+  // Phase 1 of the skill externalisation work (analysis 2026-05-15-
+  // mentor-pattern-from-plugin). Drops the three runtime-loaded skill
+  // markdown files (plan-shape / mentor-recommendation / handoff-protocol)
+  // into the user's home so they can edit Cairn's quality bar without
+  // touching code. Idempotent — never overwrites an existing user file.
+  // ------------------------------------------------------------------
+  const skillsBootstrap = bootstrapHomeSkillsDir({
+    shellDir: opts.petLauncherTarget,
+    homeDir: opts.homeDir || os.homedir(),
+  });
+  if (skillsBootstrap.errors.length > 0) {
+    for (const e of skillsBootstrap.errors) {
+      warnings.push(`Skill bootstrap warning (${e.name}): ${e.error}`);
+    }
+  }
+
   return {
     ok: true,
     mcpJsonAction,
@@ -671,8 +710,65 @@ export function runInstall(opts: InstallOptions): InstallResult {
     petLauncherAction,
     cairnMdAction,
     cairnAwareSkillAction,
+    skillsBootstrap,
     warnings,
   };
+}
+
+/**
+ * Copy `<shellDir>/skills-defaults/*.md` into `<homeDir>/.cairn/skills/`,
+ * skipping any file the user has already edited. Idempotent: a clean
+ * re-run produces `copied: []`. See `packages/desktop-shell/skills-loader.cjs`
+ * for the runtime loader the user's edits feed into.
+ *
+ * Implemented inline here (not via require of the .cjs loader) so this
+ * file stays free of Electron / desktop-shell coupling — install.ts is
+ * mcp-server-side.
+ */
+function bootstrapHomeSkillsDir(args: { shellDir: string; homeDir: string }):
+  { copied: string[]; skipped: string[]; errors: Array<{ name: string; error: string }> } {
+  const out: { copied: string[]; skipped: string[]; errors: Array<{ name: string; error: string }> } =
+    { copied: [], skipped: [], errors: [] };
+  const defaultsDir = path.join(args.shellDir, 'skills-defaults');
+  const userDir = path.join(args.homeDir, '.cairn', 'skills');
+
+  // If the defaults dir simply doesn't exist (e.g. test fixture with a
+  // bare fake-desktop-shell directory), treat as no-op silently rather
+  // than emitting a warning — every install path that has a real
+  // desktop-shell package will find the dir. Other read errors still
+  // surface as warnings via the `errors` array.
+  if (!fs.existsSync(defaultsDir)) {
+    return out;
+  }
+  let defaults: string[];
+  try {
+    defaults = fs.readdirSync(defaultsDir).filter(n => n.endsWith('.md'));
+  } catch (e) {
+    out.errors.push({ name: '<dir>', error: `defaults_dir_unreadable: ${(e as Error).message}` });
+    return out;
+  }
+  try {
+    fs.mkdirSync(userDir, { recursive: true });
+  } catch (e) {
+    out.errors.push({ name: '<dir>', error: `mkdir_failed: ${(e as Error).message}` });
+    return out;
+  }
+  for (const filename of defaults) {
+    const src = path.join(defaultsDir, filename);
+    const dst = path.join(userDir, filename);
+    try {
+      if (fs.existsSync(dst)) {
+        out.skipped.push(filename);
+        continue;
+      }
+      const text = fs.readFileSync(src, 'utf8');
+      fs.writeFileSync(dst, text, 'utf8');
+      out.copied.push(filename);
+    } catch (e) {
+      out.errors.push({ name: filename, error: (e as Error).message });
+    }
+  }
+  return out;
 }
 
 function tryChmod(filePath: string) {
@@ -757,6 +853,15 @@ function printReport(result: InstallResult, targetDir: string) {
     skipped: 'Skipped cairn-aware skill install',
   };
   lines.push(ok(skillLabel[result.cairnAwareSkillAction]));
+
+  const sb = result.skillsBootstrap;
+  if (sb) {
+    if (sb.copied.length > 0) {
+      lines.push(ok(`Bootstrapped ~/.cairn/skills/: ${sb.copied.join(', ')}`));
+    } else if (sb.skipped.length > 0 && sb.errors.length === 0) {
+      lines.push(ok(`Preserved ~/.cairn/skills/ (${sb.skipped.length} skill file(s) already present)`));
+    }
+  }
 
   if (result.warnings.length > 0) {
     lines.push('');

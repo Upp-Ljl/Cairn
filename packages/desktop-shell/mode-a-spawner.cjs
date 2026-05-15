@@ -46,6 +46,18 @@ const streamLauncher = require('./claude-stream-launcher.cjs');
 // for --resume. Lookup before spawn, persist on result event.
 const sessionStore = require('./mode-a-session-store.cjs');
 const cairnLog = require('./cairn-log.cjs');
+const skillsLoader = require('./skills-loader.cjs');
+
+// 5-line graceful-degrade fallback when ~/.cairn/skills/handoff-protocol.md
+// AND the embedded default are both unreadable. Keeps Mode A spawning
+// with the minimum kernel-contract instructions CC needs to participate.
+const HANDOFF_PROTOCOL_FALLBACK = [
+  '## What to do (fallback — handoff-protocol skill not loadable)',
+  '1. Call `cairn.session.name` with a ≤50-char title of what you\'re about to do.',
+  '2. `cairn.scratchpad.list` for keys `agent_inbox/<your-agent-id>/*`; read + delete each.',
+  '3. Before work: `cairn.task.create({ intent, metadata:{ dispatch_id } })`. After: `cairn.task.submit_for_review` then `cairn.outcomes.evaluate`.',
+  '4. Do NOT ask the user — if stuck, call `cairn.task.block(question)` and Mentor will answer.',
+].join('\n');
 
 const SPAWN_COOLDOWN_MS = 60_000;
 
@@ -69,7 +81,7 @@ function _newAgentId() {
  * across many turns is a follow-up (will need persistent CC
  * sessions, not --print one-shots).
  */
-function buildBootPrompt(project, plan, agentId, profile, dispatchId) {
+function buildBootPrompt(project, plan, agentId, profile, dispatchId, opts) {
   const step = plan && Array.isArray(plan.steps) && plan.steps[plan.current_idx || 0];
   const stepLabel = step ? step.label : '(next plan step)';
   const projectRoot = project.project_root || project.path || '(unknown)';
@@ -114,16 +126,33 @@ function buildBootPrompt(project, plan, agentId, profile, dispatchId) {
       lines.push('');
     }
   }
+  // Skill-loaded handoff protocol (editable at ~/.cairn/skills/handoff-protocol.md).
+  // Falls through to HANDOFF_PROTOCOL_FALLBACK if neither user nor
+  // default skill file is readable. Per-step dynamic context (agent_id,
+  // step label, dispatch_id, step counter) is appended below — those
+  // are runtime values, not part of the skill content.
+  const o = opts || {};
+  let protocolBlock;
+  try {
+    const skill = skillsLoader.loadSkill('handoff-protocol', { home: o.home });
+    protocolBlock = (skill && skill.ok && typeof skill.text === 'string' && skill.text.trim())
+      ? skill.text
+      : HANDOFF_PROTOCOL_FALLBACK;
+  } catch (_e) {
+    protocolBlock = HANDOFF_PROTOCOL_FALLBACK;
+  }
+
   lines.push(
-    '## What to do (in this single turn)',
+    protocolBlock,
     '',
-    '1. **Call `cairn.session.name`** with name="Mode A · ' +
-      String(stepLabel).slice(0, 40) + '" so 面板能看到你在干啥。',
-    '2. **Read inbox**: 调 `cairn.scratchpad.list`，找以 `agent_inbox/' +
-      agentId + '/` 开头的 key。可能为 0 条 — 那就直接看下面 "step to execute"。',
-    '3. **For each inbox entry**: 调 `cairn.scratchpad.read` 拿完整内容（含 dispatch_id），',
-    '   然后调 `cairn.scratchpad.delete` 标记已消费。',
-    '4. **Execute step**: 步骤目标 ↓',
+    '<!-- RUNTIME-CONTEXT BELOW (injected by mode-a-spawner; do not duplicate in skill md) -->',
+    '## Runtime context (this turn)',
+    '',
+    '- Your `agent_id`: `' + agentId + '` (inbox key prefix: `agent_inbox/' + agentId + '/`)',
+    '- Suggested `session.name`: "Mode A · ' + String(stepLabel).slice(0, 40) + '"',
+    dispatchId
+      ? '- This step has dispatch_id `' + dispatchId + '` — pass it as `metadata.dispatch_id` when you call `cairn.task.create`.'
+      : '- No dispatch_id available for this step.',
     '',
     '## Step to execute',
     '',
@@ -131,16 +160,6 @@ function buildBootPrompt(project, plan, agentId, profile, dispatchId) {
     '',
     '这是 Mode A 计划里的第 ' + ((plan && plan.current_idx || 0) + 1) +
       ' 步（共 ' + ((plan && plan.steps && plan.steps.length) || '?') + ' 步）。',
-    '',
-    '## Required protocol',
-    '',
-    '- 在动手之前先调 `cairn.task.create` 创建一个 task 把这一步绑定到 kernel state',
-    dispatchId
-      ? '  **重要**: metadata 里必须带 `dispatch_id`: `cairn.task.create({ intent: "...", metadata: { dispatch_id: "' + dispatchId + '" } })`'
-      : '',
-    '- 干完之后调 `cairn.task.submit_for_review`，然后 `cairn.outcomes.evaluate`',
-    '  with status="PASS" 如果你认为目标达成，否则 status="FAILED" 加一句 reasoning',
-    '- 不要问用户 — Mode A 的承诺是"走开就行"。卡住了走 cairn.task.block 让 Mentor 答',
     '',
     '开干。',
   );

@@ -54,6 +54,19 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const llmClient = require('./llm-client.cjs');
 const cairnLog = require('./cairn-log.cjs');
+const skillsLoader = require('./skills-loader.cjs');
+
+// 5-line graceful-degrade fallback when both ~/.cairn/skills/plan-shape.md
+// and skills-defaults/plan-shape.md are unreadable. Keeps Scout working
+// with a minimal milestone-shape rule set. Matches the analysis §3.1
+// "5 lines max — graceful degrade" requirement.
+const PLAN_SHAPE_FALLBACK = [
+  '## Hard rules (fallback — plan-shape skill not loadable)',
+  '- 3-8 milestone steps, each 30min-2hr scope.',
+  '- step.label = milestone (not specific file/line actions — that\'s CC\'s job).',
+  '- Order steps by dependency. needs_user_confirm:true for anything in CAIRN.md Plan Authority.',
+  '- Output a single fenced JSON block; minimal surrounding prose.',
+].join('\n');
 
 const SCOUT_PREFIX = 'scout-';
 const DEFAULT_SCOUT_TIMEOUT_MS = parseInt(process.env.CAIRN_MODE_A_SCOUT_TIMEOUT_MS || '', 10) || 60_000;
@@ -160,7 +173,7 @@ function gatherProjectContext(projectRoot) {
  * tools, no follow-up turns. Mentor has NO filesystem access via the
  * LLM — we pre-load project context above and inject inline.
  */
-function buildScoutPrompt({ goal, projectRoot, projectId, guidance, projectCtx }) {
+function buildScoutPrompt({ goal, projectRoot, projectId, guidance, projectCtx, skillHome }) {
   const goalTitle = typeof goal === 'string' ? goal : (goal && goal.title) || '(no title)';
   const desiredOutcome = (goal && goal.desired_outcome) || '';
   const criteria = (goal && Array.isArray(goal.success_criteria)) ? goal.success_criteria.filter(s => typeof s === 'string' && s.trim()) : [];
@@ -227,6 +240,18 @@ function buildScoutPrompt({ goal, projectRoot, projectId, guidance, projectCtx }
     lines.push('');
   }
 
+  // Skill-loaded plan-shape rubric (editable at ~/.cairn/skills/plan-shape.md).
+  // Failure → fall through to 5-line PLAN_SHAPE_FALLBACK.
+  let planShapeBlock;
+  try {
+    const skill = skillsLoader.loadSkill('plan-shape', { home: skillHome });
+    planShapeBlock = (skill && skill.ok && typeof skill.text === 'string' && skill.text.trim())
+      ? skill.text
+      : PLAN_SHAPE_FALLBACK;
+  } catch (_e) {
+    planShapeBlock = PLAN_SHAPE_FALLBACK;
+  }
+
   lines.push(
     '## Output (JSON only)',
     '',
@@ -247,14 +272,7 @@ function buildScoutPrompt({ goal, projectRoot, projectId, guidance, projectCtx }
     '}',
     '```',
     '',
-    '## Hard rules',
-    '',
-    '- 3-8 个 step，每步 30min-2hr 体量。太大就拆，太小就合并。',
-    '- step.label 写 milestone（"加上 N 个牌桌"），**不要**写具体行动（"在 server.js 第 42 行加 if 判断"）—— 后者是 CC 的事。',
-    '- step 顺序按依赖排：A 是 B 的前置就 A 先。',
-    '- 任何 step 落在 CAIRN.md Plan Authority 范围内 → `needs_user_confirm: true`。',
-    '- 不要把 CAIRN.md constraints 重写成 step（执行 CC 也会读 CAIRN.md）。',
-    '- **只输出 fenced JSON**，前后可以有 1-2 句简短解释，但不要写大段叙述。',
+    planShapeBlock,
     '',
     '开始。',
   );
@@ -364,6 +382,7 @@ async function runScout(input, opts) {
     projectId: input.projectId,
     guidance,
     projectCtx,
+    skillHome: o.home,
   });
 
   const meta = {

@@ -80,6 +80,7 @@ const mentorHandler = require('./mentor-handler.cjs');
 // the panel's "＋ Add project" is one click end-to-end.
 const installBridge   = require('./install-bridge.cjs');
 const cairnMdDrafter  = require('./cairn-md-drafter.cjs');
+const skillsLoader    = require('./skills-loader.cjs');
 
 // ---------------------------------------------------------------------------
 // Tray icon assets (base64 PNG, 16x16, 1px border + solid fill)
@@ -3088,6 +3089,24 @@ ipcMain.on('do-drag', (_e, { mouseX, mouseY }) => {
 // ---------------------------------------------------------------------------
 
 app.whenReady().then(() => {
+  // Skill externalisation Phase 1 (2026-05-15): drop the embedded skill
+  // defaults into ~/.cairn/skills/ if they're not there yet. Idempotent —
+  // never overwrites a user-edited file. Failures are non-fatal (skill
+  // loader has a 5-line graceful-degrade fallback baked into each caller).
+  try {
+    const bs = skillsLoader.bootstrapSkillsDir({ force: false });
+    if (bs && bs.copied && bs.copied.length > 0) {
+      cairnLog.info('main', 'skills_bootstrap', { copied: bs.copied });
+    }
+    if (bs && bs.errors && bs.errors.length > 0) {
+      cairnLog.warn('main', 'skills_bootstrap_errors', { errors: bs.errors });
+    }
+  } catch (e) {
+    cairnLog.warn('main', 'skills_bootstrap_threw', {
+      message: (e && e.message) || String(e),
+    });
+  }
+
   // Load (or bootstrap) the registry, then open one read handle per
   // unique db_path. The legacy desktop-shell.json is read by registry
   // bootstrap if projects.json doesn't exist yet, producing a single

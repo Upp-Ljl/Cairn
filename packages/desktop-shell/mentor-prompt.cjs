@@ -18,7 +18,18 @@
  *
  * See mentor-layer-spec.md for the full reasoning chain, signal whitelist,
  * schema invariants, and boundary rules.
+ *
+ * Skill externalisation (Phase 1, 2026-05-15):
+ *   - 9 STRICT RULES (`buildHardRules`) STAY in code — security boundary,
+ *     NOT user-tunable. See analysis §3.2.
+ *   - Output-shape block (`buildOutputFenceInstruction`) is loaded from
+ *     `~/.cairn/skills/mentor-recommendation.md` (user override) or
+ *     embedded default `skills-defaults/mentor-recommendation.md`.
+ *     A 5-line graceful-degrade fallback fires if neither is readable.
+ *   - Loader is `skills-loader.cjs`; pure fs read, no side effects.
  */
+
+const skillsLoader = require('./skills-loader.cjs');
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -112,75 +123,34 @@ function buildHardRules() {
 
 // ─── Output fence instruction builder ──────────────────────────────────────
 
-function buildOutputFenceInstruction(maxItems) {
+// 5-line graceful-degrade fallback for when both
+// ~/.cairn/skills/mentor-recommendation.md and skills-defaults/mentor-
+// recommendation.md are unreadable. Keeps Mentor's output contract alive.
+// Schema validator still enforces the full contract on parsed output.
+function _mentorOutputFallback(maxItems) {
   return [
-    '# OUTPUT FORMAT (MANDATORY)',
-    '',
-    'Emit, as the LAST thing in your response, the header',
-    '`' + MENTOR_OUTPUT_HEADER + '` followed immediately by a fenced',
-    'JSON code block. Nothing must appear after the closing fence.',
-    '',
-    'Maximum ' + maxItems + ' work item(s).',
-    '',
-    MENTOR_OUTPUT_HEADER,
-    '```json',
-    '{',
-    '  "work_items": [',
-    '    {',
-    '      "id": "m_<12 lowercase hex>",',
-    '      "description": "<≤200 chars — MUST NOT repeat IDs already in evidence_refs>",',
-    '      "why": {',
-    '        "impact": "<≤100 chars — one sentence on value or cost-of-not-doing>",',
-    '        "cost": "L|M|H",',
-    '        "risk": "L|M|H",',
-    '        "urgency": "L|M|H"',
-    '      },',
-    '      "stakeholders": {',
-    '        "owner": "agent|human|either",',
-    '        "reviewer": "agent|human|either",',
-    '        "notify": ["<role/agent-kind ≤64 chars — NO real names>"]',
-    '      },',
-    '      "next_action": "<one of the 7 allowed values below>",',
-    '      "evidence_refs": [',
-    '        { "kind": "<task|candidate|blocker|outcome|iteration|commit|doc>", "ref": "<id or path>" }',
-    '      ],',
-    '      "confidence": 0.00',
-    '    }',
-    '  ]',
-    '}',
-    '```',
-    '',
-    'Allowed next_action values (closed set — use verbatim):',
-    NEXT_ACTION_VALUES.map(v => '  - "' + v + '"').join('\n'),
-    '',
-    'Allowed evidence_refs.kind values (closed set):',
-    '  ' + EVIDENCE_KIND_VALUES.map(k => '"' + k + '"').join(', '),
-    '',
-    'SCHEMA INVARIANTS (spec §3.5) — enforce all five:',
-    '',
-    '  #1  description MUST NOT repeat IDs already present in evidence_refs.',
-    '      IDs belong in refs; description is for prose.',
-    '',
-    '  #2  stakeholders.notify[] MUST contain only agent role / kind strings',
-    '      (e.g. "worker", "reviewer", "codex-session-α"). Real human names',
-    '      or account handles are FORBIDDEN.',
-    '',
-    '  #3  evidence_refs[].kind MUST be one of the closed set above.',
-    '      Do NOT invent new kind values.',
-    '',
-    '  #4  Items with confidence < 0.5 MUST be placed at the TAIL of the',
-    '      work_items array, OR their next_action MUST be',
-    '      "escalate to human review". Never front-load low-confidence picks.',
-    '',
-    '  #5  INVARIANT #5 ENFORCEMENT: if your intended next_action would',
-    '      semantically include merge / push / accept / reject / rollback,',
-    '      rewrite it as "escalate to human review". This is unconditional.',
-    '',
-    'ORDER: output items ranked highest priority first. Low-confidence',
-    '(confidence < 0.5) items must appear LAST in the array (invariant #4).',
-    '',
-    'NOTHING AFTER THE CLOSING FENCE. No commentary, no follow-up prose.',
+    '# OUTPUT FORMAT (fallback — mentor-recommendation skill not loadable)',
+    'Emit `' + MENTOR_OUTPUT_HEADER + '` followed by one fenced ```json block; nothing after the closing fence.',
+    'Schema: { work_items: [...] } with ≤ ' + maxItems + ' items. Each item: id, description, why{impact,cost,risk,urgency}, stakeholders{owner,reviewer,notify[]}, next_action, evidence_refs[], confidence.',
+    'Invariant #4: confidence < 0.5 items go LAST or use next_action "escalate to human review".',
+    'Invariant #5: any merge/push/accept/reject/rollback intent MUST be rewritten as "escalate to human review".',
   ].join('\n');
+}
+
+function buildOutputFenceInstruction(maxItems, opts) {
+  const o = opts || {};
+  let body;
+  try {
+    const skill = skillsLoader.loadSkill('mentor-recommendation', { home: o.home });
+    if (skill && skill.ok && typeof skill.text === 'string' && skill.text.trim()) {
+      body = skill.text.replace(/\{\{\s*max_items\s*\}\}/g, String(maxItems));
+    } else {
+      body = _mentorOutputFallback(maxItems);
+    }
+  } catch (_e) {
+    body = _mentorOutputFallback(maxItems);
+  }
+  return body;
 }
 
 // ─── User question section ──────────────────────────────────────────────────
@@ -425,7 +395,7 @@ function generateMentorPrompt(input, opts) {
   const historySection  = renderPreviousTurns(opts && opts.previous_turns);
   const sigSection      = renderSignals(input.signals);
   const skeletonSection = renderSkeleton(input.ranked_skeleton, maxItems);
-  const outputFence     = buildOutputFenceInstruction(maxItems);
+  const outputFence     = buildOutputFenceInstruction(maxItems, { home: opts && opts.home });
 
   // ── Assemble ─────────────────────────────────────────────────────────
   const prompt_text = [
