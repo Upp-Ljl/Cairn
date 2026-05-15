@@ -59,6 +59,15 @@ html[data-cairn-theme="light"] {
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
+/* CDP debug 2026-05-15: html bg must be solid so Electron
+   BrowserWindow.backgroundColor (#1a1a1a, hardcoded main.cjs:549)
+   does NOT bleed through any transparent CSS stacking context.
+   Without this, light theme leaves panel content dark because the
+   window bg shows under transparent grandchildren. */
+html {
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
 body {
   font-family: var(--font);
   margin: 0;
