@@ -22,6 +22,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const { categoryToSignalKey } = require('./mentor-collect.cjs');
+
 const PROFILE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
@@ -61,6 +63,12 @@ function emptyProfile(absPath) {
     },
     constraints: [],
     known_answers: [],
+    // Optional `## Signals` section overrides. Keys are internal signal
+    // keys (docs/git/candidates/iterations/reports/kernel — see
+    // mentor-collect.cjs CATEGORY_ALIASES); values are booleans. Missing
+    // keys default to enabled (= true) at the collectMentorSignals layer.
+    // Empty object when CAIRN.md has no `## Signals` section.
+    signal_overrides: {},
     raw_sections: {},
   };
 }
@@ -356,6 +364,7 @@ const SECTION_SYNONYMS = {
   constraints: ['project constraints', 'constraints', 'project constraints (mentor + agent both follow)', '约束'],
   known_answers: ['known answers', '已知回答'],
   current_phase: ['current phase', 'current phase (auto-maintained, can be manually edited)', '当前阶段'],
+  signals: ['signals', 'signal overrides', 'signal sources', '信号源', '信号'],
 };
 
 function findSectionBody(sections, kind) {
@@ -367,6 +376,72 @@ function findSectionBody(sections, kind) {
     }
   }
   return '';
+}
+
+// ---------------------------------------------------------------------------
+// Signals section parser (2026-05-15)
+//
+// Optional `## Signals` (or `## Signal overrides` / `## 信号源`) section
+// lets the project author disable specific signal categories so Mentor
+// stops collecting them for this project. Bullet format:
+//
+//   ## Signals
+//   - ~~vcs-signal: off
+//   - ~~candidate-pipeline: on
+//   - worker-reports: false      # bare form (no ~~) is accepted
+//   - ~~issue-tracker: off       # unknown category → log warn, ignore
+//
+// Each bullet is `- <category>: <on|off>` where:
+//   - <category> uses the user-facing `~~category-placeholder` name
+//     (or bare form without the `~~` prefix). Maps to an internal signal
+//     key (docs/git/candidates/iterations/reports/kernel) via
+//     mentor-collect.cjs::categoryToSignalKey.
+//   - <value> is on/off/true/false/yes/no (case-insensitive).
+//
+// Returns an object keyed by internal signal key:
+//   { docs: true, git: false, candidates: true, ... }
+// Categories not listed are absent (caller treats absent as "default on").
+// Unknown categories are dropped with a console.warn (so authors see
+// typos in dev) but never crash the parse.
+//
+// Pure: no side effects, no I/O, no DB.
+// ---------------------------------------------------------------------------
+
+const _BOOL_TRUE  = new Set(['on', 'true', 'yes', 'enable', 'enabled', '1']);
+const _BOOL_FALSE = new Set(['off', 'false', 'no', 'disable', 'disabled', '0']);
+
+function parseSignalOverrides(body) {
+  const out = {};
+  if (!body) return out;
+  for (const bullet of extractBullets(body)) {
+    // Strip inline comments (anything after ` #` or `#` mid-bullet) — but
+    // be lenient: only strip if `#` is preceded by whitespace, otherwise
+    // it could be part of a name.
+    const cleaned = bullet.replace(/\s+#.*$/, '').trim();
+    if (!cleaned) continue;
+    const colonIdx = cleaned.indexOf(':');
+    if (colonIdx < 0) continue;
+    const rawKey = cleaned.slice(0, colonIdx).trim();
+    const rawVal = cleaned.slice(colonIdx + 1).trim().toLowerCase();
+    if (!rawKey || !rawVal) continue;
+    const internalKey = categoryToSignalKey(rawKey);
+    if (!internalKey) {
+      try {
+        // Non-fatal — author wrote a category we don't recognize.
+        // Surface via console.warn so it's visible in dev; production
+        // callers can ignore or pipe through cairnLog if desired.
+        // eslint-disable-next-line no-console
+        console.warn(`[mentor-project-profile] unknown signal category: ${rawKey}`);
+      } catch (_e) { /* ignore */ }
+      continue;
+    }
+    let boolVal;
+    if (_BOOL_TRUE.has(rawVal)) boolVal = true;
+    else if (_BOOL_FALSE.has(rawVal)) boolVal = false;
+    else continue; // unparseable value — drop
+    out[internalKey] = boolVal;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +488,7 @@ function scanCairnMd(filePath) {
 
   profile.constraints = extractBullets(findSectionBody(sections, 'constraints'));
   profile.known_answers = parseKnownAnswers(findSectionBody(sections, 'known_answers'));
+  profile.signal_overrides = parseSignalOverrides(findSectionBody(sections, 'signals'));
   // schema v2: `## Current phase` removed; "in flight" is panel-computed.
 
   return profile;
@@ -605,6 +681,7 @@ module.exports = {
   classifyAuthorityBullet,
   classifyIsBullet,
   parseKnownAnswers,
+  parseSignalOverrides, // 2026-05-15 — optional `## Signals` section
   parseCurrentPhase,    // schema-v1 legacy; no longer called by scanCairnMd
   extractProjectName,
   extractGoal,

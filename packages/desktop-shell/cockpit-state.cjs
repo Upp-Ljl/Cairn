@@ -68,10 +68,88 @@ const SUPPORTED_TABLES = [
 const profileMod = require('./mentor-project-profile.cjs');
 const modeALoop  = require('./mode-a-loop.cjs');
 const cairnLog   = require('./cairn-log.cjs');
+const mentorCollect = require('./mentor-collect.cjs');
 
 function sqlInList(arr) {
   if (!arr || arr.length === 0) return '(NULL)';
   return '(' + arr.map(() => '?').join(',') + ')';
+}
+
+// ---------------------------------------------------------------------------
+// Mentor signals summary — pure derivation (commit A of signal-cat-rest)
+// ---------------------------------------------------------------------------
+//
+// Given a {signals, meta} result from mentor-collect.collectMentorSignals,
+// returns a panel-friendly summary of which signal *categories* (user-facing
+// ~~category placeholder names per mentor-collect.CATEGORY_ALIASES) are
+// currently producing data versus missing.
+//
+// A signal counts as "available" when:
+//   - it is NOT in meta.failed_signals
+//   - AND the corresponding content body is non-empty:
+//        docs       → at least one file read
+//        git        → head sha present
+//        candidates → array non-empty
+//        iterations → array non-empty
+//        reports    → array non-empty
+//        kernel     → always available when not in failed (scaffold returns
+//                     well-formed zeros; "no tasks yet" is healthy idle)
+//
+// All other signal keys (failed or empty) end up in `missing`.
+//
+// Returned shape:
+//   { available: ['project-narrative', 'vcs-signal', ...],
+//     missing:   ['issue-tracker', ...] }
+//
+// The values are the bare category names (no `~~` prefix) — the panel
+// renders the prefix as a visual style choice, not a hard part of the name.
+//
+// @param  {{ signals?: object, meta?: { failed_signals?: Array<{source:string}> } } | null} result
+// @returns {{ available: string[], missing: string[] }}
+function deriveMentorSignalsSummary(result) {
+  const empty = { available: [], missing: [] };
+  if (!result || typeof result !== 'object') return empty;
+
+  const signals = result.signals || {};
+  const meta = result.meta || {};
+  const failedList = Array.isArray(meta.failed_signals) ? meta.failed_signals : [];
+  const failedSet = new Set(failedList.map(f => (f && f.source) || '').filter(Boolean));
+
+  const available = [];
+  const missing = [];
+
+  for (const key of mentorCollect.KNOWN_SIGNAL_KEYS) {
+    const cat = mentorCollect.CATEGORY_ALIASES[key];
+    if (!cat) continue;
+    if (failedSet.has(key)) { missing.push(cat); continue; }
+
+    const body = signals[key];
+    let isAvailable = false;
+    switch (key) {
+      case 'docs':
+        isAvailable = !!(body && Array.isArray(body.files) && body.files.length > 0);
+        break;
+      case 'git':
+        isAvailable = !!(body && typeof body.head === 'string' && body.head.length > 0);
+        break;
+      case 'candidates':
+      case 'iterations':
+      case 'reports':
+        isAvailable = Array.isArray(body) && body.length > 0;
+        break;
+      case 'kernel':
+        // Scaffold succeeds even when all counters are zero — treat as
+        // available unless explicitly failed. "Zero tasks running" is a
+        // healthy state, not a missing signal.
+        isAvailable = !!body && typeof body === 'object';
+        break;
+      default:
+        isAvailable = !!body;
+    }
+    if (isAvailable) available.push(cat); else missing.push(cat);
+  }
+
+  return { available, missing };
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +182,7 @@ function emptyCockpitState(project, dbPath, reason) {
     activity: [],
     checkpoints: [],
     escalations: [],
+    mentor_signals: { available: [], missing: [] },
     ts: Date.now(),
   };
 }
@@ -1068,6 +1147,22 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     modeAPhase: project.mode_a_phase || null,
   });
 
+  // Signal-cat refactor commit A (2026-05-15): surface a panel-friendly
+  // summary of which signal categories (~~category placeholder names)
+  // are producing data vs missing for the STATUS pill row. Caller may
+  // pass a pre-collected result from mentor-collect.collectMentorSignals
+  // via opts.mentor_signals_result; otherwise default to empty arrays
+  // (panel hides the row entirely when both are empty).
+  let mentor_signals = { available: [], missing: [] };
+  if (o.mentor_signals_result) {
+    try {
+      mentor_signals = deriveMentorSignalsSummary(o.mentor_signals_result);
+    } catch (_e) {
+      cairnLog.warn('cockpit-state', 'mentor_signals_derive_failed', { message: (_e && _e.message) || String(_e) });
+      mentor_signals = { available: [], missing: [] };
+    }
+  }
+
   // Schema v2 CAIRN.md: panel surfaces the `## Whole` sentence as
   // Mentor's stable north-star line above the state strip. loadProfile
   // is mtime-gated so this is free on unchanged CAIRN.md.
@@ -1275,6 +1370,10 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
     checkpoints,
     escalations: allEscalations,
     todolist,
+    // Signal-cat refactor commit A (2026-05-15): {available, missing}
+    // arrays of ~~category placeholder names (without `~~` prefix).
+    // Panel STATUS pill row renders these. Empty arrays = row hidden.
+    mentor_signals,
     ts: now,
   };
 }
@@ -1302,4 +1401,8 @@ module.exports = {
   queryActivityFeed,
   queryTodoList,
   deriveAutopilotStatus,
+  // Signal-cat refactor commit A (2026-05-15): pure derivation helper +
+  // {available, missing} category-placeholder summary surfaced as
+  // state.mentor_signals.
+  deriveMentorSignalsSummary,
 };

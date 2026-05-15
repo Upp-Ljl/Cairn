@@ -594,6 +594,46 @@ body {
 }
 .cockpit-mode-a-plan-phase-pill.running { background: var(--accent-bg); color: var(--accent); }
 .cockpit-mode-a-plan-phase-pill.planning { background: var(--accent-bg); color: var(--accent); animation: dotPulse 1.5s ease-in-out infinite; }
+/* Signal-cat refactor commit A (2026-05-15) — STATUS pill row */
+.cockpit-signals-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 0 2px 0;
+  font-size: 11px;
+}
+.cockpit-signals-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cockpit-signals-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cockpit-signals-pills .pill {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.cockpit-signals-pills .pill.avail {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.cockpit-signals-pills .pill.missing {
+  background: var(--alert-bg);
+  color: var(--alert);
+  border: 1px solid var(--alert-bg);
+  cursor: help;
+}
 .cockpit-mode-a-plan-progress {
   font-size: 12px;
   color: var(--text-secondary);
@@ -2461,6 +2501,15 @@ code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; col
         <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
         <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
         <span class="cockpit-mentor-today" id="cockpit-mentor-today"></span>
+      </div>
+      <!-- Signal-cat refactor commit A (2026-05-15): pill row surfacing
+           which signal categories (~~category placeholder names per
+           mentor-collect.CATEGORY_ALIASES) are producing data right now
+           and which are missing. Hidden when both available + missing
+           are empty (no signal data computed yet). -->
+      <div class="cockpit-signals-row" id="cockpit-signals-row" hidden>
+        <span class="cockpit-signals-label">Signals:</span>
+        <span class="cockpit-signals-pills" id="cockpit-signals-pills"></span>
       </div>
       <!-- Mode A plan widget (MA-2b 2026-05-14). Only visible when mode=A
            and a plan exists. Read-only: shows current step + progress.

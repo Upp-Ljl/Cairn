@@ -4423,6 +4423,30 @@ function renderCockpit(state) {
     const lm = state.latest_mentor_nudge;
     lastCheckEl.textContent = lm && lm.timestamp ? `last nudge ${fmtAgo(lm.timestamp)}` : '';
   }
+  // Signal-cat refactor commit A (2026-05-15): STATUS pill row showing
+  // which signal categories (~~category placeholder names) are producing
+  // data right now vs missing. Hidden when state.mentor_signals is null
+  // or both arrays empty.
+  const signalsRowEl = document.getElementById('cockpit-signals-row');
+  const signalsPillsEl = document.getElementById('cockpit-signals-pills');
+  if (signalsRowEl && signalsPillsEl) {
+    const sig = state.mentor_signals || { available: [], missing: [] };
+    const avail = Array.isArray(sig.available) ? sig.available : [];
+    const missing = Array.isArray(sig.missing) ? sig.missing : [];
+    if (avail.length === 0 && missing.length === 0) {
+      signalsRowEl.hidden = true;
+      signalsPillsEl.innerHTML = '';
+    } else {
+      signalsRowEl.hidden = false;
+      const availHtml = avail.map(cat =>
+        `<span class="pill avail" title="signal producing data">~~${escapeHtml(cat)}</span>`
+      ).join('');
+      const missingHtml = missing.map(cat =>
+        `<span class="pill missing" title="configure in CAIRN.md signals.${escapeHtml(cat)} to enable">~~${escapeHtml(cat)}</span>`
+      ).join('');
+      signalsPillsEl.innerHTML = availHtml + missingHtml;
+    }
+  }
   if (todayEl) {
     const md = state.mentor_decisions;
     const total = md && md.total ? md.total : 0;
