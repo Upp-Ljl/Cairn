@@ -476,6 +476,78 @@ async function collectMentorSignals(projectId, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// Category-placeholder vocabulary (2026-05-15)
+// ---------------------------------------------------------------------------
+//
+// Cairn's outward-facing signal names use `~~category-placeholder` style
+// (per CC PM plugin analysis §4.1 — tool-agnostic categories rather than
+// product names). The internal mentor-collect.cjs signal keys
+// (docs/git/candidates/iterations/reports/kernel) remain stable for
+// backwards compat; the aliases below are the names Cairn surfaces to
+// users (panel pills, CAIRN.md `signals.*` keys, PRODUCT.md §6.5.1
+// signal philosophy doc).
+//
+// The mapping is intentionally many-to-many in principle, one-to-one in
+// practice today. Future additions (e.g. `~~issue-tracker` from GitHub
+// API, `~~prod-analytics` if we ever add it) just extend the map.
+//
+// Two helpers:
+//   - signalKeyToCategory(internalKey)  → '~~category' or null
+//   - categoryToSignalKey(categoryName) → internalKey or null
+//
+// These are pure lookups; no side-effects. `failed_signals` array entries
+// can be mapped to user-facing labels via signalKeyToCategory().
+
+const CATEGORY_ALIASES = Object.freeze({
+  docs:       'project-narrative',  // PRODUCT.md / README / TODO / CLAUDE.md / ARCHITECTURE.md
+  git:        'vcs-signal',         // head / branch / status / commits
+  candidates: 'candidate-pipeline', // candidates JSONL → Mode B work queue
+  iterations: 'iteration-history',  // iterations JSONL → past worker runs
+  reports:    'worker-reports',     // structured worker self-reports
+  kernel:     'kernel-state',       // tasks/blockers/outcomes/conflicts SQLite counts
+});
+
+// Pre-computed reverse map for fast lookups (built once at module load).
+const _REVERSE_ALIASES = Object.freeze(
+  Object.fromEntries(Object.entries(CATEGORY_ALIASES).map(([k, v]) => [v, k]))
+);
+
+/**
+ * Map an internal signal key (docs/git/...) to its user-facing
+ * `~~category` placeholder name. Returns null if unknown.
+ *
+ * @example
+ *   signalKeyToCategory('git')       → '~~vcs-signal'
+ *   signalKeyToCategory('unknown')   → null
+ */
+function signalKeyToCategory(internalKey) {
+  if (typeof internalKey !== 'string' || !internalKey) return null;
+  const cat = CATEGORY_ALIASES[internalKey];
+  return cat ? '~~' + cat : null;
+}
+
+/**
+ * Inverse: `~~category` (with or without the `~~` prefix) → internal
+ * signal key. Returns null if unknown.
+ *
+ * @example
+ *   categoryToSignalKey('~~vcs-signal')  → 'git'
+ *   categoryToSignalKey('vcs-signal')    → 'git'
+ *   categoryToSignalKey('~~unknown')     → null
+ */
+function categoryToSignalKey(categoryName) {
+  if (typeof categoryName !== 'string' || !categoryName) return null;
+  const stripped = categoryName.startsWith('~~') ? categoryName.slice(2) : categoryName;
+  return _REVERSE_ALIASES[stripped] || null;
+}
+
+/**
+ * List of all known internal signal keys, in stable display order.
+ * Useful for panel pill row rendering + smoke tests.
+ */
+const KNOWN_SIGNAL_KEYS = Object.freeze(Object.keys(CATEGORY_ALIASES));
+
+// ---------------------------------------------------------------------------
 // Module exports
 // ---------------------------------------------------------------------------
 
@@ -484,4 +556,9 @@ module.exports = {
   DOC_READ_BYTES_CAP,
   DEFAULT_SOURCE_TIMEOUT_MS,
   collectMentorSignals,
+  // Category placeholder vocabulary (2026-05-15)
+  CATEGORY_ALIASES,
+  KNOWN_SIGNAL_KEYS,
+  signalKeyToCategory,
+  categoryToSignalKey,
 };
