@@ -338,6 +338,37 @@ function spawnModeAWorker(input, opts) {
     // by streamLauncher: --output-format stream-json --input-format
     // stream-json --verbose --permission-mode bypassPermissions
     // --mcp-config <tmp> --strict-mcp-config [--resume <id>].
+    // Hooks turn protocol (2026-05-15 commit 4): persist session_id via
+    // onTurnDone (primary) AND keep the onEvent `result`-event tap
+    // (fallback / Budget integration). onTurnDone fires once per turn
+    // with a richer payload (transcript_path, last_assistant_text). For
+    // session_id persistence specifically, hook payload arrives slightly
+    // earlier than `result` event, which closes a small race window
+    // where the panel could miss a fresh session before exit.
+    const persistSessionIfNew = (sid) => {
+      if (!sid || typeof sid !== 'string') return;
+      if (!db || !planIdForResume) return;
+      const prior = sessionStore.getSessionId(db, project.id, planIdForResume);
+      if (prior === sid) return;
+      const res = sessionStore.setSessionId(
+        db, project.id, planIdForResume, sid, launchRes && launchRes.run_id,
+      );
+      if (res && res.ok) {
+        cairnLog.info('mode-a-spawner', 'session_id_persisted', {
+          project_id: project.id,
+          plan_id: planIdForResume,
+          session_id: sid,
+          was_resume: !!persistedSessionId,
+        });
+      } else {
+        cairnLog.warn('mode-a-spawner', 'session_id_persist_failed', {
+          project_id: project.id,
+          plan_id: planIdForResume,
+          error: res && res.error,
+        });
+      }
+    };
+
     launchRes = streamLauncher.launchStreamWorker({
       cwd,
       prompt,
@@ -347,6 +378,23 @@ function spawnModeAWorker(input, opts) {
       resumeSessionId: persistedSessionId || undefined,
     }, {
       home: o.home,
+      // Primary turn-done callback (hooks turn protocol, 2026-05-15).
+      // Fires once per turn from Stop hook payload (or result-event
+      // fallback). Records audit log + persists session_id for
+      // Phase-2 --resume continuity. Architecture B will hook this
+      // to send the next plan step's prompt via writeNextTurn.
+      onTurnDone: (turnPayload) => {
+        cairnLog.info('mode-a-spawner', 'turn_done', {
+          project_id: project.id,
+          plan_id: planIdForResume,
+          source: turnPayload && turnPayload.source,
+          turn_index: turnPayload && turnPayload.turn_index,
+          session_id: turnPayload && turnPayload.session_id,
+          transcript_path: turnPayload && turnPayload.transcript_path,
+          has_last_text: !!(turnPayload && turnPayload.last_assistant_text),
+        });
+        persistSessionIfNew(turnPayload && turnPayload.session_id);
+      },
       onEvent: (ev) => {
         // --- Budget check (Harness Phase 1) ---
         if (budget) {
@@ -371,29 +419,13 @@ function spawnModeAWorker(input, opts) {
           }
         }
 
-        // --- Session ID capture (Phase 2, existing) ---
+        // --- Session ID capture (Phase 2, defence-in-depth fallback).
+        // Primary path is onTurnDone above; this catches old-style
+        // result events when hook events are unavailable (CC version
+        // mismatch). Idempotent via persistSessionIfNew.
         if (!ev || ev.type !== 'result') return;
         if (typeof ev.session_id !== 'string' || !ev.session_id) return;
-        if (!db || !planIdForResume) return;
-        const prior = sessionStore.getSessionId(db, project.id, planIdForResume);
-        if (prior === ev.session_id) return;
-        const res = sessionStore.setSessionId(
-          db, project.id, planIdForResume, ev.session_id, launchRes && launchRes.run_id,
-        );
-        if (res && res.ok) {
-          cairnLog.info('mode-a-spawner', 'session_id_persisted', {
-            project_id: project.id,
-            plan_id: planIdForResume,
-            session_id: ev.session_id,
-            was_resume: !!persistedSessionId,
-          });
-        } else {
-          cairnLog.warn('mode-a-spawner', 'session_id_persist_failed', {
-            project_id: project.id,
-            plan_id: planIdForResume,
-            error: res && res.error,
-          });
-        }
+        persistSessionIfNew(ev.session_id);
       },
     });
   } catch (e) {
