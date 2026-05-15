@@ -483,14 +483,31 @@ function launchStreamWorker(input, opts) {
     });
   });
 
-  // Caller's stop() handle is not needed for Phase 1 — there's no
-  // cancel path from mode-a-spawner. Worker dies naturally when CC
-  // emits `result` + closes its stdout, or via watchdog kill.
-  return {
+  // Expose child handle + writeNextTurn for Pool (Module 8) and
+  // budget controller (Module 1) wiring. The child is the raw
+  // ChildProcess; callers that need to send follow-up turns use
+  // writeNextTurn(prompt) which constructs the NDJSON envelope.
+  const handle = {
     ok: true,
     run_id: runId,
     run: Object.assign({}, meta),
+    child,
+    /**
+     * Send a follow-up user turn to the running CC session.
+     * Used by Agent Pool for multi-step-in-one-session.
+     * @param {string} prompt
+     * @returns {boolean} true if written, false if child stdin is gone
+     */
+    writeNextTurn(prompt) {
+      if (!child || child.killed || !child.stdin || child.stdin.destroyed) return false;
+      try {
+        child.stdin.write(makeInputEnvelope(prompt));
+        bumpWatchdog();
+        return true;
+      } catch (_e) { return false; }
+    },
   };
+  return handle;
 }
 
 /**

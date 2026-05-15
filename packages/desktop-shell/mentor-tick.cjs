@@ -51,6 +51,11 @@ let _timer = null;
 let _tickCount = 0;
 let _lastTickError = null;
 
+// Harness Phase 1: per-project pool map. Pool is created lazily by
+// mode-a-spawner when harness config is present. Teardown happens here
+// when plan completes or is superseded. Map<project_id, pool>.
+const _harnessPoolMap = new Map();
+
 function safeRequire(spec) {
   try { return require(spec); } catch (_e) { return null; }
 }
@@ -570,8 +575,28 @@ function runOnce(deps) {
               });
             }
           }
+          // Harness Phase 1: when plan completes (all steps DONE), tear
+          // down the Agent Pool if one exists. Also tear down on goal
+          // supersession (new plan replaces old). Pool teardown is async
+          // but fire-and-forget — failures are logged, not blocking.
+          if (decision && decision.advance && decision.advance.action === 'advanced') {
+            const planAfter = decision.plan;
+            if (planAfter && planAfter.status === 'COMPLETE' && _harnessPoolMap && _harnessPoolMap.has(project.id)) {
+              const pool = _harnessPoolMap.get(project.id);
+              _harnessPoolMap.delete(project.id);
+              try { pool.teardown(); } catch (_e) {}
+              cairnLog.info('harness-pool', 'teardown_on_plan_complete', { project_id: project.id });
+            }
+          }
           if (decision && (decision.action === 'drafted' || decision.action === 'superseded')) {
             out.decisions++;
+            // Supersession: old plan replaced. Teardown old pool if any.
+            if (decision.action === 'superseded' && _harnessPoolMap && _harnessPoolMap.has(project.id)) {
+              const pool = _harnessPoolMap.get(project.id);
+              _harnessPoolMap.delete(project.id);
+              try { pool.teardown(); } catch (_e) {}
+              cairnLog.info('harness-pool', 'teardown_on_supersession', { project_id: project.id });
+            }
           }
           // 2026-05-14 CEO escalation: when decideNextDispatch returns
           // no_agent OR when retry_count ≥ 2 (existing ACTIVE agents
@@ -696,4 +721,6 @@ module.exports = {
   stop,
   stats,
   gatherRecentActivity,
+  // Harness Phase 1: pool map exposed for mode-a-spawner to register pools.
+  _harnessPoolMap,
 };

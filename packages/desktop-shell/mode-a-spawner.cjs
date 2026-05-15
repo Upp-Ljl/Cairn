@@ -312,6 +312,21 @@ function spawnModeAWorker(input, opts) {
     ? sessionStore.getSessionId(db, project.id, planIdForResume)
     : null;
 
+  // Harness Phase 1: Budget controller (opt-in via input.budget).
+  // If step has budget config, create a budget and wire it into onEvent.
+  let budget = null;
+  if (input.budget && typeof input.budget === 'object') {
+    try {
+      const { createBudget } = require('./harness-budget.cjs');
+      budget = createBudget(input.budget, { nowFn: o.nowFn });
+    } catch (_e) {
+      cairnLog.warn('mode-a-spawner', 'budget_create_failed', {
+        project_id: project.id,
+        message: (_e && _e.message) || String(_e),
+      });
+    }
+  }
+
   let launchRes;
   try {
     // Use the stream-json launcher (Phase 1 2026-05-14). Argv hardcoded
@@ -327,14 +342,34 @@ function spawnModeAWorker(input, opts) {
       resumeSessionId: persistedSessionId || undefined,
     }, {
       home: o.home,
-      // Capture session_id from the first `result` event and persist
-      // it so the NEXT plan step resumes the same CC session.
       onEvent: (ev) => {
+        // --- Budget check (Harness Phase 1) ---
+        if (budget) {
+          const br = budget.check(ev);
+          if (br.action === 'wrap_up' && launchRes && launchRes.writeNextTurn) {
+            launchRes.writeNextTurn(budget.wrapUpMessage());
+            cairnLog.warn('mode-a-spawner', 'budget_wrap_up', {
+              project_id: project.id, run_id: launchRes && launchRes.run_id,
+              metrics: br.metrics,
+            });
+          } else if (br.action === 'fuse' && launchRes && launchRes.writeNextTurn) {
+            launchRes.writeNextTurn(budget.fuseMessage());
+            cairnLog.error('mode-a-spawner', 'budget_fuse', {
+              project_id: project.id, run_id: launchRes && launchRes.run_id,
+              metrics: br.metrics,
+            });
+            // Grace period then kill — 30s.
+            setTimeout(() => {
+              try { if (launchRes.child && !launchRes.child.killed) launchRes.child.kill('SIGTERM'); }
+              catch (_e) {}
+            }, 30000).unref();
+          }
+        }
+
+        // --- Session ID capture (Phase 2, existing) ---
         if (!ev || ev.type !== 'result') return;
         if (typeof ev.session_id !== 'string' || !ev.session_id) return;
         if (!db || !planIdForResume) return;
-        // Skip if we already have the same one (idempotent — `result`
-        // can fire more than once over a multi-turn session).
         const prior = sessionStore.getSessionId(db, project.id, planIdForResume);
         if (prior === ev.session_id) return;
         const res = sessionStore.setSessionId(
@@ -396,6 +431,10 @@ function spawnModeAWorker(input, opts) {
     agent_id: agentId,
     dispatch_id: dispatchId,
     resume_session_id: persistedSessionId || null,
+    // Harness Phase 1: expose child + budget for Pool (Module 8).
+    child: launchRes.child || null,
+    writeNextTurn: launchRes.writeNextTurn || null,
+    budget: budget || null,
   };
 }
 
