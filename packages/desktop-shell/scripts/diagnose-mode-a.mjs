@@ -21,7 +21,13 @@ import { createRequire } from 'node:module';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dsRoot = path.resolve(__dirname, '..');
 const require = createRequire(import.meta.url);
-const Database = require(path.join(dsRoot, 'node_modules', 'better-sqlite3'));
+// desktop-shell's better-sqlite3 is Electron-rebuilt (NODE_MODULE_VERSION
+// 128); Node 24 needs 137. Use daemon's already-compiled-for-Node-24 copy
+// so the diagnose script works under plain `node` without re-rebuilding.
+// (Same pattern as smoke-mode-a-session-store.mjs et al.) Per CLAUDE.md
+// "better-sqlite3 NODE_MODULE_VERSION 坑": don't `npm rebuild` here —
+// that breaks the panel's Electron load.
+const Database = require(path.resolve(dsRoot, '..', 'daemon', 'node_modules', 'better-sqlite3'));
 const registry = require(path.join(dsRoot, 'registry.cjs'));
 const projectQueries = require(path.join(dsRoot, 'project-queries.cjs'));
 const modeALoop = require(path.join(dsRoot, 'mode-a-loop.cjs'));
