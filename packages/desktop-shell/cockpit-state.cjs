@@ -1122,7 +1122,41 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
       ).get(...hints).n;
     }
   } catch (_e) { cairnLog.warn('cockpit-state', 'active_agents_count_failed', { message: (_e && _e.message) || String(_e) }); active_agents_count = 0; }
-  const progress = queryProgress(db, tables, hints);
+  let progress = queryProgress(db, tables, hints);
+  // CEO 2026-05-15 fix: when Mode A plan exists, progress should
+  // reflect the CURRENT plan's step states (refresh per plan), not
+  // cumulative historical tasks across all-time agent_id hints.
+  // Old behaviour showed e.g. '16/22 done' even on a fresh 5-step
+  // plan because tasks counted ALL ever-created. Also the cumulative
+  // math didn't add up (FAILED/CANCELLED in total but not in any of
+  // done/running/blocked/review buckets → visible gap).
+  //
+  // Plan step states (per mode-a-loop): PENDING / DISPATCHED / DONE.
+  // Mapping to progress field semantics:
+  //   tasks_done           = DONE steps
+  //   tasks_running        = DISPATCHED steps (CC actively working)
+  //   tasks_blocked        = 0 (Mode A plan steps have no BLOCKED state)
+  //   tasks_waiting_review = 0 (review happens inside step, not as separate state)
+  //   tasks_total          = steps.length
+  // Source tag added so panel / tests can tell which kind of progress this is.
+  if (mode_a_plan && Array.isArray(mode_a_plan.steps) && mode_a_plan.steps.length > 0) {
+    const steps = mode_a_plan.steps;
+    const total = steps.length;
+    const done = steps.filter(s => s && s.state === 'DONE').length;
+    const running = steps.filter(s => s && s.state === 'DISPATCHED').length;
+    const percent = total > 0 ? Math.round((done / total) * 100) / 100 : 0;
+    progress = {
+      tasks_total: total,
+      tasks_done: done,
+      tasks_running: running,
+      tasks_blocked: 0,
+      tasks_waiting_review: 0,
+      percent,
+      source: 'mode_a_plan',
+    };
+  } else {
+    progress.source = 'tasks';
+  }
   const currentTask = queryCurrentTask(db, tables, hints);
   const latestMentor = queryLatestMentorNudge(db, tables, project.id);
   const allEscalations = queryEscalations(db, tables, project.id, {
