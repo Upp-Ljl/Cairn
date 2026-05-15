@@ -31,7 +31,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dsRoot = path.resolve(__dirname, '..');
 const require = createRequire(import.meta.url);
 const modeALoop = require(path.join(dsRoot, 'mode-a-loop.cjs'));
-const Database = require(path.join(dsRoot, 'node_modules', 'better-sqlite3'));
+// Use daemon's better-sqlite3 — desktop-shell's is Electron-rebuilt (NODE_MODULE_VERSION 128),
+// Node 24 needs 137. See CLAUDE.md "better-sqlite3 NODE_MODULE_VERSION 坑".
+const Database = require(path.resolve(dsRoot, '..', 'daemon', 'node_modules', 'better-sqlite3'));
 
 function makeDb() {
   const db = new Database(':memory:');
@@ -205,6 +207,141 @@ section('10 planKey is stable per project');
 {
   ok(modeALoop.planKey('p_a') === 'mode_a_plan/p_a', 'key format');
   ok(modeALoop.planKey('proj-with-dashes') === 'mode_a_plan/proj-with-dashes', 'dashes ok');
+}
+
+// ---------------------------------------------------------------------------
+// bindOrphanTask needs tasks + dispatch_requests tables.
+function makeFullDb() {
+  const db = makeDb();
+  db.exec(`
+    CREATE TABLE tasks (
+      task_id TEXT PRIMARY KEY,
+      intent TEXT,
+      state TEXT NOT NULL DEFAULT 'PENDING',
+      parent_task_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      created_by_agent_id TEXT,
+      metadata_json TEXT
+    );
+    CREATE TABLE dispatch_requests (
+      id TEXT PRIMARY KEY,
+      nl_intent TEXT,
+      parsed_intent TEXT,
+      context_keys TEXT,
+      generated_prompt TEXT,
+      target_agent TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at INTEGER NOT NULL,
+      confirmed_at INTEGER,
+      task_id TEXT
+    );
+  `);
+  return db;
+}
+
+section('12 bindOrphanTask: dispatch_id precise match');
+{
+  const db = makeFullDb();
+  const project = { id: 'p_bind' };
+  const goal = { id: 'g1', title: 'T', success_criteria: ['implement the feature exactly right'] };
+  const r = modeALoop.ensurePlan(db, project, goal, null, {});
+  ok(r.action === 'drafted', 'plan drafted');
+
+  // Mark step 0 DISPATCHED with a dispatch_id.
+  const plan = modeALoop.getPlan(db, 'p_bind');
+  plan.steps[0].state = 'DISPATCHED';
+  plan.steps[0].dispatch_id = 'disp_abc123';
+  modeALoop.writePlan(db, 'p_bind', plan, Date.now());
+
+  // Insert a dispatch_requests row (task_id is NULL — the gap).
+  db.prepare('INSERT INTO dispatch_requests (id, nl_intent, status, created_at) VALUES (?,?,?,?)').run(
+    'disp_abc123', 'implement the feature exactly right', 'CONFIRMED', Date.now(),
+  );
+
+  // Insert a task whose intent is totally different (CC added metadata to it),
+  // but metadata_json contains the matching dispatch_id.
+  const now = Date.now();
+  db.prepare(
+    'INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id, metadata_json) VALUES (?,?,?,?,?,?,?)',
+  ).run('t_001', 'Mode A · step 0/1 (retry-7) supersedes_task=xxx — implement the blah', 'RUNNING', now, now, 'agent_x', JSON.stringify({ dispatch_id: 'disp_abc123' }));
+
+  const out = modeALoop.bindOrphanTask(db, project, ['agent_x'], {});
+  ok(out.bound === 1, `bound=1 (got ${out.bound})`);
+  ok(out.task_id === 't_001', `task_id=t_001 (got ${out.task_id})`);
+  ok(out.match_strategy === 'dispatch_id', `matched by dispatch_id (got ${out.match_strategy})`);
+
+  // Verify dispatch_requests.task_id was back-filled.
+  const dr = db.prepare('SELECT task_id FROM dispatch_requests WHERE id = ?').get('disp_abc123');
+  ok(dr && dr.task_id === 't_001', `dispatch_requests.task_id back-filled (got ${dr && dr.task_id})`);
+
+  // Verify plan step has task_id.
+  const planAfter = modeALoop.getPlan(db, 'p_bind');
+  ok(planAfter.steps[0].task_id === 't_001', 'plan step task_id set');
+}
+
+section('13 bindOrphanTask: text fallback when no dispatch_id in metadata');
+{
+  const db = makeFullDb();
+  const project = { id: 'p_text' };
+  const goal = { id: 'g1', title: 'T', success_criteria: ['implement the settings page for all users'] };
+  modeALoop.ensurePlan(db, project, goal, null, {});
+  const plan = modeALoop.getPlan(db, 'p_text');
+  plan.steps[0].state = 'DISPATCHED';
+  plan.steps[0].dispatch_id = 'disp_xyz';
+  modeALoop.writePlan(db, 'p_text', plan, Date.now());
+
+  // Task with NO metadata_json (old-style), but intent matches label by substring.
+  const now = Date.now();
+  db.prepare(
+    'INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES (?,?,?,?,?,?)',
+  ).run('t_text', 'implement the settings page for all users', 'RUNNING', now, now, 'agent_y');
+
+  const out = modeALoop.bindOrphanTask(db, project, ['agent_y'], {});
+  ok(out.bound === 1, `bound=1 via text (got ${out.bound})`);
+  ok(out.match_strategy === 'text_match', `match_strategy=text_match (got ${out.match_strategy})`);
+}
+
+section('14 bindOrphanTask: already bound → no-op');
+{
+  const db = makeFullDb();
+  const project = { id: 'p_noop' };
+  const goal = { id: 'g1', title: 'T', success_criteria: ['do something very important here'] };
+  modeALoop.ensurePlan(db, project, goal, null, {});
+  const plan = modeALoop.getPlan(db, 'p_noop');
+  plan.steps[0].state = 'DISPATCHED';
+  plan.steps[0].task_id = 't_existing';
+  modeALoop.writePlan(db, 'p_noop', plan, Date.now());
+
+  const out = modeALoop.bindOrphanTask(db, project, ['agent_z'], {});
+  ok(out.bound === 0, 'already bound → no-op');
+}
+
+section('15 bindOrphanTask: dispatch_id wins over text match');
+{
+  const db = makeFullDb();
+  const project = { id: 'p_prio' };
+  const goal = { id: 'g1', title: 'T', success_criteria: ['implement the settings page completely'] };
+  modeALoop.ensurePlan(db, project, goal, null, {});
+  const plan = modeALoop.getPlan(db, 'p_prio');
+  plan.steps[0].state = 'DISPATCHED';
+  plan.steps[0].dispatch_id = 'disp_prio';
+  modeALoop.writePlan(db, 'p_prio', plan, Date.now());
+
+  const now = Date.now();
+  // Task A: text matches perfectly but NO dispatch_id in metadata.
+  db.prepare(
+    'INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES (?,?,?,?,?,?)',
+  ).run('t_text_only', 'implement the settings page completely', 'RUNNING', now, now, 'agent_p');
+  // Task B: text doesn't match but has the correct dispatch_id.
+  db.prepare(
+    'INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id, metadata_json) VALUES (?,?,?,?,?,?,?)',
+  ).run('t_dispatch', 'totally different intent string here', 'RUNNING', now - 100, now, 'agent_p', JSON.stringify({ dispatch_id: 'disp_prio' }));
+
+  const out = modeALoop.bindOrphanTask(db, project, ['agent_p'], {});
+  ok(out.bound === 1, 'one task bound');
+  ok(out.task_id === 't_dispatch', `dispatch_id match wins (got ${out.task_id})`);
+  ok(out.match_strategy === 'dispatch_id', `strategy=dispatch_id (got ${out.match_strategy})`);
 }
 
 // ---------------------------------------------------------------------------

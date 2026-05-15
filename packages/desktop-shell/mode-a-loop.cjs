@@ -605,22 +605,25 @@ function detectStaleAndReset(db, project, opts) {
 
 /**
  * Bind an orphan task to a plan step. "Orphan" = a task created by an
- * agent in this project whose intent matches a step's label, but no
- * plan step's task_id points at it yet AND step.dispatch_id (if any)
- * has no task_id link in dispatch_requests.
+ * agent in this project that hasn't been linked to a plan step yet.
  *
  * Why this exists: when Cairn spawns a CC via mode-a-spawner, the
  * spawn writes a dispatch_requests row and the spawned CC creates a
- * task. The boot prompt instructs CC to call task.create but doesn't
- * have CC update dispatch_requests.task_id (CC doesn't know the
- * dispatch_id). So the chain step.dispatch_id → dispatch.task_id →
- * outcomes is broken at the dispatch.task_id hop.
+ * task. CC doesn't know the dispatch_requests PK, so the chain
+ * step.dispatch_id → dispatch.task_id → outcomes is broken at the
+ * dispatch.task_id hop.
  *
- * bindOrphanTask closes the gap by matching on intent text: if a
- * RUNNING/WAITING_REVIEW/DONE task's intent matches the current
- * step's label (substring either direction, ≥ 10 char minimum), bind
- * task.task_id directly onto step.task_id. advanceOnComplete then
- * uses step.task_id directly (no dispatch lookup needed).
+ * Matching strategy (priority order):
+ *   1. **dispatch_id match** (precise): the boot prompt instructs CC
+ *      to include `metadata: { dispatch_id }` in task.create. If a
+ *      candidate task's metadata_json contains the step's dispatch_id,
+ *      that's an exact match — no ambiguity.
+ *   2. **Text match** (fuzzy fallback): ≥ 10-char prefix/substring
+ *      match between task.intent and step.label. Kept for tasks
+ *      created by older boot prompts that didn't inject dispatch_id.
+ *
+ * Also back-fills dispatch_requests.task_id when binding via
+ * dispatch_id so advanceOnComplete's path 2 works too.
  *
  * Only binds the CURRENT step (plan.current_idx). Idempotent if
  * already bound. Pure-ish: reads tasks table, writes scratchpad plan.
@@ -634,14 +637,11 @@ function bindOrphanTask(db, project, hints, opts) {
   const step = plan.steps[idx];
   if (!step || step.task_id) return out; // already bound
 
-  const stepLabel = (step.label || '').toLowerCase().trim();
-  if (stepLabel.length < 10) return out; // too short to match reliably
-
   const placeholders = '(' + hints.map(() => '?').join(',') + ')';
   let candidates = [];
   try {
     candidates = db.prepare(
-      `SELECT task_id, intent, state FROM tasks
+      `SELECT task_id, intent, state, metadata_json FROM tasks
        WHERE created_by_agent_id IN ${placeholders}
          AND state IN ('RUNNING','WAITING_REVIEW','DONE')
        ORDER BY created_at DESC
@@ -652,33 +652,62 @@ function bindOrphanTask(db, project, hints, opts) {
   // Tasks already bound to OTHER plan steps — skip them.
   const boundTaskIds = new Set(plan.steps.filter(s => s.task_id).map(s => s.task_id));
 
+  // --- Strategy 1: dispatch_id precise match ---
+  const stepDispatchId = step.dispatch_id || null;
+  if (stepDispatchId) {
+    for (const c of candidates) {
+      if (!c || !c.task_id || boundTaskIds.has(c.task_id)) continue;
+      let meta = null;
+      try { meta = c.metadata_json ? JSON.parse(c.metadata_json) : null; } catch (_e) { /* skip */ }
+      if (meta && meta.dispatch_id === stepDispatchId) {
+        return _bindAndWrite(db, project, plan, step, idx, c, 'dispatch_id', opts);
+      }
+    }
+  }
+
+  // --- Strategy 2: fuzzy text match (legacy fallback) ---
+  const stepLabel = (step.label || '').toLowerCase().trim();
+  if (stepLabel.length < 10) return out; // too short to match reliably
+
   for (const c of candidates) {
     if (!c || !c.task_id || boundTaskIds.has(c.task_id)) continue;
     const intentLower = (c.intent || '').toLowerCase().trim();
     if (!intentLower) continue;
-    // Match: ≥ 10-char prefix or full substring in either direction.
     const matched =
       intentLower.includes(stepLabel.slice(0, Math.min(stepLabel.length, 20))) ||
       stepLabel.includes(intentLower.slice(0, Math.min(intentLower.length, 20)));
     if (!matched) continue;
-    step.task_id = c.task_id;
-    const now = (opts && opts.nowFn ? opts.nowFn() : Date.now());
-    plan.updated_at = now;
-    try { writePlan(db, project.id, plan, now); } catch (_e) { /* logged elsewhere */ }
-    cairnLog.info('mode-a-loop', 'orphan_task_bound', {
-      project_id: project.id,
-      plan_id: plan.plan_id,
-      step_idx: idx,
-      task_id: c.task_id,
-      task_state: c.state,
-      intent_preview: (c.intent || '').slice(0, 60),
-    });
-    out.bound = 1;
-    out.task_id = c.task_id;
-    out.step_idx = idx;
-    return out;
+    return _bindAndWrite(db, project, plan, step, idx, c, 'text_match', opts);
   }
   return out;
+}
+
+/** Shared helper: bind task to step, write plan, back-fill dispatch row. */
+function _bindAndWrite(db, project, plan, step, idx, candidate, matchStrategy, opts) {
+  step.task_id = candidate.task_id;
+  const now = (opts && opts.nowFn ? opts.nowFn() : Date.now());
+  plan.updated_at = now;
+  try { writePlan(db, project.id, plan, now); } catch (_e) { /* logged elsewhere */ }
+
+  // Back-fill dispatch_requests.task_id so advanceOnComplete path 2 works.
+  if (step.dispatch_id) {
+    try {
+      db.prepare('UPDATE dispatch_requests SET task_id = ? WHERE id = ? AND (task_id IS NULL OR task_id = ?)').run(
+        candidate.task_id, step.dispatch_id, candidate.task_id,
+      );
+    } catch (_e) { /* best-effort */ }
+  }
+
+  cairnLog.info('mode-a-loop', 'orphan_task_bound', {
+    project_id: project.id,
+    plan_id: plan.plan_id,
+    step_idx: idx,
+    task_id: candidate.task_id,
+    task_state: candidate.state,
+    match_strategy: matchStrategy,
+    intent_preview: (candidate.intent || '').slice(0, 60),
+  });
+  return { bound: 1, task_id: candidate.task_id, step_idx: idx, match_strategy: matchStrategy };
 }
 
 module.exports = {

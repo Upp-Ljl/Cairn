@@ -69,7 +69,7 @@ function _newAgentId() {
  * across many turns is a follow-up (will need persistent CC
  * sessions, not --print one-shots).
  */
-function buildBootPrompt(project, plan, agentId, profile) {
+function buildBootPrompt(project, plan, agentId, profile, dispatchId) {
   const step = plan && Array.isArray(plan.steps) && plan.steps[plan.current_idx || 0];
   const stepLabel = step ? step.label : '(next plan step)';
   const projectRoot = project.project_root || project.path || '(unknown)';
@@ -135,6 +135,9 @@ function buildBootPrompt(project, plan, agentId, profile) {
     '## Required protocol',
     '',
     '- 在动手之前先调 `cairn.task.create` 创建一个 task 把这一步绑定到 kernel state',
+    dispatchId
+      ? '  **重要**: metadata 里必须带 `dispatch_id`: `cairn.task.create({ intent: "...", metadata: { dispatch_id: "' + dispatchId + '" } })`'
+      : '',
     '- 干完之后调 `cairn.task.submit_for_review`，然后 `cairn.outcomes.evaluate`',
     '  with status="PASS" 如果你认为目标达成，否则 status="FAILED" 加一句 reasoning',
     '- 不要问用户 — Mode A 的承诺是"走开就行"。卡住了走 cairn.task.block 让 Mentor 答',
@@ -236,7 +239,6 @@ function spawnModeAWorker(input, opts) {
   }
 
   const agentId = _newAgentId();
-  const prompt = buildBootPrompt(project, plan, agentId, input.profile);
 
   // ---- BOOKKEEPING FIRST (advanceOnComplete needs the linkage) ----
   // 1. Pre-register the agent_id so dispatchTodo's checkAgentExists
@@ -291,6 +293,9 @@ function spawnModeAWorker(input, opts) {
     }
   }
   // ---- END BOOKKEEPING ----
+
+  // Build the boot prompt AFTER bookkeeping so dispatch_id is available.
+  const prompt = buildBootPrompt(project, plan, agentId, input.profile, dispatchId);
 
   // Pass the pre-assigned agent_id via env var. mcp-server's
   // presence.ts reads CAIRN_SESSION_AGENT_ID at boot and inserts its
