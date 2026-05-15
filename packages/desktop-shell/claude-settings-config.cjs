@@ -63,10 +63,17 @@ function hookEventsFile(runId, home) {
  * CC think its turn failed).
  */
 function _hookCommand(hookPayloadFile) {
-  // Quote-safe path embed via JSON.stringify (produces e.g.
-  //   "C:\\Users\\...\\hook-events.jsonl"
-  // which is a valid JS string literal inside double quotes).
-  const escapedPath = JSON.stringify(hookPayloadFile);
+  // Embed the path as a JS *single-quoted* string. The outer command
+  // is `node -e "..."` (double-quoted shell argument); on Windows
+  // cmd.exe parses inner `"` as the close of the outer quote, so any
+  // double-quoted JS string inside truncates the eval mid-statement.
+  // 2026-05-15: this exact bug fired on every Mode A spawn — the eval
+  // truncated at `dirname(` and the hook produced a SyntaxError.
+  // Single-quoted JS strings are accepted by V8 and contain no `"`,
+  // so the outer shell wrapper stays balanced. Backslashes in
+  // Windows paths must still be doubled so the JS source parses them
+  // as literal `\` (not start-of-escape-sequence).
+  const escapedPath = "'" + hookPayloadFile.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
   return [
     `node -e "`,
     `let s='';`,

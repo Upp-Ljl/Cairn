@@ -72,11 +72,19 @@ section('2 valid call returns tempPath + cleanup + hookPayloadFile');
   section('4 Stop hook has a non-empty command embedding the audit path quote-safe');
   const stopCmd = parsed.hooks.Stop[0].hooks[0].command;
   ok(typeof stopCmd === 'string' && stopCmd.length > 0, 'Stop command is a non-empty string');
-  // R1 mitigation assertion: the path is embedded as a JSON string
-  // literal. We can verify by extracting between JSON.stringify-style
-  // delimiters and reparsing.
-  const reEmbedded = new RegExp(JSON.stringify(r.hookPayloadFile).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  ok(reEmbedded.test(stopCmd), 'Stop command embeds hookPayloadFile path quote-safe');
+  // R1 mitigation assertion (2026-05-15 rewrite): the path is embedded
+  // as a JS *single-quoted* string. Inner `"` would close the outer
+  // `node -e "..."` Windows-shell wrapper and truncate the eval — the
+  // bug that broke every Mode A spawn until the fix. Verify the path
+  // appears single-quoted AND that the eval body contains no `"`
+  // between the outer wrapping quotes.
+  const singleQuotedPath = "'" + r.hookPayloadFile.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+  ok(stopCmd.includes(singleQuotedPath), 'Stop command embeds hookPayloadFile as single-quoted JS string');
+  // Extract the eval body (everything between `node -e "` and the
+  // trailing `"`) and assert no inner `"` exists — the property that
+  // actually keeps the Windows shell wrapper balanced.
+  const evalBody = stopCmd.replace(/^node -e "/, '').replace(/"$/, '');
+  ok(!evalBody.includes('"'), 'eval body contains no inner double-quote (Windows-shell safe)');
 
   section('5 cleanup removes the temp file + is idempotent');
   r.cleanup();
