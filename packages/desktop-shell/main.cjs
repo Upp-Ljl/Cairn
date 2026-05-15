@@ -42,7 +42,9 @@ function canonicalizeToGitToplevel(dir) {
     });
     const top = (out || '').trim();
     if (top) return path.normalize(top);
-  } catch (_e) { /* not a git repo, git missing, or timeout — fall through */ }
+  } catch (_e) { /* not a git repo, git missing, or timeout — fall through */
+    cairnLog.warn('main', 'git_toplevel_resolve_failed', { message: (_e && _e.message) || String(_e) });
+  }
   return dir;
 }
 
@@ -177,7 +179,9 @@ function ensureWalMode(p) {
     const init = new Database(p);
     init.pragma('journal_mode = WAL');
     init.close();
-  } catch (_e) { /* mcp-server will WAL-init on its own write */ }
+  } catch (_e) { /* mcp-server will WAL-init on its own write */
+    cairnLog.warn('main', 'wal_mode_init_failed', { message: (_e && _e.message) || String(_e) });
+  }
 }
 
 /**
@@ -288,14 +292,18 @@ function _probeAutoShip(projectRoot, projectId) {
         encoding: 'utf8', timeout: 2000, windowsHide: true,
       }).trim();
       if (r) autoShip.remote_url = r;
-    } catch (_e) { /* no remote */ }
+    } catch (_e) { /* no remote */
+      cairnLog.warn('main', 'auto_ship_remote_probe_failed', { message: (_e && _e.message) || String(_e) });
+    }
     try {
       const r = execFileSync('git', ['-C', projectRoot, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
         encoding: 'utf8', timeout: 2000, windowsHide: true,
       }).trim();
       const parts = r.split('/');
       if (parts.length === 2 && parts[1]) autoShip.default_branch = parts[1];
-    } catch (_e) { /* default main */ }
+    } catch (_e) { /* default main */
+      cairnLog.warn('main', 'auto_ship_branch_probe_failed', { message: (_e && _e.message) || String(_e) });
+    }
     const patProbe = [
       path.join(projectRoot, '.token', 'ljl.txt'),
       path.join(projectRoot, '.cairn-push-token', 'ljl-token.txt'),
@@ -308,7 +316,7 @@ function _probeAutoShip(projectRoot, projectId) {
     const setRes = registry.setCockpitSettings(reg, projectId, Object.assign({}, existing, { auto_ship: autoShip }));
     if (setRes && setRes.reg) {
       reg = setRes.reg;
-      try { registry.saveRegistry(reg); } catch (_e) {}
+      try { registry.saveRegistry(reg); } catch (_e) { cairnLog.warn('main', 'auto_ship_registry_save_failed', { message: (_e && _e.message) || String(_e) }); }
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -324,13 +332,13 @@ function gcDbHandles() {
   const stillReferenced = new Set(registry.uniqueDbPaths(reg));
   for (const [p, entry] of dbHandles.entries()) {
     if (!stillReferenced.has(p)) {
-      try { entry.db.close(); } catch (_e) {}
+      try { entry.db.close(); } catch (_e) { cairnLog.warn('main', 'db_handle_close_failed', { message: (_e && _e.message) || String(_e) }); }
       dbHandles.delete(p);
     }
   }
   for (const [p, w] of writeHandles.entries()) {
     if (!stillReferenced.has(p)) {
-      try { w.close(); } catch (_e) {}
+      try { w.close(); } catch (_e) { cairnLog.warn('main', 'write_handle_close_failed', { message: (_e && _e.message) || String(_e) }); }
       writeHandles.delete(p);
     }
   }
@@ -479,14 +487,16 @@ function animatePanelTo(targetX, doneFn) {
     const x = Math.round(start.x + dx * easeOutCubic(t));
     try {
       panelWindow.setBounds({ x, y: start.y, width: start.width, height: start.height });
-    } catch (_e) { /* window may have been destroyed mid-animation */ }
+    } catch (_e) { /* window may have been destroyed mid-animation */
+      cairnLog.warn('main', 'panel_anim_set_bounds_failed', { message: (_e && _e.message) || String(_e) });
+    }
     if (step >= PANEL_ANIM_STEPS) {
       cancelPanelAnim();
       try {
         if (panelWindow) {
           panelWindow.setBounds({ x: targetX, y: start.y, width: start.width, height: start.height });
         }
-      } catch (_e) {}
+      } catch (_e) { cairnLog.warn('main', 'panel_anim_final_bounds_failed', { message: (_e && _e.message) || String(_e) }); }
       if (doneFn) doneFn();
     }
   }, PANEL_ANIM_MS / PANEL_ANIM_STEPS);
@@ -514,7 +524,7 @@ function hidePanelSlide() {
   const off = offscreenBounds();
   animatePanelTo(off.x, () => {
     if (panelWindow) {
-      try { panelWindow.hide(); } catch (_e) {}
+      try { panelWindow.hide(); } catch (_e) { cairnLog.warn('main', 'panel_hide_failed', { message: (_e && _e.message) || String(_e) }); }
     }
   });
 }
@@ -1149,9 +1159,9 @@ ipcMain.handle('get-session-timeline', (_e, projectId, agentId, opts) => {
         try {
           const body = JSON.parse(row.value_json);
           if (body && typeof body.name === 'string' && body.name.trim()) nameOverride = body.name.trim();
-        } catch (_e) { /* ignore */ }
+        } catch (_e) { cairnLog.warn('main', 'session_name_parse_failed', { message: (_e && _e.message) || String(_e) }); }
       }
-    } catch (_e) { /* ignore */ }
+    } catch (_e) { cairnLog.warn('main', 'session_name_query_failed', { message: (_e && _e.message) || String(_e) }); }
   }
   return {
     ok: true,
@@ -1181,7 +1191,7 @@ ipcMain.handle('cockpit-steer', (_e, input) => {
     message: input.message,
   }, {
     copyToClipboard: (text) => {
-      try { clipboard.writeText(text); } catch (_e) {}
+      try { clipboard.writeText(text); } catch (_e) { cairnLog.warn('main', 'clipboard_write_failed', { message: (_e && _e.message) || String(_e) }); }
     },
   });
 });
@@ -1285,7 +1295,9 @@ ipcMain.handle('get-cockpit-settings', (_e, projectId) => {
         _probeAutoShip(proj.project_root, projectId);
       }
     }
-  } catch (_e) { /* non-fatal */ }
+  } catch (_e) { /* non-fatal */
+    cairnLog.warn('main', 'cockpit_settings_probe_failed', { message: (_e && _e.message) || String(_e) });
+  }
   return registry.getCockpitSettings(reg, projectId);
 });
 
@@ -1297,7 +1309,7 @@ ipcMain.handle('mode-a-ship-now', async (_e, projectId) => {
   const proj = reg.projects.find(p => p.id === projectId);
   if (!proj || !proj.project_root) return { ok: false, error: 'project_not_found' };
   // Backfill probe if needed so we have remote_url + pat_path.
-  try { _probeAutoShip(proj.project_root, projectId); } catch (_e) {}
+  try { _probeAutoShip(proj.project_root, projectId); } catch (_e) { cairnLog.warn('main', 'ship_now_probe_failed', { message: (_e && _e.message) || String(_e) }); }
   const settings = registry.getCockpitSettings(reg, projectId);
   const autoShipCfg = (settings && settings.auto_ship) || {};
   const modeAAutoShip = require('./mode-a-auto-ship.cjs');
@@ -1328,7 +1340,7 @@ ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
   reg = result.reg;
   // 2026-05-14: was `registry.writeRegistry(reg)` — undefined fn, silently
   // ate by catch. Pre-existing bug, surfaced by MA-1 subagent审查.
-  try { registry.saveRegistry(reg); } catch (_e) {}
+  try { registry.saveRegistry(reg); } catch (_e) { cairnLog.warn('main', 'set_cockpit_settings_save_failed', { message: (_e && _e.message) || String(_e) }); }
   // Mode A v2 (CEO 2026-05-14): when the user flips from Mode B to
   // Mode A AND a goal is already set, immediately kick the scout to
   // draft a plan. Without this they'd be stuck on phase=idle with no
@@ -1338,7 +1350,7 @@ ipcMain.handle('set-cockpit-settings', (_e, projectId, input) => {
     try {
       const goal = registry.getProjectGoal(reg, projectId);
       if (goal) scoutTrig = _triggerScoutForProject(projectId);
-    } catch (_e) {}
+    } catch (_e) { cairnLog.warn('main', 'mode_b_to_a_scout_trigger_failed', { message: (_e && _e.message) || String(_e) }); }
   }
   return { ok: true, settings: result.settings, scout: scoutTrig };
 });
@@ -1675,7 +1687,7 @@ function _triggerScoutForProject(projectId, opts) {
       return { ok: false, error: phaseRes.error };
     }
     reg = phaseRes.reg;
-    try { registry.saveRegistry(reg); } catch (_e) {}
+    try { registry.saveRegistry(reg); } catch (_e) { cairnLog.warn('main', 'mode_a_start_registry_save_failed', { message: (_e && _e.message) || String(_e) }); }
 
     // Get a writable DB for scout's plan write. BUG fix 2026-05-14:
     // ensureWritableDbHandle takes a PATH string, not a project object.
@@ -1692,18 +1704,18 @@ function _triggerScoutForProject(projectId, opts) {
       dbPath = registry.DEFAULT_DB_PATH;
     }
     let entry = null;
-    try { entry = ensureWritableDbHandle(dbPath); } catch (_e) {}
+    try { entry = ensureWritableDbHandle(dbPath); } catch (_e) { cairnLog.warn('main', 'scout_db_handle_failed', { message: (_e && _e.message) || String(_e) }); }
     const dbHandle = entry && entry.db ? entry.db : null;
     if (!dbHandle) {
       // Loud failure beats silent no-op: if scout finishes successfully
       // but can't persist, the panel stays at phase='planning' forever
       // unless we surface the failure here.
       try {
-        require('./cairn-log.cjs').error('mode-a-scout', 'db_handle_missing', {
+        cairnLog.error('mode-a-scout', 'db_handle_missing', {
           project_id: projectId,
           db_path: dbPath,
         });
-      } catch (_e) {}
+      } catch (_e) { /* cairnLog itself failed — truly nothing to do */ }
     }
 
     // Fire-and-forget. Errors are logged; promise can never reject
@@ -1718,11 +1730,11 @@ function _triggerScoutForProject(projectId, opts) {
       modeALoop,
     }).catch((e) => {
       try {
-        require('./cairn-log.cjs').error('mode-a-scout', 'orchestrator_threw', {
+        cairnLog.error('mode-a-scout', 'orchestrator_threw', {
           project_id: projectId,
           message: (e && e.message) || String(e),
         });
-      } catch (_e) {}
+      } catch (_e) { /* cairnLog itself failed — truly nothing to do */ }
     });
 
     return { ok: true, scout_started: true };
@@ -1749,7 +1761,7 @@ ipcMain.handle('set-project-goal', (_e, projectId, input) => {
       const trig = _triggerScoutForProject(projectId);
       return { ok: true, goal: result.goal, scout: trig };
     }
-  } catch (_e) {}
+  } catch (_e) { cairnLog.warn('main', 'set_goal_scout_trigger_failed', { message: (_e && _e.message) || String(_e) }); }
   return { ok: true, goal: result.goal };
 });
 
@@ -1766,10 +1778,10 @@ ipcMain.handle('mode-a-start', (_e, projectId) => {
   const res = registry.setModeAPhase(reg, projectId, 'running');
   if (res.error) return { ok: false, error: res.error };
   reg = res.reg;
-  try { registry.saveRegistry(reg); } catch (_e) {}
+  try { registry.saveRegistry(reg); } catch (_e) { cairnLog.warn('main', 'mode_a_start_save_failed', { message: (_e && _e.message) || String(_e) }); }
   // Kick mentor-tick immediately so the first execution spawn doesn't
   // wait 30s for the next interval fire.
-  try { mentorTick.runOnce({ get reg() { return reg; }, ensureDbHandle: ensureWritableDbHandle, projectQueries, mentorPolicy, registry }); } catch (_e) {}
+  try { mentorTick.runOnce({ get reg() { return reg; }, ensureDbHandle: ensureWritableDbHandle, projectQueries, mentorPolicy, registry }); } catch (_e) { cairnLog.warn('main', 'mentor_tick_runonce_failed', { message: (_e && _e.message) || String(_e) }); }
   return { ok: true, settings: res.settings };
 });
 
@@ -1787,7 +1799,7 @@ ipcMain.handle('mode-a-stop', (_e, projectId) => {
   const res = registry.setModeAPhase(reg, projectId, target);
   if (res.error) return { ok: false, error: res.error };
   reg = res.reg;
-  try { registry.saveRegistry(reg); } catch (_e) {}
+  try { registry.saveRegistry(reg); } catch (_e) { cairnLog.warn('main', 'mode_a_stop_save_failed', { message: (_e && _e.message) || String(_e) }); }
   return { ok: true, settings: res.settings };
 });
 
@@ -3177,16 +3189,16 @@ app.on('before-quit', () => {
     trayPollTimer = null;
   }
   if (tray) {
-    try { tray.destroy(); } catch (_e) {}
+    try { tray.destroy(); } catch (_e) { cairnLog.warn('main', 'tray_destroy_failed', { message: (_e && _e.message) || String(_e) }); }
     tray = null;
   }
   // Close every read + write handle to release file locks on Windows.
   for (const entry of dbHandles.values()) {
-    try { entry.db.close(); } catch (_e) {}
+    try { entry.db.close(); } catch (_e) { cairnLog.warn('main', 'db_handle_quit_close_failed', { message: (_e && _e.message) || String(_e) }); }
   }
   dbHandles.clear();
   for (const w of writeHandles.values()) {
-    try { w.close(); } catch (_e) {}
+    try { w.close(); } catch (_e) { cairnLog.warn('main', 'write_handle_quit_close_failed', { message: (_e && _e.message) || String(_e) }); }
   }
   writeHandles.clear();
 });

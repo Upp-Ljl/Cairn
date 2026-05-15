@@ -78,7 +78,7 @@ function ensureRunDir(runId, home) {
 function writeRunMeta(runId, meta, home) {
   try {
     fs.writeFileSync(path.join(runDir(runId, home), 'run.json'), JSON.stringify(meta, null, 2), 'utf8');
-  } catch (_e) {}
+  } catch (_e) { cairnLog.warn('mode-a-scout', 'run_meta_write_failed', { message: (_e && _e.message) || String(_e) }); }
 }
 
 /**
@@ -137,7 +137,7 @@ function gatherProjectContext(projectRoot) {
         break;
       }
     }
-  } catch (_e) {}
+  } catch (_e) { cairnLog.warn('mode-a-scout', 'readme_read_failed', { message: (_e && _e.message) || String(_e) }); }
   try {
     const pkgPath = path.join(projectRoot, 'package.json');
     if (fs.existsSync(pkgPath)) {
@@ -149,7 +149,7 @@ function gatherProjectContext(projectRoot) {
         scripts: raw.scripts ? Object.keys(raw.scripts).slice(0, 12) : null,
       });
     }
-  } catch (_e) {}
+  } catch (_e) { cairnLog.warn('mode-a-scout', 'package_json_read_failed', { message: (_e && _e.message) || String(_e) }); }
   return ctx;
 }
 
@@ -271,7 +271,7 @@ function extractPlanJson(text) {
     try {
       const obj = JSON.parse(fenced[1].trim());
       if (obj && Array.isArray(obj.steps)) return obj;
-    } catch (_e) {}
+    } catch (_e) { cairnLog.warn('mode-a-scout', 'plan_fenced_json_parse_failed', { message: (_e && _e.message) || String(_e) }); }
   }
   const startIndices = [];
   for (let i = 0; i < text.length; i++) if (text[i] === '{') startIndices.push(i);
@@ -286,7 +286,7 @@ function extractPlanJson(text) {
           try {
             const obj = JSON.parse(candidate);
             if (obj && Array.isArray(obj.steps)) return obj;
-          } catch (_e) {}
+          } catch (_e) { /* probe-and-continue: expected for non-JSON substrings */ }
           break;
         }
       }
@@ -354,7 +354,7 @@ async function runScout(input, opts) {
     if (fs.existsSync(cairnMdPath)) {
       guidance = extractPlanGuidance(fs.readFileSync(cairnMdPath, 'utf8'));
     }
-  } catch (_e) {}
+  } catch (_e) { cairnLog.warn('mode-a-scout', 'cairn_md_read_failed', { message: (_e && _e.message) || String(_e) }); }
 
   const projectCtx = gatherProjectContext(input.projectRoot);
 
@@ -378,7 +378,7 @@ async function runScout(input, opts) {
     readme_loaded: !!projectCtx.readme_excerpt,
   };
   writeRunMeta(runId, meta, home);
-  try { fs.writeFileSync(path.join(runDir(runId, home), 'prompt.txt'), prompt, 'utf8'); } catch (_e) {}
+  try { fs.writeFileSync(path.join(runDir(runId, home), 'prompt.txt'), prompt, 'utf8'); } catch (_e) { cairnLog.warn('mode-a-scout', 'prompt_write_failed', { message: (_e && _e.message) || String(_e) }); }
 
   cairnLog.info('mode-a-scout', 'request', {
     run_id: runId,
@@ -419,7 +419,7 @@ async function runScout(input, opts) {
   }
 
   const responseText = chatRes.text || '';
-  try { fs.writeFileSync(path.join(runDir(runId, home), 'response.txt'), responseText, 'utf8'); } catch (_e) {}
+  try { fs.writeFileSync(path.join(runDir(runId, home), 'response.txt'), responseText, 'utf8'); } catch (_e) { cairnLog.warn('mode-a-scout', 'response_write_failed', { message: (_e && _e.message) || String(_e) }); }
 
   const rawPlan = extractPlanJson(responseText);
   const plan = normalizePlan(rawPlan, { goal: input.goal });
@@ -530,7 +530,7 @@ async function runScoutThenWritePlan(deps) {
       });
     } else {
       d.setReg(phaseRes.reg);
-      try { d.registry.saveRegistry(phaseRes.reg); } catch (_e) {}
+      try { d.registry.saveRegistry(phaseRes.reg); } catch (_e) { cairnLog.warn('mode-a-scout', 'registry_save_failed', { message: (_e && _e.message) || String(_e) }); }
     }
   }
 

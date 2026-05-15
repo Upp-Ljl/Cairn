@@ -31,6 +31,7 @@ const cairnLog = require('./cairn-log.cjs');
 const modeALoop = require('./mode-a-loop.cjs');
 const modeAAutoAnswer = require('./mode-a-auto-answer.cjs');
 const modeBSuggester = require('./mode-b-suggester.cjs');
+const harnessGc = require('./harness-gc.cjs');
 
 const TICK_INTERVAL_MS = 30 * 1000;
 /** Cap on RUNNING tasks examined per project per tick. Tasks are sorted
@@ -81,7 +82,7 @@ function gatherRecentActivity(input) {
         LIMIT ?
       `).all(...hints, transitionCap);
     }
-  } catch (_e) { /* missing tasks table or bad hints — leave empty */ }
+  } catch (_e) { cairnLog.warn('mentor-tick', 'tasks_query_failed', { message: (_e && _e.message) || String(_e) }); }
   try {
     const path = project && (project.path || project.root || project.project_root);
     if (path) {
@@ -96,7 +97,7 @@ function gatherRecentActivity(input) {
         });
       }
     }
-  } catch (_e) { /* git not on PATH or non-repo — empty commits */ }
+  } catch (_e) { cairnLog.debug('mentor-tick', 'git_log_unavailable', { message: (_e && _e.message) || String(_e) }); }
   return out;
 }
 
@@ -130,6 +131,32 @@ function runOnce(deps) {
   const ruleCEnabled = deps.ruleCEnabled !== false && !!llmHelpers && typeof llmHelpers.judgeOffGoal === 'function';
   const out = { ticks_run: 1, decisions: 0, projects_scanned: 0, errors: [], rule_c_pending: [] };
   if (!deps.reg || !Array.isArray(deps.reg.projects)) return out;
+
+  // Harness GC: reap stale processes + recover orphaned tasks.
+  // Runs once per tick (30s), not per project. Uses the first available DB handle.
+  if (deps.reg.projects.length > 0) {
+    try {
+      const firstProject = deps.reg.projects[0];
+      let gcDbPath = firstProject.db_path;
+      if (!gcDbPath || gcDbPath === '/dev/null' || gcDbPath === '(unknown)') {
+        gcDbPath = deps.registry.DEFAULT_DB_PATH;
+      }
+      const gcEntry = deps.ensureDbHandle(gcDbPath);
+      if (gcEntry && gcEntry.db) {
+        const reaped = harnessGc.reapStaleProcesses(gcEntry.db, { nowFn: deps.nowFn });
+        if (reaped.reaped > 0) {
+          cairnLog.info('harness-gc', 'processes_reaped', { count: reaped.reaped, agent_ids: reaped.agent_ids });
+        }
+        const recovered = harnessGc.recoverOrphanedTasks(gcEntry.db, { nowFn: deps.nowFn });
+        if (recovered.recovered > 0) {
+          cairnLog.info('harness-gc', 'tasks_recovered', { count: recovered.recovered, task_ids: recovered.task_ids });
+        }
+      }
+    } catch (_e) {
+      cairnLog.warn('harness-gc', 'gc_tick_failed', { message: (_e && _e.message) || String(_e) });
+    }
+  }
+
   for (const project of deps.reg.projects) {
     try {
       // /dev/null / (unknown) sentinel — fall back to default DB.
@@ -147,11 +174,11 @@ function runOnce(deps) {
 
       // L1: load / refresh the per-project profile (CAIRN.md cache).
       let profile = null;
-      try { profile = mentorProfile.loadProfile(entry.db, project); } catch (_e) { profile = null; }
+      try { profile = mentorProfile.loadProfile(entry.db, project); } catch (_e) { cairnLog.warn('mentor-tick', 'profile_load_failed', { project_id: project.id, message: (_e && _e.message) || String(_e) }); profile = null; }
 
       // L2: read agent_brief scratchpad for any agent associated with this project.
       let briefs = [];
-      try { briefs = mentorAgentBrief.readAgentBriefs(entry.db, hints) || []; } catch (_e) { briefs = []; }
+      try { briefs = mentorAgentBrief.readAgentBriefs(entry.db, hints) || []; } catch (_e) { cairnLog.warn('mentor-tick', 'briefs_read_failed', { message: (_e && _e.message) || String(_e) }); briefs = []; }
 
       // RUNNING tasks for this project (sorted most-recent updated_at first).
       const placeholders = '(' + hints.map(() => '?').join(',') + ')';
@@ -207,7 +234,7 @@ function runOnce(deps) {
           if (decision.action === 'deferred_to_async_caller') continue;
           out.decisions++;
           if (typeof deps.onDecision === 'function') {
-            try { deps.onDecision(project.id, decision); } catch (_e) {}
+            try { deps.onDecision(project.id, decision); } catch (_e) { cairnLog.warn('mentor-tick', 'onDecision_callback_failed', { message: (_e && _e.message) || String(_e) }); }
           }
         }
       }
@@ -250,7 +277,7 @@ function runOnce(deps) {
                     action: decision.action,
                   });
                   if (typeof deps.onDecision === 'function') {
-                    try { deps.onDecision(project.id, decision); } catch (_e) {}
+                    try { deps.onDecision(project.id, decision); } catch (_e) { cairnLog.warn('mentor-tick', 'onDecision_callback_failed', { message: (_e && _e.message) || String(_e) }); }
                   }
                 }
                 return decision;
@@ -279,7 +306,7 @@ function runOnce(deps) {
           let taskRow = null;
           try {
             taskRow = entry.db.prepare('SELECT task_id, state FROM tasks WHERE task_id = ?').get(currentTaskId);
-          } catch (_e) { /* tasks table missing — skip */ }
+          } catch (_e) { cairnLog.warn('mentor-tick', 'tasks_table_query_failed', { message: (_e && _e.message) || String(_e) }); }
           if (!taskRow) continue;
           if (taskRow.state !== 'WAITING_REVIEW') continue;
           // Transition lane → REVIEW + emit mentor nudge once.
@@ -298,11 +325,11 @@ function runOnce(deps) {
             });
             out.decisions++;
             if (typeof deps.onDecision === 'function') {
-              try { deps.onDecision(project.id, { rule: 'B-mode', action: 'lane_to_review', lane_id: L.id, task_id: currentTaskId }); } catch (_e) {}
+              try { deps.onDecision(project.id, { rule: 'B-mode', action: 'lane_to_review', lane_id: L.id, task_id: currentTaskId }); } catch (_e) { cairnLog.warn('mentor-tick', 'onDecision_callback_failed', { message: (_e && _e.message) || String(_e) }); }
             }
-          } catch (_e) { /* skip — non-fatal */ }
+          } catch (_e) { cairnLog.warn('mentor-tick', 'lane_review_failed', { message: (_e && _e.message) || String(_e) }); }
         }
-      } catch (_e) { /* lane module missing or other transient — ignore */ }
+      } catch (_e) { cairnLog.debug('mentor-tick', 'lane_module_unavailable', { message: (_e && _e.message) || String(_e) }); }
 
       // ----- Mode A loop (CEO 2026-05-14): "长程任务的执行" path.
       // Per-project: only fire when cockpit_settings.mode === 'A'.
@@ -327,7 +354,7 @@ function runOnce(deps) {
                 activeCandidates = entry.db.prepare(
                   `SELECT COUNT(*) AS n FROM processes WHERE agent_id IN ${phs} AND status='ACTIVE'`
                 ).get(...hints).n;
-              } catch (_e) { /* leave 0 */ }
+              } catch (_e) { cairnLog.debug('mentor-tick', 'telemetry_query_failed', { message: (_e && _e.message) || String(_e) }); }
             }
             const hasPlan = !!modeALoop.getPlan(entry.db, project.id);
             cairnLog.info('mode-a-loop', 'tick_summary', {
@@ -339,7 +366,7 @@ function runOnce(deps) {
               active_candidates: activeCandidates,
               has_plan: hasPlan,
             });
-          } catch (_e) { /* never block the tick on telemetry */ }
+          } catch (_e) { cairnLog.debug('mentor-tick', 'telemetry_block_failed', { message: (_e && _e.message) || String(_e) }); }
           // 2026-05-14: reconcile any orphan DISPATCHED step whose
           // inbox notification didn't go out (pre-f1e88af dispatches
           // sit PENDING in dispatch_requests with no agent_inbox row;
@@ -542,7 +569,7 @@ function runOnce(deps) {
                     "SELECT evaluation_summary FROM outcomes WHERE task_id = ? AND status = 'PASS'"
                   ).get(taskId);
                   if (row && row.evaluation_summary) summary = row.evaluation_summary;
-                } catch (_e) { /* table missing or stale; fall through */ }
+                } catch (_e) { cairnLog.warn('mentor-tick', 'outcomes_query_failed', { message: (_e && _e.message) || String(_e) }); }
                 const stepIdx = decision.advance.step_idx;
                 const stepLabel = decision.plan && decision.plan.steps && decision.plan.steps[stepIdx]
                   ? decision.plan.steps[stepIdx].label : null;
@@ -608,7 +635,7 @@ function runOnce(deps) {
                     action: 'worker_spawned',
                     run_id: spawnRes.run_id,
                     agent_id: spawnRes.agent_id,
-                  }); } catch (_e) {}
+                  }); } catch (_e) { cairnLog.warn('mentor-tick', 'onDecision_callback_failed', { message: (_e && _e.message) || String(_e) }); }
                 }
               }
             } catch (e) {
@@ -619,7 +646,7 @@ function runOnce(deps) {
             }
           }
           if (typeof deps.onDecision === 'function' && decision && decision.action !== 'no_goal' && decision.action !== 'unchanged' && decision.action !== 'no_project') {
-            try { deps.onDecision(project.id, Object.assign({ rule: 'A-mode' }, decision)); } catch (_e) {}
+            try { deps.onDecision(project.id, Object.assign({ rule: 'A-mode' }, decision)); } catch (_e) { cairnLog.warn('mentor-tick', 'onDecision_callback_failed', { message: (_e && _e.message) || String(_e) }); }
           }
         } else if (cockpitSettings && cockpitSettings.mode === 'B') {
           // ----- Mode B suggestion ranking (MA-3 2026-05-14).
@@ -636,7 +663,7 @@ function runOnce(deps) {
             out.decisions += bDecision.added;
           }
           if (typeof deps.onDecision === 'function' && bDecision && bDecision.action === 'ran' && bDecision.added > 0) {
-            try { deps.onDecision(project.id, Object.assign({ rule: 'B-mode' }, bDecision)); } catch (_e) {}
+            try { deps.onDecision(project.id, Object.assign({ rule: 'B-mode' }, bDecision)); } catch (_e) { cairnLog.warn('mentor-tick', 'onDecision_callback_failed', { message: (_e && _e.message) || String(_e) }); }
           }
         }
       } catch (e) {
@@ -669,10 +696,10 @@ function start(deps, opts) {
   const interval = o.intervalMs || TICK_INTERVAL_MS;
   // Drive the first tick on next event loop turn (don't block boot).
   setImmediate(() => {
-    try { runOnce(deps); } catch (_e) {}
+    try { runOnce(deps); } catch (_e) { cairnLog.error('mentor-tick', 'initial_tick_failed', { message: (_e && _e.message) || String(_e) }); }
   });
   _timer = setInterval(() => {
-    try { runOnce(deps); } catch (_e) {}
+    try { runOnce(deps); } catch (_e) { cairnLog.error('mentor-tick', 'interval_tick_failed', { message: (_e && _e.message) || String(_e) }); }
   }, interval).unref();  // unref so the panel can exit cleanly.
   return { stop };
 }

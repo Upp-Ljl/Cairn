@@ -84,7 +84,9 @@ function ensureRunDir(runId, home) {
 function writeRunMeta(runId, meta, home) {
   try {
     fs.writeFileSync(runFile(runId, 'run.json', home), JSON.stringify(meta, null, 2), 'utf8');
-  } catch (_e) { /* swallow — disk full shouldn't crash launcher */ }
+  } catch (_e) { /* swallow — disk full shouldn't crash launcher */
+    cairnLog.info('claude-stream-launcher', 'run_meta_write_failed', { message: (_e && _e.message) || String(_e) });
+  }
 }
 
 function readRunMeta(runId, home) {
@@ -112,7 +114,9 @@ function appendTail(runId, chunk, home) {
       fs.closeSync(fd);
       fs.writeFileSync(p, tail);
     }
-  } catch (_e) { /* swallow */ }
+  } catch (_e) { /* swallow — disk full shouldn't crash launcher */
+    cairnLog.info('claude-stream-launcher', 'tail_log_append_failed', { message: (_e && _e.message) || String(_e) });
+  }
 }
 
 /**
@@ -125,7 +129,9 @@ function appendStreamEvent(runId, rawLine, home) {
   try {
     const p = runFile(runId, 'stream_events.jsonl', home);
     fs.appendFileSync(p, rawLine + '\n', 'utf8');
-  } catch (_e) { /* swallow */ }
+  } catch (_e) { /* swallow — disk full shouldn't crash launcher */
+    cairnLog.info('claude-stream-launcher', 'stream_event_append_failed', { message: (_e && _e.message) || String(_e) });
+  }
 }
 
 /**
@@ -379,9 +385,9 @@ function launchStreamWorker(input, opts) {
         run_id: runId,
         idle_ms: idleTimeoutMs,
       });
-      try { child.kill('SIGTERM'); } catch (_e) {}
+      try { child.kill('SIGTERM'); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'watchdog_sigterm_failed', { message: (_e && _e.message) || String(_e) }); }
       // Force after grace period.
-      setTimeout(() => { try { child.kill('SIGKILL'); } catch (_e) {} }, 5000).unref();
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'watchdog_sigkill_failed', { message: (_e && _e.message) || String(_e) }); } }, 5000).unref();
     }, idleTimeoutMs);
     if (watchdog.unref) watchdog.unref();
   }
@@ -395,14 +401,14 @@ function launchStreamWorker(input, opts) {
     // 1. Raw NDJSON line → stream_events.jsonl
     try {
       appendStreamEvent(runId, JSON.stringify(ev), home);
-    } catch (_e) {}
+    } catch (_e) { cairnLog.warn('claude-stream-launcher', 'event_jsonl_write_failed', { message: (_e && _e.message) || String(_e) }); }
 
     // 2. Human-readable text → tail.log (backward compat with LLM helpers)
     const text = extractAssistantText(ev);
     if (text) {
       appendTail(runId, text, home);
       if (typeof o.onLine === 'function') {
-        try { o.onLine(text); } catch (_e) {}
+        try { o.onLine(text); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'onLine_callback_failed', { message: (_e && _e.message) || String(_e) }); }
       }
     }
 
@@ -415,7 +421,7 @@ function launchStreamWorker(input, opts) {
 
     // 4. Caller hook (Phase 2 uses this to capture session_id immediately)
     if (typeof o.onEvent === 'function') {
-      try { o.onEvent(ev); } catch (_e) {}
+      try { o.onEvent(ev); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'onEvent_callback_failed', { message: (_e && _e.message) || String(_e) }); }
     }
   });
 
@@ -434,7 +440,7 @@ function launchStreamWorker(input, opts) {
       try {
         const s = chunk.toString('utf8');
         appendTail(runId, '[stderr] ' + s, home);
-      } catch (_e) {}
+      } catch (_e) { cairnLog.warn('claude-stream-launcher', 'stderr_append_failed', { message: (_e && _e.message) || String(_e) }); }
     });
   }
 
@@ -447,7 +453,7 @@ function launchStreamWorker(input, opts) {
     // Defense-in-depth: 'error' usually precedes 'exit' so the exit
     // handler covers cleanup, but if an OS-level error skips 'exit'
     // the temp mcp-config file would leak until tmp GC. Idempotent.
-    try { mcpRes.cleanup(); } catch (_e) {}
+    try { mcpRes.cleanup(); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'mcp_config_cleanup_failed', { message: (_e && _e.message) || String(_e) }); }
     cairnLog.error('claude-stream-launcher', 'spawn_error', {
       run_id: runId,
       message: (err && err.message) || String(err),
@@ -458,7 +464,7 @@ function launchStreamWorker(input, opts) {
     if (watchdog) clearTimeout(watchdog);
     // Phase 3: drop the temp MCP config file. Safe to call even if it's
     // already gone (cleanup() swallows ENOENT).
-    try { mcpRes.cleanup(); } catch (_e) {}
+    try { mcpRes.cleanup(); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'mcp_config_exit_cleanup_failed', { message: (_e && _e.message) || String(_e) }); }
     // Source of truth for run-state-during-life is the in-memory `meta`
     // (event_count, last_event_at, session_id, result_subtype etc.
     // are mutated there as events flow). The disk-resident run.json

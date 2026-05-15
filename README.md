@@ -391,8 +391,8 @@ For full engineering conventions (commit style, test commands, monorepo structur
 ### Run tests
 
 ```bash
-cd packages/daemon && npm test        # 411 tests (W5 Phase 3 baseline)
-cd packages/mcp-server && npm test    # 329 tests + 1 pre-existing skip (W5 Phase 3 baseline)
+cd packages/daemon && npm test        # 439 tests (W5 Phase 3 baseline)
+cd packages/mcp-server && npm test    # 424 tests + 1 pre-existing skip (W5 Phase 3 baseline)
 ```
 
 ### Run the full Phase 3 closed-loop dogfood (real MCP stdio across 3 sessions)

@@ -184,8 +184,8 @@ git push "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" --tags
 
 ```
 packages/
-├── daemon/         # 持久层（SQLite + 仓储层 + git-stash backend，411 tests）
-├── mcp-server/     # 29 MCP 工具，stdio（kernel + integration layer，329 tests）
+├── daemon/         # 持久层（SQLite + 仓储层 + git-stash backend，439 tests）
+├── mcp-server/     # 29 MCP 工具，stdio（kernel + integration layer，424 tests）
 └── desktop-shell/  # Electron product layer（panel + pet + tray，read-only SQLite）
 ```
 
@@ -202,8 +202,8 @@ import { openDatabase } from '../../daemon/dist/storage/db.js';
 每个包独立跑：
 
 ```bash
-cd packages/daemon && npm test           # 411 tests / 29 test files（W5 Phase 3 后；含 19 outcomes 仓储 + 6 WAITING_REVIEW transition）
-cd packages/mcp-server && npm test       # 329 tests / 17 test files / 1 pre-existing skip（含 21 parser + 22 spawn/path utils + 32 primitives + 11 evaluator + 12 outcomes acceptance）
+cd packages/daemon && npm test           # 439 tests / 29 test files（W5 Phase 3 后；含 19 outcomes 仓储 + 6 WAITING_REVIEW transition）
+cd packages/mcp-server && npm test       # 424 tests / 17 test files / 1 pre-existing skip（含 21 parser + 22 spawn/path utils + 32 primitives + 11 evaluator + 12 outcomes acceptance）
 ```
 
 **Live dogfood**（W5 Phase 3 闭环，跨 3 个真实 MCP stdio session）：
