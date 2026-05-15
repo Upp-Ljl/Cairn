@@ -588,6 +588,46 @@ body {
 }
 .cockpit-mode-a-plan-phase-pill.running { background: var(--accent-bg); color: var(--accent); }
 .cockpit-mode-a-plan-phase-pill.planning { background: var(--accent-bg); color: var(--accent); animation: dotPulse 1.5s ease-in-out infinite; }
+/* Signal-cat refactor commit A (2026-05-15) — STATUS pill row */
+.cockpit-signals-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 0 2px 0;
+  font-size: 11px;
+}
+.cockpit-signals-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cockpit-signals-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cockpit-signals-pills .pill {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.cockpit-signals-pills .pill.avail {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.cockpit-signals-pills .pill.missing {
+  background: var(--alert-bg);
+  color: var(--alert);
+  border: 1px solid var(--alert-bg);
+  cursor: help;
+}
 .cockpit-mode-a-plan-progress {
   font-size: 12px;
   color: var(--text-secondary);
