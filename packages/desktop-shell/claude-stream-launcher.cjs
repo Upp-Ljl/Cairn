@@ -678,28 +678,40 @@ function launchStreamWorker(input, opts) {
     child,
     /**
      * Send a follow-up user turn to the running CC session.
-     * Used by Agent Pool for multi-step-in-one-session.
+     * Used by Agent Pool (Module 8) for multi-step-in-one-session and
+     * by the budget controller (Harness Phase 1) for wrap-up/fuse
+     * injections.
      *
-     * TODO (Architecture B): bump `_hookState.turn_index` here and
-     * reset `_hookState.fired_for_turn = turn_index - 1` so the Stop
-     * hook + result-event dedupe gate fires once per *new* turn, not
-     * once per spawn. Without this, multi-turn callers see onTurnDone
-     * fire exactly once (for turn 0) and subsequent Stop events on
-     * later turns get suppressed as duplicates. The `turn_index` field
-     * is already on the wire shape — only the producer wiring is
-     * missing. Smoke coverage: a new `hooks_multi_turn` scenario in
-     * `smoke-hooks-turn-protocol.mjs` should accompany the wiring.
+     * Architecture B Phase 1 (2026-05-15): before writing the envelope
+     * we bump `_hookState.turn_index` and rewind
+     * `_hookState.fired_for_turn` to `turn_index - 1`. This re-opens
+     * the Stop-hook + result-event dedupe gate so the NEXT Stop event
+     * fires `onTurnDone` exactly once for the new turn. Without this,
+     * `fired_for_turn === turn_index` would suppress every Stop after
+     * the first one as a duplicate, and multi-turn callers never see
+     * `onTurnDone` fire past turn 0.
+     *
+     * Order matters: mutate dedupe state BEFORE writing so a fast Stop
+     * hook (or result event) racing the stdin flush still finds the
+     * correct `turn_index` in the closure. If the write itself throws,
+     * we roll back so the gate stays consistent with what CC saw.
      *
      * @param {string} prompt
      * @returns {boolean} true if written, false if child stdin is gone
      */
     writeNextTurn(prompt) {
       if (!child || child.killed || !child.stdin || child.stdin.destroyed) return false;
+      _hookState.turn_index += 1;
+      _hookState.fired_for_turn = _hookState.turn_index - 1;
       try {
         child.stdin.write(makeInputEnvelope(prompt));
         bumpWatchdog();
         return true;
-      } catch (_e) { return false; }
+      } catch (_e) {
+        _hookState.turn_index -= 1;
+        _hookState.fired_for_turn = _hookState.turn_index;
+        return false;
+      }
     },
   };
   return handle;
