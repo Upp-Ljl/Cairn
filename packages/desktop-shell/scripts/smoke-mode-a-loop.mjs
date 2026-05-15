@@ -345,6 +345,172 @@ section('15 bindOrphanTask: dispatch_id wins over text match');
 }
 
 // ---------------------------------------------------------------------------
+// detectStaleAndReset coverage — esp. the 2026-05-15 bound-task-stale
+// path. Tasks table + processes table needed; minimal schema below.
+
+function makeDbWithTasks() {
+  const db = makeDb();
+  db.exec(`
+    CREATE TABLE tasks (
+      task_id TEXT PRIMARY KEY,
+      intent TEXT NOT NULL,
+      state TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      created_by_agent_id TEXT,
+      metadata_json TEXT
+    );
+    CREATE TABLE processes (
+      agent_id TEXT PRIMARY KEY,
+      agent_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      registered_at INTEGER NOT NULL,
+      last_heartbeat INTEGER NOT NULL,
+      heartbeat_ttl INTEGER NOT NULL DEFAULT 60000
+    );
+    CREATE TABLE dispatch_requests (
+      id TEXT PRIMARY KEY,
+      task_id TEXT,
+      status TEXT
+    );
+  `);
+  return db;
+}
+
+function seedStepAsDispatched(db, projectId, opts) {
+  const planId = 'plan_' + Math.random().toString(36).slice(2, 8);
+  const dispatchedAt = opts.dispatchedAt;
+  const plan = {
+    plan_id: planId,
+    goal_id: 'g_t',
+    drafted_by: 'test',
+    current_idx: 0,
+    status: 'ACTIVE',
+    steps: [{
+      idx: 0,
+      label: 'do the thing',
+      state: 'DISPATCHED',
+      dispatched_at: dispatchedAt,
+      dispatch_id: opts.dispatchId || null,
+      task_id: opts.taskId || undefined,
+    }],
+    updated_at: dispatchedAt,
+  };
+  modeALoop.writePlan(db, projectId, plan, dispatchedAt);
+  return plan;
+}
+
+section('16 detectStaleAndReset: bound task + dead process → unbind + reset');
+{
+  const db = makeDbWithTasks();
+  const project = { id: 'p_stale_a' };
+  const staleMs = 60000;       // 1 min
+  const now = 1_000_000_000;
+  const oldTs = now - 5 * 60000; // 5 min ago
+
+  // Plan step bound to a task. Task itself hasn't moved in 5 min,
+  // process status='DEAD'.
+  db.prepare('INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES (?,?,?,?,?,?)').run(
+    't_dead', 'do the thing', 'RUNNING', oldTs, oldTs, 'agent_dead',
+  );
+  db.prepare('INSERT INTO processes (agent_id, agent_type, status, registered_at, last_heartbeat, heartbeat_ttl) VALUES (?,?,?,?,?,?)').run(
+    'agent_dead', 'claude-code', 'DEAD', oldTs, oldTs, 60000,
+  );
+  seedStepAsDispatched(db, 'p_stale_a', { dispatchedAt: oldTs, taskId: 't_dead' });
+
+  const out = modeALoop.detectStaleAndReset(db, project, { staleMs, nowFn: () => now });
+  ok(out.reset === 1, `reset=1 (got ${out.reset})`);
+
+  const plan = modeALoop.getPlan(db, 'p_stale_a');
+  ok(plan.steps[0].state === 'PENDING', 'step reset to PENDING');
+  ok(plan.steps[0].task_id === undefined, 'task_id unbound');
+  ok(plan.steps[0].retry_count === 1, `retry_count incremented (got ${plan.steps[0].retry_count})`);
+  ok(plan.steps[0].dispatch_id === undefined, 'dispatch_id cleared');
+  ok(plan.steps[0].dispatched_at === undefined, 'dispatched_at cleared');
+}
+
+section('17 detectStaleAndReset: bound task + ACTIVE process + fresh heartbeat → NOT stale');
+{
+  const db = makeDbWithTasks();
+  const project = { id: 'p_stale_b' };
+  const staleMs = 60000;
+  const now = 1_000_000_000;
+  const oldTs = now - 5 * 60000;
+
+  // Task hasn't moved in 5 min BUT process is alive with fresh heartbeat.
+  // Should NOT be considered stale (active CC could be thinking).
+  db.prepare('INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES (?,?,?,?,?,?)').run(
+    't_alive', 'do the thing', 'RUNNING', oldTs, oldTs, 'agent_alive',
+  );
+  db.prepare('INSERT INTO processes (agent_id, agent_type, status, registered_at, last_heartbeat, heartbeat_ttl) VALUES (?,?,?,?,?,?)').run(
+    'agent_alive', 'claude-code', 'ACTIVE', oldTs, now - 5000, 60000,  // heartbeat 5s ago
+  );
+  seedStepAsDispatched(db, 'p_stale_b', { dispatchedAt: oldTs, taskId: 't_alive' });
+
+  const out = modeALoop.detectStaleAndReset(db, project, { staleMs, nowFn: () => now });
+  ok(out.reset === 0, `reset=0 (got ${out.reset}) — agent alive`);
+  const plan = modeALoop.getPlan(db, 'p_stale_b');
+  ok(plan.steps[0].state === 'DISPATCHED', 'step still DISPATCHED');
+  ok(plan.steps[0].task_id === 't_alive', 'task_id preserved');
+}
+
+section('18 detectStaleAndReset: bound task in DONE state → NOT stale (advanceOnComplete handles)');
+{
+  const db = makeDbWithTasks();
+  const project = { id: 'p_stale_c' };
+  const staleMs = 60000;
+  const now = 1_000_000_000;
+  const oldTs = now - 5 * 60000;
+
+  db.prepare('INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES (?,?,?,?,?,?)').run(
+    't_done', 'do the thing', 'DONE', oldTs, oldTs, 'agent_done',
+  );
+  seedStepAsDispatched(db, 'p_stale_c', { dispatchedAt: oldTs, taskId: 't_done' });
+
+  const out = modeALoop.detectStaleAndReset(db, project, { staleMs, nowFn: () => now });
+  ok(out.reset === 0, `reset=0 (got ${out.reset}) — terminal state`);
+  const plan = modeALoop.getPlan(db, 'p_stale_c');
+  ok(plan.steps[0].task_id === 't_done', 'task_id preserved (advance handles)');
+}
+
+section('19 detectStaleAndReset: bound task + process missing entirely → unbind');
+{
+  const db = makeDbWithTasks();
+  const project = { id: 'p_stale_d' };
+  const staleMs = 60000;
+  const now = 1_000_000_000;
+  const oldTs = now - 5 * 60000;
+
+  db.prepare('INSERT INTO tasks (task_id, intent, state, created_at, updated_at, created_by_agent_id) VALUES (?,?,?,?,?,?)').run(
+    't_orphan', 'do the thing', 'RUNNING', oldTs, oldTs, 'agent_vanished',
+  );
+  // NO row in processes for agent_vanished.
+  seedStepAsDispatched(db, 'p_stale_d', { dispatchedAt: oldTs, taskId: 't_orphan' });
+
+  const out = modeALoop.detectStaleAndReset(db, project, { staleMs, nowFn: () => now });
+  ok(out.reset === 1, `reset=1 (got ${out.reset}) — process row missing`);
+  const plan = modeALoop.getPlan(db, 'p_stale_d');
+  ok(plan.steps[0].task_id === undefined, 'task_id unbound');
+}
+
+section('20 detectStaleAndReset: pre-existing path still works — unclaimed dispatch with no task_id');
+{
+  const db = makeDbWithTasks();
+  const project = { id: 'p_stale_e' };
+  const staleMs = 60000;
+  const now = 1_000_000_000;
+  const oldTs = now - 5 * 60000;
+
+  // Step dispatched but never bound to a task; no dispatch row either.
+  seedStepAsDispatched(db, 'p_stale_e', { dispatchedAt: oldTs });
+
+  const out = modeALoop.detectStaleAndReset(db, project, { staleMs, nowFn: () => now });
+  ok(out.reset === 1, `reset=1 (got ${out.reset}) — pre-existing path`);
+  const plan = modeALoop.getPlan(db, 'p_stale_e');
+  ok(plan.steps[0].state === 'PENDING', 'reset to PENDING');
+}
+
+// ---------------------------------------------------------------------------
 header(`${asserts - fails}/${asserts} assertions passed (${fails} failed)`);
 if (fails) {
   for (const f of failures) process.stdout.write(`  - ${f}\n`);

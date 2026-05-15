@@ -566,6 +566,70 @@ function runOnceForProject(deps) {
  *
  * Returns { reset: number, retry_counts: { step_idx: count } }.
  */
+/**
+ * Check whether a step-bound task should be considered stale (the CC
+ * that claimed it died without producing a result). A task is stale
+ * when BOTH:
+ *   - tasks.updated_at hasn't moved in >= staleMs (no MCP activity)
+ *   - the task's owning process is either missing, has status !=
+ *     'ACTIVE', or its heartbeat is older than staleMs
+ *
+ * Returns { stale: boolean, reason: string|null, agent_id: string|null }.
+ * Best-effort: returns {stale: false} on any DB error (don't unbind
+ * spuriously if we can't read state).
+ */
+function _isBoundTaskStale(db, taskId, now, staleMs) {
+  if (!db || !taskId) return { stale: false, reason: null, agent_id: null };
+  let row = null;
+  try {
+    row = db.prepare(
+      'SELECT state, updated_at, created_by_agent_id FROM tasks WHERE task_id = ?',
+    ).get(taskId);
+  } catch (_e) {
+    return { stale: false, reason: null, agent_id: null };
+  }
+  if (!row) {
+    // Task vanished — treat as stale so we unbind. (Shouldn't happen
+    // under normal flow, but be defensive.)
+    return { stale: true, reason: 'bound_task_missing', agent_id: null };
+  }
+  // Terminal states are not "stale" — advanceOnComplete handles them.
+  if (row.state === 'DONE' || row.state === 'FAILED' || row.state === 'CANCELLED') {
+    return { stale: false, reason: null, agent_id: row.created_by_agent_id || null };
+  }
+  const taskAge = row.updated_at ? (now - row.updated_at) : Infinity;
+  if (taskAge < staleMs) {
+    // Task touched recently — not stale.
+    return { stale: false, reason: null, agent_id: row.created_by_agent_id || null };
+  }
+  // Task hasn't moved. Check owning process.
+  const agentId = row.created_by_agent_id || null;
+  if (!agentId) {
+    return { stale: true, reason: 'bound_task_idle_no_agent', agent_id: null };
+  }
+  let proc = null;
+  try {
+    proc = db.prepare(
+      'SELECT status, last_heartbeat, heartbeat_ttl FROM processes WHERE agent_id = ?',
+    ).get(agentId);
+  } catch (_e) { /* skip */ }
+  if (!proc) {
+    return { stale: true, reason: 'bound_task_idle_process_missing', agent_id: agentId };
+  }
+  if (proc.status === 'DEAD') {
+    return { stale: true, reason: 'bound_task_idle_process_dead', agent_id: agentId };
+  }
+  const hbTtl = (typeof proc.heartbeat_ttl === 'number' && proc.heartbeat_ttl > 0) ? proc.heartbeat_ttl : 60000;
+  const hbAge = proc.last_heartbeat ? (now - proc.last_heartbeat) : Infinity;
+  // Process is considered alive if status=ACTIVE AND heartbeat fresh.
+  // Otherwise treat as stale.
+  const procAlive = proc.status === 'ACTIVE' && hbAge < Math.max(hbTtl, staleMs);
+  if (!procAlive) {
+    return { stale: true, reason: 'bound_task_idle_process_stale', agent_id: agentId };
+  }
+  return { stale: false, reason: null, agent_id: agentId };
+}
+
 function detectStaleAndReset(db, project, opts) {
   const out = { reset: 0, retry_counts: {} };
   if (!db || !project) return out;
@@ -579,17 +643,32 @@ function detectStaleAndReset(db, project, opts) {
     if (!step || step.state !== 'DISPATCHED') continue;
     if (!step.dispatched_at || (now - step.dispatched_at) < staleMs) continue;
     // Direct task_id binding (set by bindOrphanTask or markStepDispatched)
-    // → an agent IS picking up the work, even if dispatch_requests row
-    // never got linked. Not stale.
-    if (step.task_id) continue;
-    // Otherwise look at the dispatch_requests row for task_id linkage.
-    let dr = null;
-    if (step.dispatch_id) {
+    // → an agent picked up the work. Normally not stale — BUT if the
+    // bound CC dies mid-turn (panel crash, OOM, manual kill, hooks
+    // truncation bug) the task row stays RUNNING forever and the loop
+    // gets stuck on this step. 2026-05-15 fix: when task_id is set,
+    // check whether the bound task is still being touched AND its
+    // owning process is still alive. If both stale, unbind + fall
+    // through to reset so decideNextDispatch can re-spawn.
+    let staleReason = 'dispatch_unclaimed';
+    let unboundTaskId = null;
+    let unboundAgentId = null;
+    if (step.task_id) {
+      const boundStale = _isBoundTaskStale(db, step.task_id, now, staleMs);
+      if (!boundStale.stale) continue;
+      unboundTaskId = step.task_id;
+      unboundAgentId = boundStale.agent_id || null;
+      staleReason = boundStale.reason || 'bound_task_and_process_stale';
+      delete step.task_id;
+    } else if (step.dispatch_id) {
+      // No task_id yet — look at the dispatch_requests row for late
+      // linkage. If an agent already claimed via task_id, not stale.
+      let dr = null;
       try {
         dr = db.prepare('SELECT task_id, status FROM dispatch_requests WHERE id = ?').get(step.dispatch_id);
       } catch (_e) { /* skip */ }
+      if (dr && dr.task_id) continue; // agent picked up; not stale
     }
-    if (dr && dr.task_id) continue; // agent picked up; not stale
     // Capture stale_age BEFORE we delete dispatched_at (subagent审查
     // fix: previously logged 0 because the delete happened first).
     const staleAgeMs = now - (step.dispatched_at || now);
@@ -612,6 +691,9 @@ function detectStaleAndReset(db, project, opts) {
       step_idx: i,
       retry_count: retryCount,
       stale_age_ms: staleAgeMs,
+      reason: staleReason,
+      unbound_task_id: unboundTaskId,
+      unbound_agent_id: unboundAgentId,
     });
   }
   if (dirty) {
