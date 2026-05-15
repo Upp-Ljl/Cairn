@@ -55,6 +55,7 @@ const { spawn } = require('node:child_process');
 const { createNdjsonStream } = require('./ndjson-stream.cjs');
 const cairnLog = require('./cairn-log.cjs');
 const mcpConfigBuilder = require('./claude-mcp-config.cjs');
+const settingsConfigBuilder = require('./claude-settings-config.cjs');
 
 const RUN_DIR_NAME = 'worker-runs';
 const MAX_TAIL_BYTES = 128 * 1024; // 128 KB — matches worker-launcher
@@ -272,6 +273,28 @@ function launchStreamWorker(input, opts) {
     return { ok: false, error: 'mcp_config_failed', detail: mcpRes.error };
   }
 
+  // Hooks turn protocol (2026-05-15 commit 2): per-spawn settings.json
+  // registers SessionStart + Stop hooks. With --include-hook-events,
+  // CC emits {type:'system',subtype:'hook_started'|'hook_response',...}
+  // NDJSON events that the launcher will consume in commit 3 as the
+  // primary turn-completion signal. THIS commit only threads argv —
+  // hooks fire and write to disk + echo via stdout but the launcher
+  // ignores them (existing `result`-event capture still drives behavior).
+  // Reference: https://github.com/smithersai/claude-p
+  const settingsRes = settingsConfigBuilder.buildSettingsConfigFile({
+    runId,
+    home: o.home,
+    tmpDir: o.settingsConfigTmpDir,
+  });
+  if (!settingsRes.ok) {
+    cairnLog.error('claude-stream-launcher', 'settings_config_failed', {
+      run_id: runId,
+      error: settingsRes.error,
+    });
+    try { mcpRes.cleanup(); } catch (_e) {}
+    return { ok: false, error: 'settings_config_failed', detail: settingsRes.error };
+  }
+
   const argv = [
     '--output-format', 'stream-json',
     '--input-format', 'stream-json',
@@ -279,6 +302,8 @@ function launchStreamWorker(input, opts) {
     '--permission-mode', 'bypassPermissions',
     '--mcp-config', mcpRes.tempPath,
     '--strict-mcp-config',
+    '--settings', settingsRes.tempPath,
+    '--include-hook-events',
   ];
 
   // Phase 2: --resume <sessionId> if caller is continuing a prior run.
@@ -286,7 +311,8 @@ function launchStreamWorker(input, opts) {
   // turn a resume into a fresh spawn and break the state machine.
   if (input.resumeSessionId != null) {
     if (typeof input.resumeSessionId !== 'string' || !input.resumeSessionId.trim()) {
-      mcpRes.cleanup();
+      try { mcpRes.cleanup(); } catch (_e) {}
+      try { settingsRes.cleanup(); } catch (_e) {}
       return { ok: false, error: 'resumeSessionId_must_be_nonempty_string' };
     }
     argv.push('--resume', input.resumeSessionId);
@@ -336,7 +362,8 @@ function launchStreamWorker(input, opts) {
     meta.ended_at = Date.now();
     meta.error = 'spawn_threw: ' + ((e && e.message) || String(e));
     writeRunMeta(runId, meta, home);
-    mcpRes.cleanup();
+    try { mcpRes.cleanup(); } catch (_e) {}
+    try { settingsRes.cleanup(); } catch (_e) {}
     return { ok: false, error: 'spawn_threw', run_id: runId };
   }
 
@@ -345,7 +372,8 @@ function launchStreamWorker(input, opts) {
     meta.ended_at = Date.now();
     meta.error = 'no_pid';
     writeRunMeta(runId, meta, home);
-    mcpRes.cleanup();
+    try { mcpRes.cleanup(); } catch (_e) {}
+    try { settingsRes.cleanup(); } catch (_e) {}
     return { ok: false, error: 'no_pid', run_id: runId };
   }
 
@@ -393,6 +421,21 @@ function launchStreamWorker(input, opts) {
   }
   bumpWatchdog();
 
+  // Hooks turn protocol state (2026-05-15 commit 3): tracks whether the
+  // public `onTurnDone` callback has fired for the current spawn. Stop
+  // hook can fire MULTIPLE times under stop_hook_active=true reentry
+  // (CC continues thinking after one Stop attempt); only the FIRST
+  // Stop with stop_hook_active === false is "really done". Scoped to
+  // the run — Architecture B (long-running CC) will need a per-turn
+  // counter (turn_index already plumbed below) and reset on
+  // writeNextTurn — out of scope for this commit but the field is
+  // already in the payload contract.
+  const _hookState = {
+    turn_index: 0,
+    fired_for_turn: -1,  // last turn_index for which we fired onTurnDone
+    session_started_at: null,
+  };
+
   parser.on('event', (ev) => {
     meta.event_count++;
     meta.last_event_at = Date.now();
@@ -412,11 +455,144 @@ function launchStreamWorker(input, opts) {
       }
     }
 
-    // 3. Capture session_id + result info from `result` events (Phase 2 prep)
+    // 3a. Hook events — primary turn-completion signal (CEO 2026-05-15
+    //     hooks turn protocol). The hook command's stdin payload is
+    //     echoed back to its stdout, which CC captures into
+    //     ev.stdout on the hook_response NDJSON event. We parse that
+    //     for the rich payload (transcript_path, last_assistant_message,
+    //     stop_hook_active). Field-defensive throughout — R5 in plan.
+    //
+    //     Schema lock from spike-claude-hooks.mjs:
+    //       { type: 'system', subtype: 'hook_started'|'hook_response',
+    //         hook_name: 'SessionStart:startup'|'Stop'|...,
+    //         hook_event: 'SessionStart'|'Stop'|...,
+    //         session_id, output, stdout, stderr, exit_code, outcome, uuid }
+    if (ev && ev.type === 'system' && typeof ev.subtype === 'string' && ev.subtype.startsWith('hook_')) {
+      // Capture session_id from any hook event (it's in the envelope).
+      if (typeof ev.session_id === 'string' && ev.session_id && !meta.session_id) {
+        meta.session_id = ev.session_id;
+      }
+
+      const hookEvent = typeof ev.hook_event === 'string' ? ev.hook_event : null;
+
+      // SessionStart — record startup timestamp; no turn-done callback.
+      if (hookEvent === 'SessionStart' && ev.subtype === 'hook_response') {
+        _hookState.session_started_at = Date.now();
+      }
+
+      // Stop hook_response — parse stdout for payload, dedupe, fire onTurnDone.
+      if (hookEvent === 'Stop' && ev.subtype === 'hook_response') {
+        let payload = null;
+        if (typeof ev.stdout === 'string' && ev.stdout.length > 0) {
+          try { payload = JSON.parse(ev.stdout); }
+          catch (_e) {
+            cairnLog.warn('claude-stream-launcher', 'hook_stdout_parse_failed', {
+              run_id: runId,
+              stdout_preview: ev.stdout.slice(0, 200),
+            });
+          }
+        }
+        const stopHookActive = payload && payload.stop_hook_active === true;
+        // R2 dedupe: only fire on FIRST Stop with stop_hook_active=false.
+        // CC may emit Stop with stop_hook_active=true to indicate it's
+        // continuing — that is NOT turn-done.
+        if (stopHookActive) {
+          cairnLog.info('claude-stream-launcher', 'stop_hook_reentrant', {
+            run_id: runId,
+            turn_index: _hookState.turn_index,
+          });
+        } else if (_hookState.fired_for_turn === _hookState.turn_index) {
+          // Same turn already fired; suppress dup
+          cairnLog.info('claude-stream-launcher', 'stop_hook_dup_suppressed', {
+            run_id: runId,
+            turn_index: _hookState.turn_index,
+          });
+        } else {
+          // Real turn-done. Field-defensive extraction.
+          _hookState.fired_for_turn = _hookState.turn_index;
+          const sessionIdFromHook = payload && typeof payload.session_id === 'string' ? payload.session_id : null;
+          const lastAssistantText = payload && typeof payload.last_assistant_message === 'string'
+            ? payload.last_assistant_message : null;
+          const transcriptPath = payload && typeof payload.transcript_path === 'string'
+            ? payload.transcript_path : null;
+          // Prefer hook session_id over the result-event one (arrives earlier).
+          if (sessionIdFromHook) meta.session_id = sessionIdFromHook;
+          meta.last_turn_payload = payload;
+
+          cairnLog.info('claude-stream-launcher', 'turn_done_via_hook', {
+            run_id: runId,
+            turn_index: _hookState.turn_index,
+            session_id: meta.session_id,
+            transcript_path: transcriptPath,
+            has_payload: !!payload,
+          });
+
+          if (typeof o.onTurnDone === 'function') {
+            try {
+              o.onTurnDone({
+                source: 'hook',
+                turn_index: _hookState.turn_index,
+                session_id: meta.session_id,
+                last_assistant_text: lastAssistantText,
+                transcript_path: transcriptPath,
+                stop_hook_active: false,
+                raw: payload,
+              });
+            } catch (_e) {
+              cairnLog.warn('claude-stream-launcher', 'onTurnDone_callback_failed', {
+                run_id: runId,
+                message: (_e && _e.message) || String(_e),
+              });
+            }
+          }
+          // Note: turn_index stays put. Architecture B will bump it
+          // explicitly when sending the next turn (writeNextTurn).
+          // Current single-turn spawn never bumps it; fired_for_turn
+          // === turn_index after this point, which gates both Stop
+          // dedupe AND the result-event fallback. Earlier impl bumped
+          // here and the result-event fallback re-fired (smoke caught).
+        }
+      }
+    }
+
+    // 3b. Result event — Phase 2 session_id capture + fallback for
+    //     turn-done when hook didn't fire (R5 — CC version without
+    //     hook event support, or hook command crashed before stdout).
     if (ev && ev.type === 'result') {
       if (typeof ev.session_id === 'string') meta.session_id = ev.session_id;
       if (typeof ev.subtype === 'string') meta.result_subtype = ev.subtype;
       if (ev.is_error === true) meta.result_is_error = true;
+
+      // Fallback: result event arrived and we never fired onTurnDone via
+      // hook — fire it now from the result-event payload (degraded but
+      // preserves contract for callers like mode-a-spawner).
+      if (_hookState.fired_for_turn !== _hookState.turn_index && typeof o.onTurnDone === 'function') {
+        cairnLog.warn('claude-stream-launcher', 'turn_done_via_result_fallback', {
+          run_id: runId,
+          turn_index: _hookState.turn_index,
+          session_id: meta.session_id,
+          reason: 'no_stop_hook_event',
+        });
+        _hookState.fired_for_turn = _hookState.turn_index;
+        try {
+          o.onTurnDone({
+            source: 'result',
+            turn_index: _hookState.turn_index,
+            session_id: meta.session_id,
+            last_assistant_text: null,    // not available without transcript parse
+            transcript_path: null,        // not in `result` event
+            stop_hook_active: false,
+            raw: ev,
+          });
+        } catch (_e) {
+          cairnLog.warn('claude-stream-launcher', 'onTurnDone_fallback_failed', {
+            run_id: runId,
+            message: (_e && _e.message) || String(_e),
+          });
+        }
+        // Same as hook path: don't bump turn_index here. Single-turn
+        // spawn stays at 0; arch B owns the bump.
+      }
     }
 
     // 4. Caller hook (Phase 2 uses this to capture session_id immediately)
@@ -454,6 +630,7 @@ function launchStreamWorker(input, opts) {
     // handler covers cleanup, but if an OS-level error skips 'exit'
     // the temp mcp-config file would leak until tmp GC. Idempotent.
     try { mcpRes.cleanup(); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'mcp_config_cleanup_failed', { message: (_e && _e.message) || String(_e) }); }
+    try { settingsRes.cleanup(); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'settings_config_cleanup_failed', { message: (_e && _e.message) || String(_e) }); }
     cairnLog.error('claude-stream-launcher', 'spawn_error', {
       run_id: runId,
       message: (err && err.message) || String(err),
@@ -462,9 +639,10 @@ function launchStreamWorker(input, opts) {
 
   child.on('exit', (code, signal) => {
     if (watchdog) clearTimeout(watchdog);
-    // Phase 3: drop the temp MCP config file. Safe to call even if it's
-    // already gone (cleanup() swallows ENOENT).
+    // Phase 3 + hooks commit 2: drop temp MCP + settings config files.
+    // Safe to call even if they're already gone (cleanup() swallows ENOENT).
     try { mcpRes.cleanup(); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'mcp_config_exit_cleanup_failed', { message: (_e && _e.message) || String(_e) }); }
+    try { settingsRes.cleanup(); } catch (_e) { cairnLog.warn('claude-stream-launcher', 'settings_config_exit_cleanup_failed', { message: (_e && _e.message) || String(_e) }); }
     // Source of truth for run-state-during-life is the in-memory `meta`
     // (event_count, last_event_at, session_id, result_subtype etc.
     // are mutated there as events flow). The disk-resident run.json
