@@ -3890,7 +3890,7 @@ let cockpitActivityFilter = 'all';
 
 const AUTOPILOT_COPY = {
   NO_GOAL: {
-    dot: 'grey', text: '没目标 — 设置一个 goal 才能让 Mentor 工作',
+    dot: 'grey', text: '没目标 — 先设置一个 goal',
     headlineClass: '',
   },
   AGENT_IDLE: {
@@ -3898,11 +3898,11 @@ const AUTOPILOT_COPY = {
     headlineClass: '',
   },
   AGENT_WORKING: {
-    dot: 'green', text: 'Agent 在执行 · Mentor 引导中 · 你可以走开',
+    dot: 'green', text: 'Agent 在执行 · 你可以走开',
     headlineClass: '',
   },
   MENTOR_BLOCKED_NEED_USER: {
-    dot: 'red', text: 'Mentor 处理不了 — 需要你的决定',
+    dot: 'red', text: '需要你的决定',
     headlineClass: 'red',
   },
   // Mode A v2 transient states (CEO 2026-05-14 UX fix). `dot: 'amber-pulse'`
@@ -4111,7 +4111,7 @@ function renderCockpit(state) {
   if (nudgeEl) {
     if (state.latest_mentor_nudge && state.latest_mentor_nudge.message) {
       const n = state.latest_mentor_nudge;
-      nudgeEl.textContent = `Mentor 上次说: "${n.message}"  (${fmtAgo(n.timestamp)})`;
+      nudgeEl.textContent = `最近: "${n.message}"  (${fmtAgo(n.timestamp)})`;
     } else {
       nudgeEl.textContent = '(Mentor 还没发过引导)';
     }
@@ -4239,8 +4239,8 @@ function renderCockpit(state) {
   const modeHint = document.getElementById('cockpit-run-mode-hint');
   if (modeHint) {
     modeHint.textContent = currentMode === 'A'
-      ? 'Mentor 自动起草计划 + 派单 + 答疑'
-      : 'Mentor 给建议，你主动派单';
+      ? '自动起草 · 自动派单 · 自动答疑'
+      : '给你建议 · 你来派单';
   }
   // 2026-05-14 fix: persistent goal row in cockpit state strip so the
   // user can edit the goal AFTER setting it (the onboarding "Set goal"

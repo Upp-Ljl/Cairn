@@ -2379,11 +2379,11 @@ code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; col
         <span class="cockpit-run-mode-label">运行模式</span>
         <div class="cockpit-mode-toggle" id="cockpit-mode-toggle" role="group" aria-label="项目运行模式 A / B">
           <button type="button" class="mode-pill" data-mode="A" id="cockpit-mode-A"
-                  title="A · Mentor 主驱动 — Cairn 起草计划 + 自动答疑 + 推进任务（小白模式 / 长程任务）">
+                  title="A · 自动驾驶 — Cairn 起草计划 + 自动答疑 + 推进任务（小白模式 / 长程任务）">
             A · 自动驾驶
           </button>
           <button type="button" class="mode-pill active" data-mode="B" id="cockpit-mode-B"
-                  title="B · 用户主驱动 — Mentor 给排序建议，你主动选择委派（默认）">
+                  title="B · 手动驾驶 — Cairn 给排序建议，你主动选择委派（默认）">
             B · 手动驾驶
           </button>
         </div>
@@ -2456,7 +2456,7 @@ code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; col
       <!-- Mode toggle moved to project state strip (top) on 2026-05-14:
            it's project-level state, not Mentor-local; competed with the
            "Mode B · Lanes" section title here. -->
-      <div class="cockpit-section-title">🧑‍🏫 Mentor</div>
+      <div class="cockpit-section-title">🧭 STATUS</div>
       <div class="cockpit-mentor-status" id="cockpit-mentor-status">
         <span class="cockpit-mentor-state" id="cockpit-mentor-state">—</span>
         <span class="cockpit-mentor-last-check" id="cockpit-mentor-last-check"></span>
@@ -2483,7 +2483,7 @@ code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; col
         </div>
       </div>
       <div class="cockpit-needs-list" id="cockpit-needs-list">
-        <div class="cockpit-needs-empty">No escalations — Mentor handling.</div>
+        <div class="cockpit-needs-empty">运行平稳 · 无需介入</div>
       </div>
     </div>
 
@@ -2492,9 +2492,9 @@ code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; col
          pill + label + [派给 ▾] (agent_proposal) or [Approve →] (mentor_todo /
          user_todo) button → writes dispatch_requests via A2.2 IPC. -->
     <div class="cockpit-todolist" id="cockpit-todolist">
-      <div class="cockpit-todolist-title">💡 TODOS · MENTOR · AGENT · YOU</div>
+      <div class="cockpit-todolist-title">💡 TODOS</div>
       <div id="cockpit-todolist-list">
-        <div class="cockpit-todolist-empty">还没有建议 — Mentor 看到 agent 干完一段、或 agent 主动提议下一步时，会出现在这里。也可以在下方写自己的备忘。</div>
+        <div class="cockpit-todolist-empty">还没有建议 — agent 干完一段或主动提议下一步时会出现在这里。也可以在下方写自己的备忘。</div>
       </div>
       <div class="cockpit-todo-add-row">
         <input id="cockpit-todo-add-input" type="text" placeholder="Add a todo…" maxlength="200" />
