@@ -364,10 +364,6 @@ function spawnModeAWorker(input, opts) {
     // session_id persistence specifically, hook payload arrives slightly
     // earlier than `result` event, which closes a small race window
     // where the panel could miss a fresh session before exit.
-    // Tracks whether the Stop hook fired for this spawn + persisted the
-    // session_id. If yes, the result-event fallback below MUST NOT
-    // overwrite (see onEvent comment for full failure mode).
-    let sessionPersistedFromHook = false;
     const persistSessionIfNew = (sid) => {
       if (!sid || typeof sid !== 'string') return;
       if (!db || !planIdForResume) return;
@@ -407,27 +403,26 @@ function spawnModeAWorker(input, opts) {
       // Phase-2 --resume continuity. Architecture B will hook this
       // to send the next plan step's prompt via writeNextTurn.
       onTurnDone: (turnPayload) => {
+        // CEO 2026-05-15 reversal: empirical test on agent-game-platform
+        // showed hook payload's session_id is an EPHEMERAL per-turn id
+        // (e.g. dd0fe67f-...), NOT the resumable conversation id. The
+        // file ~/.claude/projects/.../<hook-session>.jsonl simply doesn't
+        // exist for hook-session-ids. Result event's session_id IS the
+        // resumable id (echoes the --resume input or generates a new
+        // conversation id if no resume). So: log hook payload for
+        // observability + audit (transcript_path etc), but DO NOT use
+        // its session_id for session-store. Result event below is the
+        // sole writer.
         cairnLog.info('mode-a-spawner', 'turn_done', {
           project_id: project.id,
           plan_id: planIdForResume,
           source: turnPayload && turnPayload.source,
           turn_index: turnPayload && turnPayload.turn_index,
-          session_id: turnPayload && turnPayload.session_id,
+          hook_session_id_observed: turnPayload && turnPayload.session_id,
           transcript_path: turnPayload && turnPayload.transcript_path,
           has_last_text: !!(turnPayload && turnPayload.last_assistant_text),
         });
-        persistSessionIfNew(turnPayload && turnPayload.session_id);
-        // CEO 2026-05-15 fix: once a hook turn-done has authoritatively
-        // captured the session_id, the result-event fallback below
-        // MUST NOT overwrite. Otherwise: hook gives fresh session
-        // (e.g. dd0fe67f), then result event echoes back the OLD
-        // --resume id (e.g. 92c78a86 from yesterday) and clobbers
-        // session-store → next step's spawn resumes the wrong
-        // (often dead) session → CC's MCP detaches mid-session →
-        // CC自由发挥 instead of Mode A protocol → step never
-        // advances. Real-world repro: this run, step 1, log
-        // double-persist at 10:34:38.
-        sessionPersistedFromHook = !!(turnPayload && turnPayload.source === 'hook' && turnPayload.session_id);
+        // DO NOT persistSessionIfNew(hook session) — it's not resumable.
       },
       onEvent: (ev) => {
         // --- Budget check (Harness Phase 1) ---
@@ -453,16 +448,19 @@ function spawnModeAWorker(input, opts) {
           }
         }
 
-        // --- Session ID capture (Phase 2, defence-in-depth fallback).
-        // Primary path is onTurnDone above; this catches old-style
-        // result events when hook events are unavailable (CC version
-        // mismatch). Idempotent via persistSessionIfNew.
-        // CEO 2026-05-15 fix: skip if hook already captured. Result
-        // event's session_id can be the OLD --resume id (CC echoes
-        // it back) which would clobber the fresh hook id.
-        if (sessionPersistedFromHook) return;
+        // --- Session ID capture (Phase 2).
+        // Result event's session_id IS the resumable conversation id
+        // (it's the value that next spawn's --resume <X> needs). Hook
+        // session_id is ephemeral per-turn, NOT resumable — verified
+        // empirically 2026-05-15 (~/.claude/projects/.../<hook-id>.jsonl
+        // doesn't exist; --resume <hook-id> returns 'No conversation
+        // found'). So result event is the SOLE session_id persistor.
         if (!ev || ev.type !== 'result') return;
         if (typeof ev.session_id !== 'string' || !ev.session_id) return;
+        // Skip persisting error-fast results (CC --resume failed with
+        // exit_code=1 in <1s with is_error=true). These produce a
+        // fresh-but-useless session_id that would clobber a working one.
+        if (ev.is_error === true) return;
         persistSessionIfNew(ev.session_id);
       },
     });
