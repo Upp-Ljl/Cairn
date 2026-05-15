@@ -67,6 +67,14 @@ Profiles are tagged with `version: 2` in the scratchpad cache; pre-v2 cache rows
 
 ## Known answers
 - <question substring> => <canonical answer>
+
+## Signals
+- ~~project-narrative: on
+- ~~vcs-signal: on
+- ~~candidate-pipeline: on
+- ~~iteration-history: on
+- ~~worker-reports: on
+- ~~kernel-state: on
 ```
 
 All sections are **optional**. A missing section is valid — the scanner
@@ -136,6 +144,57 @@ The scanner parses each line on `=>` (whitespace-tolerant). Mentor's Rule D
 (BLOCKED with question) checks `blocker.question.toLowerCase()` against each
 substring (also lowercased); first hit returns the corresponding answer
 as a nudge. This is the cheapest decision path — no LLM call required.
+
+### `## Signals` (optional)
+
+Per-project switchboard for the **6 `~~category` placeholders** Cairn Mentor
+feeds into LLM prompts (Mode A · Mentor, PRODUCT.md §6.5.1). Each category
+is a tool-agnostic placeholder filled in by `mentor-collect.cjs` from the
+`CATEGORY_ALIASES` table — turning one off makes that slice empty in every
+prompt, without breaking the prompt template or caller code. This is part
+of the README's *customize by editing text, not code* contract (commit
+`ea51ee6`): users tune Mentor's information diet by editing one markdown
+file, not by patching JS.
+
+**Format** — flat bullet list, one category per line:
+
+```markdown
+## Signals
+- ~~category-name: on|off
+```
+
+**The 6 known categories** (canonical names; default = `on` for all):
+
+| Category | Description |
+|---|---|
+| `~~project-narrative` | Whitelisted top-level docs: `PRODUCT.md` / `README.md` / `TODO.md` / `CLAUDE.md` / `ARCHITECTURE.md` |
+| `~~vcs-signal` | git HEAD / branch / `status --short` / last 20 `log --oneline` commits |
+| `~~candidate-pipeline` | Candidates JSONL (Mode B authorized work queue) |
+| `~~iteration-history` | Past worker run iterations |
+| `~~worker-reports` | Structured agent self-reports (finished / remaining / blockers / next-steps) |
+| `~~kernel-state` | `tasks_running/blocked/failed/waiting_review` + `outcomes_pending/failed` + `blockers_open` SQLite counts |
+
+**Defaults**: if the `## Signals` section is missing entirely, all 6 are
+treated as `on`. If the section exists but a category is omitted, that
+category is also `on` (explicit-off only — missing ≠ off). Unknown
+category names (typos, future placeholders not yet wired) are ignored
+with a warning logged to `raw_sections._signal_warnings`.
+
+**Example — narrow Mentor to docs + git only**:
+
+```markdown
+## Signals
+- ~~project-narrative: on
+- ~~vcs-signal: on
+- ~~candidate-pipeline: off
+- ~~iteration-history: off
+- ~~worker-reports: off
+- ~~kernel-state: off
+```
+
+The vocabulary lives in `packages/desktop-shell/mentor-collect.cjs`
+`CATEGORY_ALIASES` (commit `57c5502`); the scanner parses this section
+into `profile.signals: Record<string, boolean>` for the consumer to honor.
 
 ### "What's in flight" (panel-computed, NOT a file section)
 
