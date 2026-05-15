@@ -162,11 +162,57 @@ const eventsByScenario = {
   ],
 };
 
-const events = eventsByScenario[scenario] || eventsByScenario.hooks_normal;
-for (const e of events) {
-  process.stdout.write(JSON.stringify(e) + '\\n');
+// Architecture B Phase 1 (2026-05-15): multi-turn scenario emits
+// turn 0's Stop hook then *waits on stdin*. When the test harness
+// calls writeNextTurn, our stdin handler emits turn 1's events plus
+// the terminating result. Proves the Stop dedupe gate reopens after
+// writeNextTurn bumps turn_index.
+if (scenario === 'hooks_multi_turn') {
+  const turn0 = [
+    { type: 'system', subtype: 'init', session_id: sessionId, tools: ['Read'] },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'turn0 done' }] } },
+    { type: 'system', subtype: 'hook_response', hook_id: 'h_mt0', hook_name: 'Stop', hook_event: 'Stop', session_id: sessionId, stdout: JSON.stringify(hookPayload({ stop_hook_active: false, last_assistant_message: 'turn0 done' })), exit_code: 0, outcome: 'success' },
+  ];
+  const turn1 = [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'turn1 done' }] } },
+    { type: 'system', subtype: 'hook_response', hook_id: 'h_mt1', hook_name: 'Stop', hook_event: 'Stop', session_id: sessionId, stdout: JSON.stringify(hookPayload({ stop_hook_active: false, last_assistant_message: 'turn1 done' })), exit_code: 0, outcome: 'success' },
+    { type: 'result', subtype: 'success', session_id: sessionId, is_error: false },
+  ];
+  for (const e of turn0) process.stdout.write(JSON.stringify(e) + '\\n');
+  // The launcher writes the initial prompt envelope to stdin at spawn
+  // (claude-stream-launcher.cjs:395) BEFORE we get here. The no-op
+  // handler at the top of this fake doesn't actually pull from the
+  // buffer in a reliable way — both the initial prompt AND the later
+  // writeNextTurn chunk arrive at this listener. So we count NDJSON
+  // newlines and only emit turn1 on the SECOND envelope.
+  let newlineCount = 0;
+  let fired = false;
+  process.stdin.removeAllListeners('data');
+  process.stdin.resume();
+  process.stdin.on('data', (d) => {
+    if (fired) return;
+    const s = d.toString();
+    for (const ch of s) if (ch === '\\n') newlineCount += 1;
+    if (newlineCount >= 2) {
+      fired = true;
+      for (const e of turn1) process.stdout.write(JSON.stringify(e) + '\\n');
+      setTimeout(() => process.exit(0), 30);
+    }
+  });
+  setTimeout(() => {
+    if (!fired) {
+      fired = true;
+      for (const e of turn1) process.stdout.write(JSON.stringify(e) + '\\n');
+    }
+    process.exit(0);
+  }, 3000).unref();
+} else {
+  const events = eventsByScenario[scenario] || eventsByScenario.hooks_normal;
+  for (const e of events) {
+    process.stdout.write(JSON.stringify(e) + '\\n');
+  }
+  setTimeout(() => process.exit(0), 60);
 }
-setTimeout(() => process.exit(0), 60);
 `;
 }
 
@@ -309,6 +355,88 @@ section('D3 hooks_double_stop — two Stop active=false events → dedupe to one
   ok(turnDoneCalls.length === 1, `onTurnDone fired exactly once across two real-done Stops (got ${turnDoneCalls.length})`);
   const p = turnDoneCalls[0] || {};
   ok(p.last_assistant_text === 'first done', `payload from the FIRST Stop (got ${p.last_assistant_text}) — dup suppressed`);
+}
+
+section('F hooks_multi_turn — writeNextTurn bumps turn_index, second Stop fires onTurnDone');
+{
+  // The multi-turn fake emits turn 0, then waits for stdin. We call
+  // writeNextTurn between turns to prove the dedupe gate re-opens.
+  const sessionId = 'sess_hooks-multi-turn-' + Date.now();
+  const env = Object.assign({}, process.env, {
+    FAKE_CLAUDE_SCENARIO: 'hooks_multi_turn',
+    FAKE_CLAUDE_SESSION_ID: sessionId,
+  });
+  const turnDoneCalls = [];
+  const launchRes = streamLauncher.launchStreamWorker({
+    cwd: _tmpDir,
+    prompt: 'test',
+    iteration_id: 'smk:hooks_multi_turn',
+    project_id: 'p_smk_multi',
+    env,
+  }, {
+    home: _tmpDir,
+    onTurnDone: (p) => { turnDoneCalls.push(p); },
+    onEvent: () => {},
+  });
+  ok(launchRes && launchRes.ok === true, '[hooks_multi_turn] launchStreamWorker ok');
+  if (!launchRes || !launchRes.ok) {
+    ok(false, 'cannot continue multi_turn without launchRes');
+  } else {
+    // Wait for turn 0 to fire onTurnDone — poll up to 1.2s.
+    const turn0Deadline = Date.now() + 1200;
+    while (turnDoneCalls.length < 1 && Date.now() < turn0Deadline) {
+      await new Promise(r => setTimeout(r, 30));
+    }
+    ok(turnDoneCalls.length === 1, `turn 0: onTurnDone fired once after first Stop (got ${turnDoneCalls.length})`);
+    const t0 = turnDoneCalls[0] || {};
+    ok(t0.turn_index === 0, `turn 0: turn_index=0 (got ${t0.turn_index})`);
+    ok(t0.last_assistant_text === 'turn0 done', `turn 0: last_assistant_text from first Stop (got ${t0.last_assistant_text})`);
+
+    // Call writeNextTurn. It should bump turn_index AND rewind fired_for_turn.
+    const writeOk = launchRes.writeNextTurn('next step please');
+    ok(writeOk === true, 'writeNextTurn returned true (stdin write succeeded)');
+
+    // Wait for turn 1's Stop hook to fire onTurnDone — poll up to 1.5s.
+    const turn1Deadline = Date.now() + 1500;
+    while (turnDoneCalls.length < 2 && Date.now() < turn1Deadline) {
+      await new Promise(r => setTimeout(r, 30));
+    }
+    ok(turnDoneCalls.length === 2, `turn 1: onTurnDone fired again after writeNextTurn (got ${turnDoneCalls.length})`);
+    const t1 = turnDoneCalls[1] || {};
+    ok(t1.turn_index === 1, `turn 1: turn_index=1 (got ${t1.turn_index})`);
+    ok(t1.last_assistant_text === 'turn1 done', `turn 1: last_assistant_text from second Stop (got ${t1.last_assistant_text})`);
+    ok(t1.source === 'hook', `turn 1: source='hook' (got ${t1.source})`);
+
+    // Wait for child exit so settings cleanup runs.
+    if (launchRes.child) await waitForChildExit(launchRes.child);
+  }
+}
+
+section('F2 writeNextTurn returns false when child stdin gone');
+{
+  // Simulate: child exited / stdin destroyed. writeNextTurn should
+  // return false and NOT mutate dedupe state.
+  const sessionId = 'sess_writeNextTurn-after-exit';
+  const env = Object.assign({}, process.env, {
+    FAKE_CLAUDE_SCENARIO: 'hooks_normal',
+    FAKE_CLAUDE_SESSION_ID: sessionId,
+  });
+  const launchRes = streamLauncher.launchStreamWorker({
+    cwd: _tmpDir,
+    prompt: 'test',
+    iteration_id: 'smk:wnt-dead',
+    project_id: 'p_smk_wnt_dead',
+    env,
+  }, {
+    home: _tmpDir,
+    onTurnDone: () => {},
+    onEvent: () => {},
+  });
+  if (launchRes && launchRes.ok && launchRes.child) {
+    await waitForChildExit(launchRes.child);
+  }
+  const writeOk = launchRes && launchRes.writeNextTurn ? launchRes.writeNextTurn('too late') : null;
+  ok(writeOk === false, `writeNextTurn returns false post-exit (got ${writeOk})`);
 }
 
 section('E cleanup behaviour — runs even if launcher returns ok:false');
