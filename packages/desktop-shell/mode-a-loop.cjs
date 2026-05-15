@@ -85,13 +85,28 @@ function planStepsFromGoal(goal) {
 /**
  * Build the initial plan value object. plan_id is regenerated on every
  * call — caller is responsible for supersession logic (see ensurePlan).
+ *
+ * `signal_overrides` is copied from profile.signal_overrides (parsed
+ * from CAIRN.md `## Signals` section by mentor-project-profile.cjs).
+ * Downstream consumers that call `collectMentorSignals` MUST forward
+ * this map into the `signal_overrides` param so disabled categories
+ * stay disabled across the Mode A pipeline.
+ *
+ * Today the only collectMentorSignals caller is mentor-handler.cjs
+ * (panel chat askMentor). When mode-a-loop grows a direct signal call
+ * (or boot-prompt builder reads kernel state), pull signal_overrides
+ * from the plan rather than re-parsing CAIRN.md.
  */
 function buildPlan(goal, profile, now) {
+  const overrides = (profile && profile.signal_overrides && typeof profile.signal_overrides === 'object')
+    ? Object.assign({}, profile.signal_overrides)
+    : {};
   return {
     plan_id: newUlid(),
     goal_id: (goal && goal.id) || null,
     goal_title: typeof goal === 'string' ? goal : (goal && goal.title) || null,
     whole_sentence: (profile && profile.whole_sentence) || null,
+    signal_overrides: overrides,
     status: 'ACTIVE',
     steps: planStepsFromGoal(goal),
     current_idx: 0,
@@ -507,6 +522,11 @@ function advanceOnComplete(db, projectId, opts) {
  */
 function runOnceForProject(deps) {
   const { db, project, goal, profile, agentIds, leader } = deps || {};
+  // profile.signal_overrides — parsed by mentor-project-profile.cjs from
+  // CAIRN.md `## Signals` section. Preferred source of truth (live
+  // re-scan on mtime); falls back to plan.signal_overrides for stale
+  // resume scenarios where profile is unavailable. Forward to any
+  // downstream collectMentorSignals() call. See mentor-handler.cjs.
   try {
     const planDecision = ensurePlan(db, project, goal, profile, { nowFn: deps.nowFn });
     if (planDecision.action === 'no_goal' || planDecision.action === 'no_project' || planDecision.action === 'error') {
