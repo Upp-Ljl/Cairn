@@ -3894,11 +3894,11 @@ const AUTOPILOT_COPY = {
     headlineClass: '',
   },
   AGENT_IDLE: {
-    dot: 'grey', text: 'agent 空闲 · 没人在跑这个项目',
+    dot: 'grey', text: 'Agent 空闲 · 没人在跑这个项目',
     headlineClass: '',
   },
   AGENT_WORKING: {
-    dot: 'green', text: 'agent 在执行 · Mentor 在引导 · 你可以走开',
+    dot: 'green', text: 'Agent 在执行 · Mentor 引导中 · 你可以走开',
     headlineClass: '',
   },
   MENTOR_BLOCKED_NEED_USER: {
