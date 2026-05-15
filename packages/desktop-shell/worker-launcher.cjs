@@ -45,6 +45,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const cairnLog = require('./cairn-log.cjs');
 
 const RUNS_DIRNAME = 'worker-runs';
 const MAX_LOG_BYTES = 128 * 1024;
@@ -405,7 +406,7 @@ function whichCommand(cmd) {
       const candidate = path.join(dir, cmd + ext);
       try {
         if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
-      } catch (_e) { /* keep looking */ }
+      } catch (_e) { /* keep looking — stat failure is expected for missing paths */ }
     }
   }
   return null;
@@ -458,7 +459,7 @@ function runFile(runId, name, home) {
 function newRunId() { return 'wr_' + crypto.randomBytes(RUN_ID_BYTES).toString('hex'); }
 
 function ensureRunDir(runId, home) {
-  try { fs.mkdirSync(runDir(runId, home), { recursive: true }); } catch (_e) {}
+  try { fs.mkdirSync(runDir(runId, home), { recursive: true }); } catch (_e) { cairnLog.warn('worker-launcher', 'ensure_run_dir_failed', { message: (_e && _e.message) || String(_e) }); }
 }
 
 function safeReadFile(p, maxBytes) {
@@ -506,7 +507,7 @@ function appendToTailLog(runId, chunk, home) {
   if (!chunk || !chunk.length) return;
   const file = runFile(runId, 'tail.log', home);
   let curSize = 0;
-  try { curSize = fs.statSync(file).size; } catch (_e) {}
+  try { curSize = fs.statSync(file).size; } catch (_e) { cairnLog.warn('worker-launcher', 'tail_log_stat_failed', { message: (_e && _e.message) || String(_e) }); }
   const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
   if (curSize + incoming.length > MAX_LOG_BYTES) {
     // Read existing tail (last MAX_LOG_BYTES - LOG_DROP_BYTES bytes),
@@ -517,7 +518,7 @@ function appendToTailLog(runId, chunk, home) {
       // bytes of incoming.
       try {
         fs.writeFileSync(file, incoming.slice(Math.max(0, incoming.length - MAX_LOG_BYTES)));
-      } catch (_e) {}
+      } catch (_e) { cairnLog.warn('worker-launcher', 'tail_log_overwrite_failed', { message: (_e && _e.message) || String(_e) }); }
       return;
     }
     try {
@@ -533,7 +534,7 @@ function appendToTailLog(runId, chunk, home) {
     }
     return;
   }
-  try { fs.appendFileSync(file, incoming); } catch (_e) {}
+  try { fs.appendFileSync(file, incoming); } catch (_e) { cairnLog.warn('worker-launcher', 'tail_log_append_failed', { message: (_e && _e.message) || String(_e) }); }
 }
 
 function tailRunLog(runId, limitBytes, home) {
@@ -718,9 +719,9 @@ function launchWorker(input, opts) {
 
   // Stream stdin once.
   if (provider.acceptsStdin && child.stdin) {
-    try { child.stdin.end(i.prompt); } catch (_e) { /* ignore */ }
+    try { child.stdin.end(i.prompt); } catch (_e) { cairnLog.warn('worker-launcher', 'stdin_prompt_write_failed', { message: (_e && _e.message) || String(_e) }); }
   } else if (child.stdin) {
-    try { child.stdin.end(); } catch (_e) {}
+    try { child.stdin.end(); } catch (_e) { cairnLog.warn('worker-launcher', 'stdin_close_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   // Stream stdout/stderr to tail.log. We DO NOT scrub the log because
@@ -731,7 +732,7 @@ function launchWorker(input, opts) {
   const onChunk = (buf) => {
     appendToTailLog(runId, buf, home);
     if (typeof o.onLine === 'function') {
-      try { o.onLine(buf.toString('utf8')); } catch (_e) {}
+      try { o.onLine(buf.toString('utf8')); } catch (_e) { cairnLog.warn('worker-launcher', 'onLine_callback_failed', { message: (_e && _e.message) || String(_e) }); }
     }
   };
   if (child.stdout) child.stdout.on('data', onChunk);
@@ -798,11 +799,11 @@ function stopWorkerRun(runId, opts) {
         spawnSync('taskkill', ['/F', '/T', '/PID', String(meta.pid)], {
           stdio: 'ignore', windowsHide: true, timeout: 5000,
         });
-      } catch (_e) {}
+      } catch (_e) { cairnLog.warn('worker-launcher', 'taskkill_failed', { message: (_e && _e.message) || String(_e) }); }
     } else {
-      try { entry.child.kill('SIGTERM'); } catch (_e) {}
+      try { entry.child.kill('SIGTERM'); } catch (_e) { cairnLog.warn('worker-launcher', 'sigterm_failed', { message: (_e && _e.message) || String(_e) }); }
       setTimeout(() => {
-        try { if (!entry.child.killed) entry.child.kill('SIGKILL'); } catch (_e) {}
+        try { if (!entry.child.killed) entry.child.kill('SIGKILL'); } catch (_e) { cairnLog.warn('worker-launcher', 'sigkill_failed', { message: (_e && _e.message) || String(_e) }); }
       }, 2000).unref();
     }
   }

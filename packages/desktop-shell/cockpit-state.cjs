@@ -67,6 +67,7 @@ const SUPPORTED_TABLES = [
 // surfaces ## Whole sentence into cockpit state for Module 1 rendering.
 const profileMod = require('./mentor-project-profile.cjs');
 const modeALoop  = require('./mode-a-loop.cjs');
+const cairnLog   = require('./cairn-log.cjs');
 
 function sqlInList(arr) {
   if (!arr || arr.length === 0) return '(NULL)';
@@ -250,9 +251,9 @@ function querySessions(db, tables, hints, now, opts) {
           if (body && typeof body.name === 'string' && body.name.trim()) {
             nameMap.set(aid, body.name.trim());
           }
-        } catch (_e) { /* skip bad rows */ }
+        } catch (_e) { cairnLog.warn('cockpit-state', 'session_name_parse_failed', { message: (_e && _e.message) || String(_e) }); }
       }
-    } catch (_e) { /* ignore — falls back to hex prefix */ }
+    } catch (_e) { cairnLog.warn('cockpit-state', 'session_name_query_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   // Per-agent: most recent task (any state) for context line.
@@ -270,7 +271,7 @@ function querySessions(db, tables, hints, now, opts) {
           taskMap.set(t.created_by_agent_id, t);
         }
       }
-    } catch (_e) { /* leave map empty */ }
+    } catch (_e) { cairnLog.warn('cockpit-state', 'task_map_query_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   const out = [];
@@ -373,7 +374,7 @@ function querySessionTimeline(db, tables, agentId, opts) {
       WHERE key LIKE ? || '%'
       ORDER BY key ASC
     `).all(prefix);
-  } catch (_e) { return []; }
+  } catch (_e) { cairnLog.warn('cockpit-state', 'session_timeline_query_failed', { message: (_e && _e.message) || String(_e) }); return []; }
 
   const events = [];
   for (const r of rows) {
@@ -386,7 +387,7 @@ function querySessionTimeline(db, tables, agentId, opts) {
     // attempt a second parse to recover. Real-agent dogfood 2026-05-14
     // discovered this; defensive handling beats educating every caller.
     if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch (_e) { /* leave as string → skip below */ }
+      try { body = JSON.parse(body); } catch (_e) { cairnLog.warn('cockpit-state', 'timeline_body_reparse_failed', { message: (_e && _e.message) || String(_e) }); }
     }
     if (!body || typeof body !== 'object') continue;
     events.push({
@@ -428,7 +429,7 @@ function querySessionTimeline(db, tables, agentId, opts) {
           raw: c,
         });
       }
-    } catch (_e) { /* leave checkpoints out of timeline */ }
+    } catch (_e) { cairnLog.warn('cockpit-state', 'timeline_checkpoints_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   events.sort((a, b) => a.ts - b.ts);
@@ -455,7 +456,7 @@ function queryLatestMentorNudge(db, tables, projectId) {
   `).get(projectId);
   if (!row) return null;
   let body = null;
-  try { body = row.value_json ? JSON.parse(row.value_json) : null; } catch (_e) {}
+  try { body = row.value_json ? JSON.parse(row.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'mentor_nudge_parse_failed', { message: (_e && _e.message) || String(_e) }); }
   return {
     key: row.key,
     timestamp: row.updated_at,
@@ -477,7 +478,7 @@ function queryEscalations(db, tables, projectId, opts) {
   const out = [];
   for (const r of rows) {
     let body = null;
-    try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+    try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'escalation_parse_failed', { message: (_e && _e.message) || String(_e) }); }
     if (!body) continue;
     out.push({
       id: r.key.split('/').pop(),
@@ -706,7 +707,7 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
     `).all(projectId, perSource);
     for (const r of mentorRows) {
       let body = null;
-      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'activity_mentor_nudge_parse_failed', { message: (_e && _e.message) || String(_e) }); }
       events.push({
         ts: r.updated_at,
         kind: 'mentor_nudge',
@@ -731,7 +732,7 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
     `).all(`%"project_id":"${projectId}"%`, Math.min(20, perSource));
     for (const r of steerRows) {
       let body = null;
-      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'activity_steer_parse_failed', { message: (_e && _e.message) || String(_e) }); }
       if (!body) continue;
       events.push({
         ts: r.created_at,
@@ -751,7 +752,7 @@ function queryActivityFeed(db, tables, hints, projectId, opts) {
     `).all(projectId, Math.min(20, perSource));
     for (const r of escalationRows) {
       let body = null;
-      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+      try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'activity_escalation_parse_failed', { message: (_e && _e.message) || String(_e) }); }
       events.push({
         ts: r.created_at,
         kind: 'escalation_raised',
@@ -903,7 +904,7 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
             raw: body,
           });
         }
-      } catch (_e) { /* skip on schema mismatch */ }
+      } catch (_e) { cairnLog.warn('cockpit-state', 'todolist_agent_proposal_query_failed', { message: (_e && _e.message) || String(_e) }); }
     }
   }
 
@@ -920,7 +921,7 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
       for (const r of rows) {
         const ulid = r.key.split('/').pop();
         let body = null;
-        try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+        try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'mentor_todo_parse_failed', { message: (_e && _e.message) || String(_e) }); }
         if (!body || typeof body !== 'object') continue;
         const label = typeof body.label === 'string' ? body.label : '';
         if (!label) continue;
@@ -941,7 +942,7 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
           raw: body,
         });
       }
-    } catch (_e) {}
+    } catch (_e) { cairnLog.warn('cockpit-state', 'mentor_todo_query_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   // 3. user_todo — keyed by project_id
@@ -957,7 +958,7 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
       for (const r of rows) {
         const ulid = r.key.split('/').pop();
         let body = null;
-        try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) {}
+        try { body = r.value_json ? JSON.parse(r.value_json) : null; } catch (_e) { cairnLog.warn('cockpit-state', 'user_todo_parse_failed', { message: (_e && _e.message) || String(_e) }); }
         if (!body || typeof body !== 'object') continue;
         const label = typeof body.label === 'string' ? body.label : '';
         if (!label) continue;
@@ -973,7 +974,7 @@ function queryTodoList(db, tables, projectId, agentHints, opts) {
           raw: body,
         });
       }
-    } catch (_e) {}
+    } catch (_e) { cairnLog.warn('cockpit-state', 'user_todo_query_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   // MA-3 (2026-05-14): sort priority DESC first, then ts DESC. Items
@@ -1023,12 +1024,12 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
   // Mode B Continuous Iteration (slice 2): lanes for this project.
   const cockpitLane = require('./cockpit-lane.cjs');
   let lanes = [];
-  try { lanes = cockpitLane.queryLanes(db, project.id, { limit: 10 }); } catch (_e) { lanes = []; }
+  try { lanes = cockpitLane.queryLanes(db, project.id, { limit: 10 }); } catch (_e) { cairnLog.warn('cockpit-state', 'lanes_query_failed', { message: (_e && _e.message) || String(_e) }); lanes = []; }
   // Mode A loop (MA-2b 2026-05-14): expose drafted plan so the panel
   // can render progress. mentor-tick is the writer; this is a pure
   // read with no side effect (D9 read-only).
   let mode_a_plan = null;
-  try { mode_a_plan = modeALoop.getPlan(db, project.id); } catch (_e) { mode_a_plan = null; }
+  try { mode_a_plan = modeALoop.getPlan(db, project.id); } catch (_e) { cairnLog.warn('cockpit-state', 'mode_a_plan_read_failed', { message: (_e && _e.message) || String(_e) }); mode_a_plan = null; }
   // 2026-05-14 subagent verdict B5: surface ACTIVE candidate count so
   // the panel can warn "Mode A 需要 ≥1 ACTIVE agent" when there's
   // nothing to dispatch to. Aligned with mode-a-loop.decideNextDispatch
@@ -1041,7 +1042,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
         `SELECT COUNT(*) AS n FROM processes WHERE agent_id IN ${phs} AND status='ACTIVE'`
       ).get(...hints).n;
     }
-  } catch (_e) { active_agents_count = 0; }
+  } catch (_e) { cairnLog.warn('cockpit-state', 'active_agents_count_failed', { message: (_e && _e.message) || String(_e) }); active_agents_count = 0; }
   const progress = queryProgress(db, tables, hints);
   const currentTask = queryCurrentTask(db, tables, hints);
   const latestMentor = queryLatestMentorNudge(db, tables, project.id);
@@ -1078,7 +1079,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
       cairn_md_present = true;
       whole_sentence = profile.whole_sentence || null;
     }
-  } catch (_e) { /* leave both null */ }
+  } catch (_e) { cairnLog.warn('cockpit-state', 'profile_load_failed', { message: (_e && _e.message) || String(_e) }); }
 
   // "In flight" line — per schema v2, computed from live state, not
   // stored in CAIRN.md. Counts active tasks + active processes that
@@ -1123,7 +1124,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
         mentor_decisions.auto_decide +
         mentor_decisions.announce +
         mentor_decisions.escalate;
-    } catch (_e) { /* leave zeros */ }
+    } catch (_e) { cairnLog.warn('cockpit-state', 'mentor_decisions_count_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   // Phase 7 (2026-05-14): "while you were away" 24h summary.
@@ -1163,7 +1164,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
         `).get(...hints, ago24h);
         last_24h.checkpoints_made = (r && r.c) || 0;
       }
-    } catch (_e) { /* leave zeros */ }
+    } catch (_e) { cairnLog.warn('cockpit-state', 'last_24h_stats_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   // Phase 6 (2026-05-14): stale-agent detection + orphan task surface.
@@ -1210,7 +1211,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
             ORDER BY updated_at DESC
             LIMIT 20
           `).all(p.agent_id);
-        } catch (_e) { orphans = []; }
+        } catch (_e) { cairnLog.warn('cockpit-state', 'orphan_tasks_query_failed', { message: (_e && _e.message) || String(_e) }); orphans = []; }
         stale_agents.push({
           agent_id: p.agent_id,
           last_seen_ago_ms: lastSeenAgo,
@@ -1219,7 +1220,7 @@ function buildCockpitState(db, tables, project, goal, agentIds, opts) {
           orphans, // first 20
         });
       }
-    } catch (_e) { /* leave empty */ }
+    } catch (_e) { cairnLog.warn('cockpit-state', 'stale_agents_detection_failed', { message: (_e && _e.message) || String(_e) }); }
   }
 
   return {

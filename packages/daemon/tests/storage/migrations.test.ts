@@ -303,11 +303,11 @@ describe('005-dispatch-requests schema', () => {
       name: string; pk: number; notnull: number;
     }>;
     const colNames = new Set(cols.map((c) => c.name));
-    // task_id was added by migration 008
+    // task_id was added by migration 008, source was added by migration 011
     expect(colNames).toEqual(new Set([
       'id', 'nl_intent', 'parsed_intent', 'context_keys',
       'generated_prompt', 'target_agent', 'status', 'created_at', 'confirmed_at',
-      'task_id',
+      'task_id', 'source',
     ]));
     // id PK
     expect(cols.find((c) => c.name === 'id')?.pk).toBe(1);
@@ -859,6 +859,52 @@ describe('010-outcomes schema', () => {
     runMigrations(db, ALL_MIGRATIONS);
     const count = db
       .prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 10')
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+  });
+});
+
+describe('011-dispatch-source schema', () => {
+  it('dispatch_requests has source column: TEXT, nullable', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    const cols = db.prepare('PRAGMA table_info(dispatch_requests)').all() as Array<{
+      name: string; type: string; notnull: number;
+    }>;
+    const sourceCol = cols.find((c) => c.name === 'source');
+    expect(sourceCol).toBeDefined();
+    expect(sourceCol?.type).toBe('TEXT');
+    expect(sourceCol?.notnull).toBe(0); // nullable
+  });
+
+  it('inserting a dispatch_request with source value round-trips correctly', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO dispatch_requests (id, nl_intent, status, created_at, source)
+       VALUES ('dr-src-1', 'do something', 'PENDING', 0, 'mode-a-loop')`
+    ).run();
+    const row = db.prepare('SELECT source FROM dispatch_requests WHERE id = ?').get('dr-src-1') as { source: string | null };
+    expect(row.source).toBe('mode-a-loop');
+  });
+
+  it('inserting a dispatch_request without source stores NULL (backward compat)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    db.prepare(
+      `INSERT INTO dispatch_requests (id, nl_intent, status, created_at)
+       VALUES ('dr-src-null', 'legacy intent', 'PENDING', 0)`
+    ).run();
+    const row = db.prepare('SELECT source FROM dispatch_requests WHERE id = ?').get('dr-src-null') as { source: string | null };
+    expect(row.source).toBeNull();
+  });
+
+  it('migration 011 is idempotent (running ALL_MIGRATIONS twice is a no-op)', () => {
+    const { db } = makeTmpDb();
+    runMigrations(db, ALL_MIGRATIONS);
+    runMigrations(db, ALL_MIGRATIONS);
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 11')
       .get() as { n: number };
     expect(count.n).toBe(1);
   });

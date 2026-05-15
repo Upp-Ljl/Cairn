@@ -184,8 +184,8 @@ git push "https://x-access-token:${TOKEN}@github.com/Upp-Ljl/Cairn.git" --tags
 
 ```
 packages/
-├── daemon/         # 持久层（SQLite + 仓储层 + git-stash backend，411 tests）
-├── mcp-server/     # 28 MCP 工具，stdio（kernel + integration layer，329 tests）
+├── daemon/         # 持久层（SQLite + 仓储层 + git-stash backend，439 tests）
+├── mcp-server/     # 29 MCP 工具，stdio（kernel + integration layer，424 tests）
 └── desktop-shell/  # Electron product layer（panel + pet + tray，read-only SQLite）
 ```
 
@@ -202,8 +202,8 @@ import { openDatabase } from '../../daemon/dist/storage/db.js';
 每个包独立跑：
 
 ```bash
-cd packages/daemon && npm test           # 411 tests / 29 test files（W5 Phase 3 后；含 19 outcomes 仓储 + 6 WAITING_REVIEW transition）
-cd packages/mcp-server && npm test       # 329 tests / 17 test files / 1 pre-existing skip（含 21 parser + 22 spawn/path utils + 32 primitives + 11 evaluator + 12 outcomes acceptance）
+cd packages/daemon && npm test           # 439 tests / 29 test files（W5 Phase 3 后；含 19 outcomes 仓储 + 6 WAITING_REVIEW transition）
+cd packages/mcp-server && npm test       # 424 tests / 17 test files / 1 pre-existing skip（含 21 parser + 22 spawn/path utils + 32 primitives + 11 evaluator + 12 outcomes acceptance）
 ```
 
 **Live dogfood**（W5 Phase 3 闭环，跨 3 个真实 MCP stdio session）：
@@ -283,7 +283,7 @@ Read-only（DB 只读模式打开，绝不写）。挨个 ✓/✗ 检查 8 个 g
 | **PRODUCT.md v3 reframe** | product layer 主定位升级为 project-scoped agent work side panel / project control surface（kernel 论题保留） | 2026-05-08，commit `3562f1f` |
 | **Product MVP Quick Slice** | desktop-shell：panel.html + queries.cjs + tray + dogfood fixture，9/9 MUST 落地 | 2026-05-08，commit chain `f088b56..4c24fb6` |
 
-**v0.1 当前 28 个 MCP 工具 / 10 个 migration（001-010）**。下一个可用 migration 编号 = `011`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review / 007-tasks / 008-dispatch-task-id / 009-blockers / 010-outcomes。Quick Slice **没有**新增 schema / MCP 工具 / npm dep——纯 product layer 工作。
+**v0.1 当前 29 个 MCP 工具 / 10 个 migration（001-010）**。下一个可用 migration 编号 = `011`。已落地：001-init / 002-scratchpad / 003-checkpoints / 004-processes-conflicts / 005-dispatch / 006-conflict-pending-review / 007-tasks / 008-dispatch-task-id / 009-blockers / 010-outcomes。Quick Slice **没有**新增 schema / MCP 工具 / npm dep——纯 product layer 工作。
 
 ## 已落地约定（新会话必读）
 
